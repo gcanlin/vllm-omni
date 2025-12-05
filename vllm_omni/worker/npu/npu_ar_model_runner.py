@@ -446,7 +446,7 @@ class NPUARModelRunner(OmniNPUModelRunner):
         self,
         scheduler_output: SchedulerOutput,
         intermediate_tensors: IntermediateTensors | None = None,
-    ) -> ModelRunnerOutput | AsyncModelRunnerOutput | IntermediateTensors:
+    ) -> OmniModelRunnerOutput | AsyncModelRunnerOutput | IntermediateTensors:
         with ProfileExecuteDuration().capture_async("prepare input"):
             self._update_states(scheduler_output)
 
