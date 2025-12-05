@@ -28,6 +28,7 @@ from vllm.v1.sample.sampler import Sampler
 
 from vllm_omni.model_executor.models.output_templates import OmniOutput
 from vllm_omni.model_executor.models.utils import add_prefix_to_loaded_weights
+from vllm_omni.utils.platform_utils import is_npu
 
 from .qwen3_omni_moe_thinker import (
     Qwen3OmniMoeConditionalGenerationMixin,
@@ -318,11 +319,23 @@ class Qwen3OmniMoeForConditionalGeneration(
                     "capture_layer_indices": [0, int(accept_layer)],
                     "return_hidden_states": True,
                 }
+            if is_npu():
+                # TODO: remove this hack when NPU supports batched inputs properly
+                thinker_input_ids = input_ids[0] if input_ids is not None and added_batch_dim else input_ids
+                thinker_positions = positions[0] if positions.ndim > 1 else positions
+                thinker_inputs_embeds = (
+                    inputs_embeds[0] if inputs_embeds is not None and added_batch_dim else inputs_embeds
+                )
+            else:
+                thinker_input_ids = input_ids
+                thinker_positions = positions[0] if positions.ndim > 1 else positions
+                thinker_inputs_embeds = inputs_embeds
+            
             text_hidden_states, captured_layer_dict = self.thinker(
-                input_ids=input_ids,
-                positions=positions[0] if positions.ndim > 1 else positions,
+                input_ids=thinker_input_ids,
+                positions=thinker_positions,
                 intermediate_tensors=intermediate_tensors,
-                inputs_embeds=inputs_embeds,
+                inputs_embeds=thinker_inputs_embeds,
                 **capture_kwargs,
                 **kwargs,
             )
