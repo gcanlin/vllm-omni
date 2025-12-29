@@ -442,8 +442,10 @@ class Omni:
                 # Mark last output time for this stage whenever we receive outputs
                 metrics.stage_last_ts[stage_id] = max(metrics.stage_last_ts[stage_id] or 0.0, time.time())
                 try:
-                    _m = asdict(result.get("metrics"))
+                    _m = result.get("metrics")
                     if _m is not None:
+                        if not isinstance(_m, dict):
+                            _m = asdict(_m)
                         metrics.on_stage_metrics(stage_id, req_id, _m)
                 except Exception as e:
                     logger.exception(
