@@ -377,7 +377,12 @@ def main(args):
         for i, prompt in enumerate(prompts):
             prompt["modalities"] = output_modalities
 
+    profiler_enabled = bool(os.getenv("VLLM_TORCH_PROFILER_DIR"))
+    if profiler_enabled:
+        omni_llm.start_profile()
     omni_outputs = omni_llm.generate(prompts, sampling_params_list)
+    if profiler_enabled:
+        omni_llm.stop_profile()
 
     # Determine output directory: prefer --output-dir; fallback to --output-wav
     output_dir = args.output_dir if getattr(args, "output_dir", None) else args.output_wav

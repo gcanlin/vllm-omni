@@ -1186,11 +1186,77 @@ class AsyncOmni:
         """Generate outputs for a request from a pooling model."""
         raise NotImplementedError("encode() is not implemented for AsyncOmni")
 
-    async def start_profile(self) -> None:
-        raise NotImplementedError("start_profile() is not implemented for AsyncOmni")
+    async def start_profile(self, stages: list[int] | None = None) -> None:
+        """Start profiling for specified stages.
 
-    async def stop_profile(self) -> None:
-        raise NotImplementedError("stop_profile() is not implemented for AsyncOmni")
+        Sends start_profile command to stage workers. Profiling must be enabled
+        via VLLM_TORCH_PROFILER_DIR environment variable.
+
+        Args:
+            stages: List of stage IDs to start profiling. If None, starts
+                profiling for all stages that have profiling enabled.
+
+        Example:
+            >>> # Profile all stages
+            >>> await async_omni.start_profile()
+            >>> async for output in async_omni.generate(...):
+            ...     pass
+            >>> await async_omni.stop_profile()
+
+            >>> # Profile only stage 0 and 2
+            >>> await async_omni.start_profile(stages=[0, 2])
+        """
+        if stages is None:
+            stages = list(range(len(self.stage_list)))
+
+        for stage_id in stages:
+            if stage_id < len(self._stage_in_queues):
+                try:
+                    self._stage_in_queues[stage_id].put({
+                        "type": "profiler_command",
+                        "command": "start",
+                    })
+                    logger.info("[AsyncOrchestrator] Sent start_profile to stage-%s", stage_id)
+                except Exception as e:
+                    logger.warning(
+                        "[AsyncOrchestrator] Failed to send start_profile to stage-%s: %s",
+                        stage_id,
+                        e,
+                    )
+
+    async def stop_profile(self, stages: list[int] | None = None) -> None:
+        """Stop profiling for specified stages.
+
+        Sends stop_profile command to stage workers to finalize and save traces.
+
+        Args:
+            stages: List of stage IDs to stop profiling. If None, stops
+                profiling for all stages.
+
+        Example:
+            >>> await async_omni.start_profile()
+            >>> async for output in async_omni.generate(...):
+            ...     pass
+            >>> await async_omni.stop_profile()
+            >>> # Traces saved to VLLM_TORCH_PROFILER_DIR/stage_X_<model_stage>/
+        """
+        if stages is None:
+            stages = list(range(len(self.stage_list)))
+
+        for stage_id in stages:
+            if stage_id < len(self._stage_in_queues):
+                try:
+                    self._stage_in_queues[stage_id].put({
+                        "type": "profiler_command",
+                        "command": "stop",
+                    })
+                    logger.info("[AsyncOrchestrator] Sent stop_profile to stage-%s", stage_id)
+                except Exception as e:
+                    logger.warning(
+                        "[AsyncOrchestrator] Failed to send stop_profile to stage-%s: %s",
+                        stage_id,
+                        e,
+                    )
 
     async def pause_generation(
         self,
