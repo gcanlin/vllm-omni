@@ -229,8 +229,8 @@ query_map = {
     "use_audio": get_audio_query,
     "use_image": get_image_query,
     "use_video": get_video_query,
-    "use_mixed_modalities": get_mixed_modalities_query,
-    "use_multi_audios": get_multi_audios_query,
+    "multi_audios": get_multi_audios_query,
+    "mixed_modalities": get_mixed_modalities_query,
 }
 
 
@@ -250,7 +250,7 @@ def main(args):
         query_result = query_func(image_path=image_path)
     elif args.query_type == "use_audio":
         query_result = query_func(audio_path=audio_path, sampling_rate=getattr(args, "sampling_rate", 16000))
-    elif args.query_type == "use_mixed_modalities":
+    elif args.query_type == "mixed_modalities":
         query_result = query_func(
             video_path=video_path,
             image_path=image_path,
@@ -367,7 +367,7 @@ def parse_args():
         "--query-type",
         "-q",
         type=str,
-        default="use_mixed_modalities",
+        default="mixed_modalities",
         choices=query_map.keys(),
         help="Query type.",
     )
