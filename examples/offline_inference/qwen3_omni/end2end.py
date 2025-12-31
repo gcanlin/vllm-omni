@@ -322,8 +322,6 @@ def main(args):
     if profiler_enabled:
         omni_llm.start_profile(stages=[1])
     omni_generator = omni_llm.generate(prompts, sampling_params_list)
-    if profiler_enabled:
-        omni_llm.stop_profile()
 
     # Determine output directory: prefer --output-dir; fallback to --output-wav
     output_dir = args.output_dir if getattr(args, "output_dir", None) else args.output_wav
@@ -364,6 +362,8 @@ def main(args):
                 # Save audio file with explicit WAV format
                 sf.write(output_wav, audio_numpy, samplerate=24000, format="WAV")
                 print(f"Request ID: {request_id}, Saved audio to {output_wav}")
+    if profiler_enabled:
+        omni_llm.stop_profile()
     omni_llm.close()
 
 

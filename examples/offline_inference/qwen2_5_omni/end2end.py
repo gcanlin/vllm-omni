@@ -380,8 +380,6 @@ def main(args):
     if profiler_enabled:
         omni_llm.start_profile()
     omni_generator = omni_llm.generate(prompts, sampling_params_list)
-    if profiler_enabled:
-        omni_llm.stop_profile()
 
     # Determine output directory: prefer --output-dir; fallback to --output-wav
     output_dir = args.output_dir if getattr(args, "output_dir", None) else args.output_wav
@@ -412,6 +410,8 @@ def main(args):
                 output_wav = os.path.join(output_dir, f"output_{request_id}.wav")
                 sf.write(output_wav, audio_tensor.detach().cpu().numpy(), samplerate=24000)
                 print(f"Request ID: {request_id}, Saved audio to {output_wav}")
+    if profiler_enabled:
+        omni_llm.stop_profile()
 
 
 def parse_args():
