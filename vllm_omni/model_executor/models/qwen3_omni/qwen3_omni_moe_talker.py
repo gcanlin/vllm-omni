@@ -639,7 +639,7 @@ class Qwen3OmniMoeTalkerSparseMoeBlock(nn.Module):
             text_config.hidden_size,
             text_config.num_experts,
             bias=False,
-            quant_config=None,
+            quant_config=quant_config,
             prefix=f"{prefix}.gate",
         )
 
