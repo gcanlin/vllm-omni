@@ -30,7 +30,7 @@ from vllm_omni.distributed.ray_utils.utils import (
 )
 from vllm_omni.entrypoints.log_utils import OrchestratorMetrics
 from vllm_omni.entrypoints.omni_stage import OmniStage
-from vllm_omni.entrypoints.stage_utils import SHUTDOWN_TASK
+from vllm_omni.entrypoints.stage_utils import SHUTDOWN_TASK, OmniStageTaskType
 from vllm_omni.entrypoints.stage_utils import maybe_load_from_ipc as _load
 from vllm_omni.entrypoints.utils import (
     get_final_stage_id_for_e2e,
@@ -356,12 +356,9 @@ class OmniBase:
             stages = list(range(len(self.stage_list)))
 
         for stage_id in stages:
-            if stage_id < len(self._stage_in_queues):
+            if stage_id < len(self.stage_list):
                 try:
-                    self._stage_in_queues[stage_id].put({
-                        "type": "profiler_command",
-                        "command": "start",
-                    })
+                    self.stage_list[stage_id].submit({"type": OmniStageTaskType.PROFILER_START})
                     logger.info("[%s] Sent start_profile to stage-%s", self._name, stage_id)
                 except Exception as e:
                     logger.warning(
@@ -390,12 +387,9 @@ class OmniBase:
             stages = list(range(len(self.stage_list)))
 
         for stage_id in stages:
-            if stage_id < len(self._stage_in_queues):
+            if stage_id < len(self.stage_list):
                 try:
-                    self._stage_in_queues[stage_id].put({
-                        "type": "profiler_command",
-                        "command": "stop",
-                    })
+                    self.stage_list[stage_id].submit({"type": OmniStageTaskType.PROFILER_STOP})
                     logger.info("[%s] Sent stop_profile to stage-%s", self._name, stage_id)
                 except Exception as e:
                     logger.warning(
@@ -763,32 +757,6 @@ class Omni(OmniBase):
             logger.exception(f"[{self._name}] Failed to build/log summary: {e}")
 
         return final_outputs
-
-    def close(self) -> None:
-        """Close all stage processes and clean up resources."""
-        # Close stages if they exist (for LLM models)
-        if self.stage_list:
-            for q in self._stage_in_queues:
-                try:
-                    q.put_nowait(None)
-                except Exception as e:
-                    logger.warning(
-                        "[Orchestrator] Failed to send shutdown signal to stage input queue: %s",
-                        e,
-                    )
-            for stage in self.stage_list:
-                try:
-                    stage.stop_stage_worker()
-                except Exception as e:
-                    logger.warning("[Orchestrator] Failed to stop stage worker: %s", e)
-
-            try_close_ray(self._ray_pg)
-
-    def __del__(self):  # pragma: no cover - best effort cleanup
-        try:
-            self.close()
-        except Exception:
-            logger.debug("[Orchestrator] __del__ close() raised", exc_info=True)
 
     @property
     def _name(self) -> str:

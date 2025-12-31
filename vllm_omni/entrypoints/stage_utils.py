@@ -16,6 +16,8 @@ class OmniStageTaskType(enum.Enum):
     GENERATE = "generate"
     ABORT = "abort"
     SHUTDOWN = "shutdown"
+    PROFILER_START = "profiler_start"
+    PROFILER_STOP = "profiler_stop"
 
 
 SHUTDOWN_TASK = {"type": OmniStageTaskType.SHUTDOWN}

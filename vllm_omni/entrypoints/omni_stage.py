@@ -615,6 +615,26 @@ def _stage_worker(
             engine_args.get("model_stage", None),
         )
 
+    def handle_profiler_task(task_type: OmniStageTaskType) -> bool:
+        """Handle profiler task. Returns True if handled, False otherwise."""
+        if task_type == OmniStageTaskType.PROFILER_START:
+            if has_profiler:
+                try:
+                    stage_engine.start_profile()
+                    logger.info("[Stage-%s] Profiler started via vLLM engine", stage_id)
+                except Exception as e:
+                    logger.warning("[Stage-%s] Failed to start profiler: %s", stage_id, e)
+            return True
+        if task_type == OmniStageTaskType.PROFILER_STOP:
+            if has_profiler:
+                try:
+                    stage_engine.stop_profile()
+                    logger.info("[Stage-%s] Profiler stopped via vLLM engine", stage_id)
+                except Exception as e:
+                    logger.warning("[Stage-%s] Failed to stop profiler: %s", stage_id, e)
+            return True
+        return False
+
     # Initialize OmniConnectors if configured
     connectors = {}
     if connectors_config:
@@ -645,21 +665,8 @@ def _stage_worker(
             logger.error("Received shutdown signal")
             break
 
-        # Handle profiler control commands - call vLLM engine's profiler
-        if isinstance(task, dict) and task.get("type") == "profiler_command":
-            cmd = task.get("command")
-            if cmd == "start" and has_profiler:
-                try:
-                    stage_engine.start_profile()
-                    logger.info("[Stage-%s] Profiler started via vLLM engine", stage_id)
-                except Exception as e:
-                    logger.warning("[Stage-%s] Failed to start profiler: %s", stage_id, e)
-            elif cmd == "stop" and has_profiler:
-                try:
-                    stage_engine.stop_profile()
-                    logger.info("[Stage-%s] Profiler stopped via vLLM engine", stage_id)
-                except Exception as e:
-                    logger.warning("[Stage-%s] Failed to stop profiler: %s", stage_id, e)
+        # Handle profiler control commands
+        if handle_profiler_task(task_type):
             continue
 
         batch_tasks: list[dict[str, Any]] = [task]
@@ -672,20 +679,8 @@ def _stage_worker(
                         in_q.put(SHUTDOWN_TASK)
                         break
                     # Handle profiler commands that arrive during batching
-                    if isinstance(extra, dict) and extra.get("type") == "profiler_command":
-                        cmd = extra.get("command")
-                        if cmd == "start" and has_profiler:
-                            try:
-                                stage_engine.start_profile()
-                                logger.info("[Stage-%s] Profiler started via vLLM engine", stage_id)
-                            except Exception as e:
-                                logger.warning("[Stage-%s] Failed to start profiler: %s", stage_id, e)
-                        elif cmd == "stop" and has_profiler:
-                            try:
-                                stage_engine.stop_profile()
-                                logger.info("[Stage-%s] Profiler stopped via vLLM engine", stage_id)
-                            except Exception as e:
-                                logger.warning("[Stage-%s] Failed to stop profiler: %s", stage_id, e)
+                    extra_type = extra.get("type") if isinstance(extra, dict) else None
+                    if handle_profiler_task(extra_type):
                         continue  # Don't add to batch_tasks
                     batch_tasks.append(extra)
                     end_time = _time.time()
@@ -1128,6 +1123,26 @@ async def _stage_worker_async(
             engine_args.get("model_stage", None),
         )
 
+    async def handle_profiler_task_async(task_type: OmniStageTaskType) -> bool:
+        """Handle profiler task asynchronously. Returns True if handled, False otherwise."""
+        if task_type == OmniStageTaskType.PROFILER_START:
+            if has_profiler:
+                try:
+                    await stage_engine.start_profile()
+                    logger.info("[Stage-%s] Profiler started via vLLM engine", stage_id)
+                except Exception as e:
+                    logger.warning("[Stage-%s] Failed to start profiler: %s", stage_id, e)
+            return True
+        if task_type == OmniStageTaskType.PROFILER_STOP:
+            if has_profiler:
+                try:
+                    await stage_engine.stop_profile()
+                    logger.info("[Stage-%s] Profiler stopped via vLLM engine", stage_id)
+                except Exception as e:
+                    logger.warning("[Stage-%s] Failed to stop profiler: %s", stage_id, e)
+            return True
+        return False
+
     # Signal readiness to orchestrator and send vllm_config back to main process
     try:
         # Send vllm_config back to main process so it can be accessed via
@@ -1233,25 +1248,10 @@ async def _stage_worker_async(
             elif task_type == OmniStageTaskType.ABORT:
                 rid = task["request_id"]
                 asyncio.create_task(stage_engine.abort(rid))
+            elif await handle_profiler_task_async(task_type):
+                pass  # Profiler command handled
             else:
                 asyncio.create_task(generation_single_request(task))
-
-            # Handle profiler control commands - call vLLM engine's profiler
-            if isinstance(task, dict) and task.get("type") == "profiler_command":
-                cmd = task.get("command")
-                if cmd == "start" and has_profiler:
-                    try:
-                        await stage_engine.start_profile()
-                        logger.info("[Stage-%s] Profiler started via vLLM engine", stage_id)
-                    except Exception as e:
-                        logger.warning("[Stage-%s] Failed to start profiler: %s", stage_id, e)
-                elif cmd == "stop" and has_profiler:
-                    try:
-                        await stage_engine.stop_profile()
-                        logger.info("[Stage-%s] Profiler stopped via vLLM engine", stage_id)
-                    except Exception as e:
-                        logger.warning("[Stage-%s] Failed to stop profiler: %s", stage_id, e)
-                continue
 
         except queue.Empty:
             await asyncio.sleep(0.001)
