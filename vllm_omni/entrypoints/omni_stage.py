@@ -38,6 +38,8 @@ from vllm_omni.entrypoints.log_utils import count_tokens_from_outputs
 from vllm_omni.entrypoints.omni_diffusion import OmniDiffusion
 from vllm_omni.entrypoints.omni_llm import OmniLLM
 from vllm_omni.entrypoints.stage_utils import (
+    SHUTDOWN_TASK,
+    OmniStageTaskType,
     _to_dict,
     maybe_dump_to_shm,
     set_stage_devices,
@@ -327,7 +329,7 @@ class OmniStage:
         """
         if self._in_q is not None:
             try:
-                self._in_q.put_nowait(None)
+                self._in_q.put_nowait(SHUTDOWN_TASK)
             except Exception as e:
                 logger.warning("Failed to send shutdown to in_q: %s", e)
 
@@ -638,8 +640,9 @@ def _stage_worker(
         task = in_q.get()
 
         _recv_dequeue_ts = _time.time()
-        if task is None:
-            logger.info("Received shutdown signal")
+        task_type = task.get("type", OmniStageTaskType.GENERATE)
+        if task_type == OmniStageTaskType.SHUTDOWN:
+            logger.error("Received shutdown signal")
             break
 
         # Handle profiler control commands - call vLLM engine's profiler
@@ -665,8 +668,8 @@ def _stage_worker(
             while len(batch_tasks) < max_batch_size:
                 if not in_q.empty():
                     extra = in_q.get_nowait()
-                    if extra is None:
-                        in_q.put(None)
+                    if extra == SHUTDOWN_TASK:
+                        in_q.put(SHUTDOWN_TASK)
                         break
                     # Handle profiler commands that arrive during batching
                     if isinstance(extra, dict) and extra.get("type") == "profiler_command":
@@ -1222,9 +1225,16 @@ async def _stage_worker_async(
     while True:
         try:
             task = in_q.get_nowait()
-            if task is None:
+            task_type = task.get("type", OmniStageTaskType.GENERATE)
+            if task_type == OmniStageTaskType.SHUTDOWN:
                 logger.debug("Received shutdown signal")
+                stage_engine.shutdown()
                 break
+            elif task_type == OmniStageTaskType.ABORT:
+                rid = task["request_id"]
+                asyncio.create_task(stage_engine.abort(rid))
+            else:
+                asyncio.create_task(generation_single_request(task))
 
             # Handle profiler control commands - call vLLM engine's profiler
             if isinstance(task, dict) and task.get("type") == "profiler_command":
@@ -1243,7 +1253,6 @@ async def _stage_worker_async(
                         logger.warning("[Stage-%s] Failed to stop profiler: %s", stage_id, e)
                 continue
 
-            asyncio.create_task(generation_single_request(task))
         except queue.Empty:
             await asyncio.sleep(0.001)
         batch_request_outputs: list[Any] = []
