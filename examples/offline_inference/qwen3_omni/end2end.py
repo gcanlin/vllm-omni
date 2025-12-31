@@ -324,7 +324,7 @@ def main(args):
     omni_generator = omni_llm.generate(prompts, sampling_params_list)
     if profiler_enabled:
         omni_llm.stop_profile()
-    
+
     # Determine output directory: prefer --output-dir; fallback to --output-wav
     output_dir = args.output_dir if getattr(args, "output_dir", None) else args.output_wav
     os.makedirs(output_dir, exist_ok=True)
