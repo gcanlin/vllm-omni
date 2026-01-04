@@ -6,6 +6,7 @@ with the correct prompt format on Qwen2.5-Omni
 """
 
 import os
+import time
 from typing import NamedTuple
 
 import librosa
