@@ -370,9 +370,7 @@ def main(args):
         processed_count += len(stage_outputs.request_output)
         if profiler_enabled and processed_count >= total_requests:
             print(f"[Info] Processed {processed_count}/{total_requests}. Stopping profiler inside active loop...")
-            # This loop is for the scenario where multiple requests are sent.
-            # But if you only send one request, just invoke stop_profile()
-            # after the omni_generator loop.
+            # Stop the profiler while workers are still alive
             omni_llm.stop_profile()
 
             print("[Info] Waiting 30s for workers to write trace files to disk...")
