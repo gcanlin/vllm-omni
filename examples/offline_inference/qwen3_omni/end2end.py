@@ -321,7 +321,7 @@ def main(args):
             prompt["modalities"] = output_modalities
     profiler_enabled = bool(os.getenv("VLLM_TORCH_PROFILER_DIR"))
     if profiler_enabled:
-        omni_llm.start_profile(stages=[0, 1])
+        omni_llm.start_profile(stages=[0])
     omni_generator = omni_llm.generate(prompts, sampling_params_list)
 
     # Determine output directory: prefer --output-dir; fallback to --output-wav
@@ -370,6 +370,9 @@ def main(args):
         processed_count += len(stage_outputs.request_output)
         if profiler_enabled and processed_count >= total_requests:
             print(f"[Info] Processed {processed_count}/{total_requests}. Stopping profiler inside active loop...")
+            # This loop is for the scenario where multiple requests are sent.
+            # But if you only send one request, just invoke stop_profile() 
+            # after the omni_generator loop.
             omni_llm.stop_profile()
 
             print("[Info] Waiting 30s for workers to write trace files to disk...")
