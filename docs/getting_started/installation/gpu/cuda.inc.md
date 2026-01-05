@@ -22,7 +22,7 @@ Note: Pre-built wheels are currently only available for vLLM-Omni 0.11.0rc1. For
 
 vLLM-Omni is built based on vLLM. Please install it with command below.
 ```bash
-uv pip install vllm==0.12.0 --torch-backend=auto
+uv pip install vllm==0.11.0 --torch-backend=auto
 ```
 
 #### Installation of vLLM-Omni
