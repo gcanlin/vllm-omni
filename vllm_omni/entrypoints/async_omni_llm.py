@@ -165,10 +165,7 @@ class AsyncOmniLLM(AsyncLLM):
         except RuntimeError:
             pass
 
-        if (
-            envs.VLLM_TORCH_PROFILER_DIR
-            and not envs.VLLM_TORCH_PROFILER_DISABLE_ASYNC_LLM
-        ):
+        if envs.VLLM_TORCH_PROFILER_DIR and not envs.VLLM_TORCH_PROFILER_DISABLE_ASYNC_LLM:
             logger.info(
                 "Torch profiler enabled. AsyncOmniLLM CPU traces will be collected under %s",
                 envs.VLLM_TORCH_PROFILER_DIR,
