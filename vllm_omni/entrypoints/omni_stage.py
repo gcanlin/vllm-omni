@@ -662,7 +662,7 @@ def _stage_worker(
         _recv_dequeue_ts = _time.time()
         task_type = task.get("type", OmniStageTaskType.GENERATE)
         if task_type == OmniStageTaskType.SHUTDOWN:
-            logger.error("Received shutdown signal")
+            logger.info("Received shutdown signal")
             break
 
         # Handle profiler control commands
