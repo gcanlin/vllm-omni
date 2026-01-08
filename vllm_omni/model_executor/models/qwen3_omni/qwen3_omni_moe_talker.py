@@ -18,13 +18,9 @@ from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
 from vllm.config import VllmConfig
 from vllm.distributed import get_tensor_model_parallel_world_size
 from vllm.logger import init_logger
-from vllm.model_executor.layers.activation import _ACTIVATION_REGISTRY, SiluAndMul
+from vllm.model_executor.layers.activation import _ACTIVATION_REGISTRY
 from vllm.model_executor.layers.fused_moe import SharedFusedMoE
-from vllm.model_executor.layers.linear import (
-    MergedColumnParallelLinear,
-    ReplicatedLinear,
-    RowParallelLinear,
-)
+from vllm.model_executor.layers.linear import ReplicatedLinear
 from vllm.model_executor.layers.quantization import QuantizationConfig
 from vllm.model_executor.models.interfaces import (
     MultiModalEmbeddings,
@@ -34,7 +30,7 @@ from vllm.model_executor.models.interfaces import (
 from vllm.model_executor.models.qwen2_5_omni_thinker import (
     Qwen2_5OmniThinkerDummyInputsBuilder,
 )
-from vllm.model_executor.models.qwen3_moe import Qwen3MoeSparseMoeBlock
+from vllm.model_executor.models.qwen3_moe import Qwen3MoeSparseMoeBlock, Qwen3MoeMLP
 from vllm.model_executor.models.qwen3_omni_moe_thinker import Qwen3Omni_VisionTransformer
 from vllm.model_executor.models.utils import (
     AutoWeightsLoader,
@@ -530,55 +526,6 @@ class Qwen3OmniMoeTalkerResizeMLP(nn.Module):
         return self.linear_fc2(self.act_fn(self.linear_fc1(hidden_state)))
 
 
-class Qwen3OmniMoeSharedExpertMLP(nn.Module):
-    """
-    Shared expert MLP for Qwen3 Omni MoE Talker.
-
-    This MLP matches the HuggingFace weight structure:
-    - shared_expert.gate_proj.weight  \
-    - shared_expert.up_proj.weight     } -> merged into gate_up_proj
-    - shared_expert.down_proj.weight
-
-    Note: The shared_expert_gate is NOT inside this class, it's a sibling
-    at the same level as shared_expert in the HF model structure.
-    """
-
-    def __init__(
-        self,
-        hidden_size: int,
-        intermediate_size: int,
-        hidden_act: str,
-        quant_config: QuantizationConfig | None = None,
-        reduce_results: bool = True,
-        prefix: str = "",
-    ) -> None:
-        super().__init__()
-        self.gate_up_proj = MergedColumnParallelLinear(
-            hidden_size,
-            [intermediate_size] * 2,
-            bias=False,
-            quant_config=quant_config,
-            prefix=f"{prefix}.gate_up_proj",
-        )
-        self.down_proj = RowParallelLinear(
-            intermediate_size,
-            hidden_size,
-            bias=False,
-            quant_config=quant_config,
-            reduce_results=reduce_results,
-            prefix=f"{prefix}.down_proj",
-        )
-        if hidden_act != "silu":
-            raise ValueError(f"Unsupported activation: {hidden_act}. Only silu is supported for now.")
-        self.act_fn = SiluAndMul()
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        gate_up, _ = self.gate_up_proj(x)
-        out = self.act_fn(gate_up)
-        out, _ = self.down_proj(out)
-        return out
-
-
 class Qwen3OmniMoeTalkerSharedExpertWrapper(nn.Module):
     """
     Wrapper that combines shared_expert MLP with its sigmoid gate.
@@ -592,7 +539,7 @@ class Qwen3OmniMoeTalkerSharedExpertWrapper(nn.Module):
 
     def __init__(
         self,
-        shared_expert: Qwen3OmniMoeSharedExpertMLP,
+        shared_expert: Qwen3MoeMLP,
         shared_expert_gate: nn.Linear,
     ):
         super().__init__()
@@ -645,7 +592,7 @@ class Qwen3OmniMoeTalkerSparseMoeBlock(nn.Module):
 
         # Shared expert MLP (matches HF: mlp.shared_expert.*)
         if text_config.shared_expert_intermediate_size > 0:
-            self.shared_expert = Qwen3OmniMoeSharedExpertMLP(
+            self.shared_expert = Qwen3MoeMLP(
                 hidden_size=text_config.hidden_size,
                 intermediate_size=text_config.shared_expert_intermediate_size,
                 hidden_act=text_config.hidden_act,
