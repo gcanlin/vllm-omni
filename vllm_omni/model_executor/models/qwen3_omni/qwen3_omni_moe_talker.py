@@ -774,9 +774,3 @@ class Qwen3OmniMoeModel(Qwen3MoeLLMForCausalLM):
     ) -> torch.Tensor:
         """Embed codec input IDs."""
         return self.model.codec_embedding(input_ids)
-        """Embed codec input IDs."""
-        return self.model.codec_embedding(input_ids)
-        """Embed codec input IDs."""
-        return self.model.codec_embedding(input_ids)
-        """Embed codec input IDs."""
-        return self.model.codec_embedding(input_ids)
