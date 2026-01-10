@@ -374,7 +374,9 @@ class GPUARModelRunner(OmniGPUModelRunner):
         with record_function_or_nullcontext("gpu_model_runner: eplb"):
             self.eplb_step()
 
-        hidden_states_cpu = hidden_states.detach().to("cpu").contiguous()
+        # Start async D2H copy early to avoid sync bubble
+        hidden_states_cpu = hidden_states.detach().to("cpu", non_blocking=True)
+
         num_scheduled_tokens_np = getattr(self, "_omni_num_scheduled_tokens_np", None)
         if num_scheduled_tokens_np is None:
             req_ids = self.input_batch.req_ids
@@ -384,6 +386,9 @@ class GPUARModelRunner(OmniGPUModelRunner):
             )
 
         self._process_additional_information_updates(hidden_states, multimodal_outputs, num_scheduled_tokens_np)
+
+        # Ensure async copy is complete before using CPU tensor
+        hidden_states_cpu = hidden_states_cpu.contiguous()
 
         pooler_output: list[dict[str, object]] = []
         for rid in req_ids_output_copy:
