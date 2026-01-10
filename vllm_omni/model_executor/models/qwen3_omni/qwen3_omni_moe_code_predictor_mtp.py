@@ -139,6 +139,7 @@ class Qwen3OmniCodePredictorAttention(nn.Module):
             bias=False,
             quant_config=quant_config,
             prefix=f"{prefix}.qkv_proj",
+            disable_tp=True,
         )
         self.o_proj = RowParallelLinear(
             input_size=self.num_heads * self.head_dim,
@@ -146,6 +147,7 @@ class Qwen3OmniCodePredictorAttention(nn.Module):
             bias=False,
             quant_config=quant_config,
             prefix=f"{prefix}.o_proj",
+            disable_tp=True
         )
 
         self.q_size = self.num_heads * self.head_dim
@@ -267,6 +269,7 @@ class Qwen3OmniCodePredictorMLP(nn.Module):
             bias=False,
             quant_config=quant_config,
             prefix=f"{prefix}.gate_up_proj",
+            disable_tp=True,
         )
 
         self.down_proj = RowParallelLinear(
@@ -275,6 +278,7 @@ class Qwen3OmniCodePredictorMLP(nn.Module):
             bias=False,
             quant_config=quant_config,
             prefix=f"{prefix}.down_proj",
+            disable_tp=True,
         )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
