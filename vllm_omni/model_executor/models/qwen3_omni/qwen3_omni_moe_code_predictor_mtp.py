@@ -147,7 +147,7 @@ class Qwen3OmniCodePredictorAttention(nn.Module):
             bias=False,
             quant_config=quant_config,
             prefix=f"{prefix}.o_proj",
-            disable_tp=True
+            disable_tp=True,
         )
 
         self.q_size = self.num_heads * self.head_dim
