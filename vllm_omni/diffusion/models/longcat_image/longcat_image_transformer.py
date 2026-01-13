@@ -18,7 +18,7 @@ from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 from vllm_omni.diffusion.attention.layer import Attention
 from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.layers.rope import RotaryEmbedding
-from vllm_omni.utils.platform_utils import is_npu
+from vllm_omni.platforms import current_omni_platform
 
 logger = init_logger(__name__)
 
@@ -432,7 +432,7 @@ class LongCatImageTransformer2DModel(nn.Module):
 
         ids = torch.cat((txt_ids, img_ids), dim=0)
 
-        if is_npu():
+        if current_omni_platform.is_npu():
             freqs_cos, freqs_sin = self.pos_embed(ids.cpu())
             image_rotary_emb = (freqs_cos.npu(), freqs_sin.npu())
         else:

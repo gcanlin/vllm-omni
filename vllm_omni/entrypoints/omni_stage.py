@@ -46,9 +46,25 @@ from vllm_omni.entrypoints.stage_utils import (
     set_stage_devices,
 )
 from vllm_omni.inputs.data import OmniTokensPrompt
-from vllm_omni.utils import detect_device_type
 
 logger = init_logger(__name__)
+
+
+def _resolve_worker_cls(engine_args: dict[str, Any]) -> None:
+    worker_type = engine_args.pop("worker_type", None)
+    if not worker_type:
+        return
+    if engine_args.get("worker_cls"):
+        return
+    from vllm_omni.platforms import current_omni_platform
+
+    worker_type = str(worker_type).lower()
+    if worker_type == "ar":
+        engine_args["worker_cls"] = current_omni_platform.get_omni_ar_worker_cls()
+    elif worker_type == "generation":
+        engine_args["worker_cls"] = current_omni_platform.get_omni_generation_worker_cls()
+    else:
+        raise ValueError(f"Unknown worker_type: {worker_type}")
 
 
 def _build_od_config(engine_args: dict[str, Any], model: str) -> dict[str, Any]:
@@ -435,6 +451,9 @@ def _stage_worker(
     logger.info(f"Starting stage worker with model: {model}")
     import os as _os
     import time as _time
+    from vllm_omni.plugins import load_omni_general_plugins
+
+    load_omni_general_plugins()
 
     stage_id = stage_payload["stage_id"]
     engine_args = stage_payload.get("engine_args", {})
@@ -442,6 +461,9 @@ def _stage_worker(
     shm_threshold_bytes = int(stage_payload.get("shm_threshold_bytes", 65536))
     connectors_config = stage_payload.get("connectors_config", {})
     stage_type = stage_payload.get("stage_type", "llm")
+
+    if stage_type != "diffusion":
+        _resolve_worker_cls(engine_args)
 
     # Aggregates for running average
     _agg_total_tokens = 0
@@ -452,7 +474,9 @@ def _stage_worker(
     # Device mapping
     device_type = None
     try:
-        device_type = detect_device_type()
+        from vllm_omni.platforms import current_omni_platform
+
+        device_type = current_omni_platform.device_type
         set_stage_devices(stage_id, runtime_cfg.get("devices"), device_type=device_type)
     except Exception as e:
         logger.warning("Device setup failed: %s", e)
@@ -914,6 +938,9 @@ async def _stage_worker_async(
     # Use local aliases to avoid conflicts with global imports in worker process
     import os as _os
     import time as _time
+    from vllm_omni.plugins import load_omni_general_plugins
+
+    load_omni_general_plugins()
 
     stage_id = stage_payload["stage_id"]
     engine_args = stage_payload.get("engine_args", {})
@@ -921,6 +948,9 @@ async def _stage_worker_async(
     shm_threshold_bytes = int(stage_payload.get("shm_threshold_bytes", 65536))
     connectors_config = stage_payload.get("connectors_config", {})
     stage_type = stage_payload.get("stage_type", "llm")
+
+    if stage_type != "diffusion":
+        _resolve_worker_cls(engine_args)
 
     in_q = omni_stage._in_q
     out_q = omni_stage._out_q
@@ -935,9 +965,9 @@ async def _stage_worker_async(
     # Device mapping
     device_type = None
     try:
-        from vllm_omni.utils import detect_device_type
+        from vllm_omni.platforms import current_omni_platform
 
-        device_type = detect_device_type()
+        device_type = current_omni_platform.device_type
         set_stage_devices(stage_id, runtime_cfg.get("devices"), device_type=device_type)
     except Exception as e:
         logger.warning("Device setup failed: %s", e)

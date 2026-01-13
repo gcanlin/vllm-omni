@@ -9,7 +9,7 @@ stage_args:
     engine_args:
       model_stage: thinker
       model_arch: Qwen2_5OmniForConditionalGeneration
-      worker_cls: vllm_omni.worker.npu.npu_ar_worker.NPUARWorker
+      worker_type: ar
       scheduler_cls: vllm_omni.core.sched.omni_ar_scheduler.OmniARScheduler
       gpu_memory_utilization: 0.8
       enforce_eager: true  # Now we only support eager mode
@@ -36,7 +36,7 @@ stage_args:
     engine_args:
       model_stage: talker
       model_arch: Qwen2_5OmniForConditionalGeneration
-      worker_cls: vllm_omni.worker.npu.npu_ar_worker.NPUARWorker
+      worker_type: ar
       scheduler_cls: vllm_omni.core.sched.omni_ar_scheduler.OmniARScheduler
       gpu_memory_utilization: 0.8
       enforce_eager: true
@@ -58,12 +58,12 @@ stage_args:
     stage_type: llm  # Use llm stage type to launch OmniLLM
     runtime:
       process: true
-      devices: "0"            # Example: use a different NPU than the previous stage; use "0" if single NPU
+      devices: "2"            # Example: use a different NPU than the previous stage; use "0" if single NPU
       max_batch_size: 1
     engine_args:
       model_stage: code2wav
       model_arch: Qwen2_5OmniForConditionalGeneration
-      worker_cls: vllm_omni.worker.npu.npu_generation_worker.NPUGenerationWorker
+      worker_type: generation
       scheduler_cls: vllm_omni.core.sched.omni_generation_scheduler.OmniGenerationScheduler
       gpu_memory_utilization: 0.15
       enforce_eager: true

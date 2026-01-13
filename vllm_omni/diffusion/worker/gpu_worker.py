@@ -384,6 +384,9 @@ class WorkerProc:
         broadcast_handle,
     ) -> None:
         """Worker initialization and execution loops."""
+        from vllm_omni.plugins import load_omni_general_plugins
+
+        load_omni_general_plugins()
 
         worker_proc = WorkerProc(
             od_config,

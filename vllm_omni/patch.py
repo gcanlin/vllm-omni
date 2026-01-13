@@ -13,8 +13,8 @@ import vllm_omni.logger  # noqa: F401
 from vllm_omni.engine import OmniEngineCoreOutput, OmniEngineCoreOutputs, OmniEngineCoreRequest
 from vllm_omni.inputs.data import OmniTokensPrompt
 from vllm_omni.model_executor.layers.mrope import MRotaryEmbedding
+from vllm_omni.platforms import current_omni_platform
 from vllm_omni.request import OmniRequest
-from vllm_omni.utils import is_npu
 
 for module_name, module in sys.modules.items():
     # only do patch on module of vllm, pass others
@@ -40,7 +40,7 @@ for module_name, module in sys.modules.items():
 # if they exist, which causes AttributeError when prefetch_mlp_enabled is not set.
 # TODO: Remove this patch after upgrading to vllm-ascend v0.13.0 or later.
 # This issue has been fixed in https://github.com/vllm-project/vllm-ascend/pull/5035
-if is_npu():
+if current_omni_platform.is_npu():
     import torch
     import torch.nn as nn
     from vllm.model_executor.models.qwen2_5_omni_thinker import Qwen2_5_VLImageInputs, Qwen2_5_VLVideoInputs

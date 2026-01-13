@@ -9,17 +9,14 @@ from typing import Any
 
 import torch
 import torch.distributed
-from torch.cuda import synchronize
 from torch.distributed import Backend, ProcessGroup
 from vllm.logger import init_logger
 
 from vllm_omni.diffusion import envs
+from vllm_omni.platforms import current_omni_platform
 
 logger = init_logger(__name__)
 
-if envs._is_npu():
-    logger.info("torch.npu synchronize")
-    from torch.npu import synchronize
 
 
 TensorMetadata = namedtuple("TensorMetadata", ["device", "dtype", "size"])
@@ -768,7 +765,7 @@ class PipelineGroupCoordinator(GroupCoordinator):
 
         # To protect against race condition when using batch_isend_irecv().
         # should take this out once the bug with batch_isend_irecv is resolved.
-        synchronize()
+        current_omni_platform.synchronize()
 
         ops = []
         recv_prev_shape_tensor = None
@@ -799,7 +796,7 @@ class PipelineGroupCoordinator(GroupCoordinator):
             for req in reqs:
                 req.wait()
 
-        synchronize()
+        current_omni_platform.synchronize()
 
         recv_prev_shape = [0, 0, 0]
         if recv_prev_shape_tensor is not None:

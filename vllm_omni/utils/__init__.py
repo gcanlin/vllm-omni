@@ -1,13 +1,6 @@
-from vllm_omni.utils.platform_utils import (
-    detect_device_type,
-    get_device_control_env_var,
-    is_npu,
-    is_rocm,
-)
+from vllm_omni.utils.import_utils import import_pynvml, resolve_obj_by_qualname
 
 __all__ = [
-    "detect_device_type",
-    "get_device_control_env_var",
-    "is_npu",
-    "is_rocm",
+    "import_pynvml",
+    "resolve_obj_by_qualname",
 ]

@@ -20,9 +20,16 @@ from vllm_omni.diffusion.registry import (
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.scheduler import Scheduler, scheduler
 from vllm_omni.outputs import OmniRequestOutput
-from vllm_omni.utils.platform_utils import get_diffusion_worker_class
+from vllm_omni.platforms import current_omni_platform
+from vllm_omni.utils.import_utils import resolve_obj_by_qualname
 
 logger = init_logger(__name__)
+
+
+def get_diffusion_worker_class() -> type:
+    """Resolve the diffusion worker class for the active omni platform."""
+    cls_name = current_omni_platform.get_omni_diffusion_worker_cls()
+    return resolve_obj_by_qualname(cls_name)
 
 
 def supports_image_input(model_class_name: str) -> bool:

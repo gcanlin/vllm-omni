@@ -11,9 +11,10 @@ from vllm.v1.worker.gpu_worker import Worker as GPUWorker
 from vllm.v1.worker.gpu_worker import init_worker_distributed_environment
 
 from vllm_omni.worker.gpu_generation_model_runner import GPUGenerationModelRunner
+from vllm_omni.worker.mixins import OmniWorkerMixin
 
 
-class GPUGenerationWorker(GPUWorker):
+class GPUGenerationWorker(OmniWorkerMixin, GPUWorker):
     """GPU Worker for Generation model (non-autoregressive waveform generation).
 
     Usage in stage config:

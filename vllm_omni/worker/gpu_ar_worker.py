@@ -12,11 +12,12 @@ from vllm.v1.worker.gpu_worker import Worker as GPUWorker
 from vllm.v1.worker.gpu_worker import init_worker_distributed_environment
 
 from vllm_omni.worker.gpu_ar_model_runner import GPUARModelRunner
+from vllm_omni.worker.mixins import OmniWorkerMixin
 
 logger = init_logger(__name__)
 
 
-class GPUARWorker(GPUWorker):
+class GPUARWorker(OmniWorkerMixin, GPUWorker):
     """GPU worker for autoregressive omni model stages.
 
     Extends the base GPUWorker to initialize and manage autoregressive
