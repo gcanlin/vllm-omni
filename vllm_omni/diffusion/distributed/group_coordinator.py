@@ -121,7 +121,7 @@ class GroupCoordinator:
         assert self.cpu_group is not None
         assert self.device_group is not None
 
-        self.device = envs.get_device(local_rank)
+        self.device = current_omni_platform.get_torch_device(local_rank)
 
     @property
     def first_rank(self):
@@ -615,7 +615,7 @@ class PipelineGroupCoordinator(GroupCoordinator):
         assert self.cpu_group is not None
         assert self.device_group is not None
 
-        self.device = envs.get_device(local_rank)
+        self.device = current_omni_platform.get_torch_device(local_rank)
 
         self.recv_buffer_set: bool = False
         self.recv_tasks_queue: list[tuple[str, int]] = []

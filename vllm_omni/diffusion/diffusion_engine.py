@@ -22,6 +22,7 @@ from vllm_omni.diffusion.scheduler import Scheduler, scheduler
 from vllm_omni.outputs import OmniRequestOutput
 from vllm_omni.platforms import current_omni_platform
 from vllm_omni.utils.import_utils import resolve_obj_by_qualname
+from vllm_omni.diffusion.worker.diffusion_worker import WorkerProc
 
 logger = init_logger(__name__)
 
@@ -241,9 +242,6 @@ class DiffusionEngine:
         mp.set_start_method("spawn", force=True)
         processes = []
 
-        # Get the appropriate worker class for current device
-        worker_proc = get_diffusion_worker_class()
-
         # Launch all worker processes
         scheduler_pipe_readers = []
         scheduler_pipe_writers = []
@@ -252,7 +250,7 @@ class DiffusionEngine:
             reader, writer = mp.Pipe(duplex=False)
             scheduler_pipe_writers.append(writer)
             process = mp.Process(
-                target=worker_proc.worker_main,
+                target=WorkerProc.worker_main,
                 args=(
                     i,  # rank
                     od_config,

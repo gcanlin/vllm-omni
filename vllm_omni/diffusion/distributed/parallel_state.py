@@ -389,7 +389,7 @@ def init_distributed_environment(
     backend: str | None = None,
 ):
     if backend is None:
-        backend = envs.get_torch_distributed_backend()
+        backend = current_omni_platform.dist_backend
     logger.debug(
         "world_size=%d rank=%d local_rank=%d distributed_init_method=%s backend=%s",
         world_size,
@@ -566,7 +566,7 @@ def initialize_model_parallel(
     backend: str | None = None,
 ) -> None:
     if backend is None:
-        backend = envs.get_torch_distributed_backend()
+        backend = current_omni_platform.dist_backend
     """
     Initialize model parallel groups.
 

@@ -27,13 +27,14 @@ from vllm_omni.diffusion.distributed.parallel_state import (
 from vllm_omni.diffusion.forward_context import set_forward_context
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
 from vllm_omni.diffusion.request import OmniDiffusionRequest
+from vllm_omni.platforms import current_omni_platform
 
 logger = init_logger(__name__)
 
 
-class GPUWorker:
+class DiffusionWorker:
     """
-    A worker that executes the model on a single GPU.
+    A platform-agnostic worker that executes diffusion models.
     """
 
     def __init__(
@@ -54,6 +55,7 @@ class GPUWorker:
         """Initialize the device and load the model."""
         world_size = self.od_config.num_gpus
         rank = self.rank
+
         # Set environment variables for distributed initialization
         os.environ["MASTER_ADDR"] = "localhost"
         os.environ["MASTER_PORT"] = str(self.od_config.master_port)
@@ -61,17 +63,20 @@ class GPUWorker:
         os.environ["RANK"] = str(rank)
         os.environ["WORLD_SIZE"] = str(world_size)
 
-        self.device = torch.device(f"cuda:{rank}")
-        torch.cuda.set_device(self.device)
+        # Use platform API for device initialization
+        self.device = current_omni_platform.get_torch_device(rank)
+        current_omni_platform.set_device(self.device)
 
-        # hack
+        # Initialize vLLM config
         vllm_config = VllmConfig()
         vllm_config.parallel_config.tensor_parallel_size = self.od_config.parallel_config.tensor_parallel_size
         vllm_config.parallel_config.data_parallel_size = self.od_config.parallel_config.data_parallel_size
         self.vllm_config = vllm_config
+
         with set_forward_context(vllm_config=vllm_config, omni_diffusion_config=self.od_config):
             init_distributed_environment(world_size=world_size, rank=rank)
             logger.info(f"Worker {self.rank}: Initialized device and distributed environment.")
+
             parallel_config = self.od_config.parallel_config
             initialize_model_parallel(
                 data_parallel_size=parallel_config.data_parallel_size,
@@ -86,6 +91,7 @@ class GPUWorker:
             load_config = LoadConfig()
             model_loader = DiffusersPipelineLoader(load_config)
             time_before_load = time.perf_counter()
+
             with self._maybe_get_memory_pool_context(tag="weights"):
                 with DeviceMemoryProfiler() as m:
                     self.pipeline = model_loader.load_model(
@@ -101,7 +107,8 @@ class GPUWorker:
         )
         logger.info(f"Worker {self.rank}: Model loaded successfully.")
 
-        if not self.od_config.enforce_eager:
+        # Try torch.compile if platform supports it
+        if not self.od_config.enforce_eager and current_omni_platform.supports_torch_compile():
             try:
                 self.pipeline.transformer = regionally_compile(
                     self.pipeline.transformer,
@@ -111,7 +118,7 @@ class GPUWorker:
             except Exception as e:
                 logger.warning(f"Worker {self.rank}: torch.compile failed with error: {e}. Using eager mode.")
 
-        # Setup cache backend based on type (both backends use enable()/reset() interface)
+        # Setup cache backend based on type
         self.cache_backend = get_cache_backend(self.od_config.cache_backend, self.od_config.cache_config)
 
         if self.cache_backend is not None:
@@ -156,17 +163,18 @@ class GPUWorker:
     def sleep(self, level: int = 1) -> bool:
         """
         Put the worker to sleep. The worker should not process any requests.
-        The caller should guarantee that no requests are being processed
-        during the sleep period, before `wake_up` is called.
 
         Args:
             level: The sleep level. Level 1 sleep will offload the model
                 weights and discard the kv cache.
-                Currently only support level 1.
         """
+        if not current_omni_platform.is_sleep_mode_available():
+            logger.warning("Sleep mode is not supported on this platform.")
+            return False
+
         from vllm.device_allocator.cumem import CuMemAllocator
 
-        free_bytes_before_sleep = torch.cuda.mem_get_info()[0]
+        free_bytes_before_sleep = current_omni_platform.get_free_memory()
 
         # Save the buffers before level 2 sleep
         if level == 2:
@@ -175,9 +183,13 @@ class GPUWorker:
 
         allocator = CuMemAllocator.get_instance()
         allocator.sleep(offload_tags=("weights",) if level == 1 else tuple())
-        free_bytes_after_sleep, total = torch.cuda.mem_get_info()
+
+        free_bytes_after_sleep = current_omni_platform.get_free_memory()
+        device_id = self.device.index if self.device.index is not None else 0
+        total = current_omni_platform.get_device_total_memory(device_id)
         freed_bytes = free_bytes_after_sleep - free_bytes_before_sleep
         used_bytes = total - free_bytes_after_sleep
+
         assert freed_bytes >= 0, "Memory usage increased after sleeping."
         logger.info(
             "Sleep mode freed %.2f GiB memory, %.2f GiB memory is still in use.",
@@ -188,16 +200,15 @@ class GPUWorker:
 
     def wake_up(self, tags: list[str] | None = None) -> bool:
         """
-        Wake up the worker from sleep mode. See the sleep function
-        method for more details.
+        Wake up the worker from sleep mode.
 
         Args:
-            tags: An optional list of tags to reallocate the worker memory
-                for specific memory allocations. Values must be in
-                `("weights")`. If None, all memory is reallocated.
-                wake_up should be called with all tags (or None) before the
-                worker is used again.
+            tags: An optional list of tags to reallocate the worker memory.
         """
+        if not current_omni_platform.is_sleep_mode_available():
+            logger.warning("Sleep mode is not supported on this platform.")
+            return False
+
         from vllm.device_allocator.cumem import CuMemAllocator
 
         allocator = CuMemAllocator.get_instance()
@@ -213,7 +224,7 @@ class GPUWorker:
         return True
 
     def _maybe_get_memory_pool_context(self, tag: str) -> AbstractContextManager:
-        if self.od_config.enable_sleep_mode:
+        if self.od_config.enable_sleep_mode and current_omni_platform.is_sleep_mode_available():
             from vllm.device_allocator.cumem import CuMemAllocator
 
             allocator = CuMemAllocator.get_instance()
@@ -241,17 +252,14 @@ class WorkerProc:
         # Inter-process Communication
         self.context = zmq.Context(io_threads=2)
 
-        # Initialize MessageQueue reader from handle (unified for generation & RPC)
+        # Initialize MessageQueue reader from handle
         self.mq = MessageQueue.create_from_handle(broadcast_handle, gpu_id)
 
         self.result_mq = None
         self.result_mq_handle = None
 
-        # Setup result sender (only for rank 0 for now, or whoever needs to reply)
-        # Assuming only rank 0 replies to scheduler as per original logic
+        # Setup result sender (only for rank 0)
         if gpu_id == 0:
-            # Create MessageQueue for results (1 writer -> 1 reader)
-            # We assume the reader (SyncScheduler) will act as rank 0
             self.result_mq = MessageQueue(n_reader=1, n_local_reader=1, local_reader_ranks=[0])
             self.result_mq_handle = self.result_mq.export_handle()
             logger.info(f"Worker {gpu_id} created result MessageQueue")
@@ -261,26 +269,21 @@ class WorkerProc:
         self.gpu_id = gpu_id
         self._running = True
 
-    def _create_worker(self, gpu_id: int, od_config: OmniDiffusionConfig) -> GPUWorker:
-        """Create a worker instance. Override in subclasses for different worker types."""
-        return GPUWorker(
+    def _create_worker(self, gpu_id: int, od_config: OmniDiffusionConfig) -> DiffusionWorker:
+        """Create a worker instance."""
+        return DiffusionWorker(
             local_rank=gpu_id,
             rank=gpu_id,
             od_config=od_config,
         )
 
     def return_result(self, output: DiffusionOutput):
-        """
-        replies to client, only on rank 0
-        """
+        """Reply to client, only on rank 0."""
         if self.result_mq is not None:
             self.result_mq.enqueue(output)
 
     def recv_message(self):
-        """
-        Receive unified messages (RPC requests, shutdown) from broadcast queue.
-        Uses indefinite=True to block until a message arrives.
-        """
+        """Receive unified messages from broadcast queue."""
         return self.mq.dequeue(indefinite=True)
 
     def execute_rpc(self, rpc_request: dict) -> tuple[object | None, bool]:
@@ -309,14 +312,12 @@ class WorkerProc:
             logger.error(f"Error executing RPC: {e}", exc_info=True)
             return {"status": "error", "error": str(e)}, should_reply
 
-    # TODO: queueing, cancellation
     def worker_busy_loop(self) -> None:
         """Main busy loop for Multiprocessing Workers"""
 
         logger.info(f"Worker {self.gpu_id} ready to receive requests via shared memory")
 
         while self._running:
-            # Receive unified message (generation request, RPC request, or shutdown)
             msg = None
             try:
                 msg = self.recv_message()
@@ -333,7 +334,6 @@ class WorkerProc:
 
             # Route message based on type
             if isinstance(msg, dict) and msg.get("type") == "rpc":
-                # Handle RPC request
                 try:
                     result, should_reply = self.execute_rpc(msg)
                     if should_reply:
@@ -344,13 +344,12 @@ class WorkerProc:
                         self.return_result({"status": "error", "error": str(e)})
 
             elif isinstance(msg, dict) and msg.get("type") == "shutdown":
-                # Handle shutdown message
                 logger.info("Worker %s: Received shutdown message", self.gpu_id)
                 self._running = False
                 continue
 
             else:
-                # Handle generation request (OmniDiffusionRequest list)
+                # Handle generation request
                 try:
                     output = self.worker.execute_model(msg, self.od_config)
                 except Exception as e:
@@ -363,17 +362,14 @@ class WorkerProc:
                 try:
                     self.return_result(output)
                 except zmq.ZMQError as e:
-                    # Reply failed; log and keep loop alive to accept future requests
                     logger.error(f"ZMQ error sending reply: {e}")
                     continue
 
         logger.info("event loop terminated.")
         try:
             self.worker.shutdown()
-        except Exception as exc:  # pragma: no cover - best effort cleanup
+        except Exception as exc:
             logger.warning("Worker %s: Shutdown encountered an error: %s", self.gpu_id, exc)
-        # if self.result_sender is not None:
-        #     self.result_sender.close()
         self.context.term()
 
     @staticmethod

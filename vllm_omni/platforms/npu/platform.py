@@ -1,10 +1,3 @@
-"""
-NPU/Ascend implementation of OmniPlatform.
-
-Uses multiple inheritance to combine:
-- OmniPlatform: Omni-specific interfaces
-- NPUPlatform: vllm-ascend's NPU platform implementation
-"""
 import torch
 from vllm.logger import init_logger
 from vllm_ascend.platform import NPUPlatform
@@ -22,6 +15,7 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
     """
 
     _omni_enum = OmniPlatformEnum.NPU
+    dist_backend: str = "hccl"
 
     @classmethod
     def get_omni_ar_worker_cls(cls) -> str:
@@ -38,7 +32,7 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
     # Diffusion attention backend configuration for NPU
     # NPU uses Ascend-specific backend, with SDPA as fallback
     _DIFFUSION_BACKEND_CONFIG = {
-        "ASCEND": "vllm_omni.platforms.npu.attention.ascend_attn.AscendAttentionBackend",
+        "ASCEND": "vllm_omni.platforms.npu.diffusion.attention.ascend_attn.AscendAttentionBackend",
         "TORCH_SDPA": "vllm_omni.diffusion.attention.backends.sdpa.SDPABackend",
     }
 
@@ -81,3 +75,12 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
     @classmethod
     def synchronize(cls) -> None:
         torch.npu.synchronize()
+
+    @classmethod
+    def supports_torch_compile(cls) -> bool:
+        return False
+
+    @classmethod
+    def get_free_memory(cls, device: torch.device | None = None) -> int:
+        free, _ = torch.npu.mem_get_info(device)
+        return free

@@ -87,3 +87,16 @@ class CudaOmniPlatform(OmniPlatform, CudaPlatformBase):
     @classmethod
     def synchronize(cls) -> None:
         torch.cuda.synchronize()
+
+    # ================== Diffusion Worker Methods ==================
+    # Note: set_device() is inherited from CudaPlatformBase
+    # Note: is_sleep_mode_available() is inherited from Platform base class
+
+    @classmethod
+    def supports_torch_compile(cls) -> bool:
+        return True
+
+    @classmethod
+    def get_free_memory(cls, device: torch.device | None = None) -> int:
+        free, _ = torch.cuda.mem_get_info(device)
+        return free

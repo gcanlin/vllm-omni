@@ -79,3 +79,17 @@ class XpuOmniPlatform(OmniPlatform, XPUPlatform):
     @classmethod
     def synchronize(cls) -> None:
         torch.xpu.synchronize()
+
+    @classmethod
+    def supports_torch_compile(cls) -> bool:
+        # XPU has limited torch.compile support
+        return False
+
+    @classmethod
+    def get_free_memory(cls, device: torch.device | None = None) -> int:
+        if device is None:
+            device_id = 0
+        else:
+            device_id = device.index if device.index is not None else 0
+        props = torch.xpu.get_device_properties(device_id)
+        return props.total_memory

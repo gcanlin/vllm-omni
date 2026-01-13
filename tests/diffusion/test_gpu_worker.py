@@ -2,9 +2,9 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 """
-Unit tests for GPUWorker class.
+Unit tests for DiffusionWorker class.
 
-This module tests the GPUWorker implementation:
+This module tests the DiffusionWorker implementation:
 - load_weights: Loading model weights
 - sleep: Putting worker into sleep mode (levels 1 and 2)
 - wake_up: Waking worker from sleep mode
@@ -15,7 +15,7 @@ from unittest.mock import Mock, patch
 import pytest
 import torch
 
-from vllm_omni.diffusion.worker.gpu_worker import GPUWorker
+from vllm_omni.diffusion.worker.diffusion_worker import DiffusionWorker
 
 
 @pytest.fixture
@@ -33,17 +33,17 @@ def mock_od_config():
 
 @pytest.fixture
 def mock_gpu_worker(mock_od_config):
-    """Create a GPUWorker with mocked initialization."""
-    with patch.object(GPUWorker, "init_device_and_model"):
-        worker = GPUWorker(local_rank=0, rank=0, od_config=mock_od_config)
+    """Create a DiffusionWorker with mocked initialization."""
+    with patch.object(DiffusionWorker, "init_device_and_model"):
+        worker = DiffusionWorker(local_rank=0, rank=0, od_config=mock_od_config)
         # Mock the pipeline
         worker.pipeline = Mock()
         worker.cache_backend = None
         return worker
 
 
-class TestGPUWorkerLoadWeights:
-    """Test GPUWorker.load_weights method."""
+class TestDiffusionWorkerLoadWeights:
+    """Test DiffusionWorker.load_weights method."""
 
     def test_load_weights_calls_pipeline(self, mock_gpu_worker):
         """Test that load_weights delegates to pipeline.load_weights."""
@@ -74,8 +74,8 @@ class TestGPUWorkerLoadWeights:
         assert result == set()
 
 
-class TestGPUWorkerSleep:
-    """Test GPUWorker.sleep method."""
+class TestDiffusionWorkerSleep:
+    """Test DiffusionWorker.sleep method."""
 
     @patch("vllm_omni.diffusion.worker.gpu_worker.torch.cuda.mem_get_info")
     @patch("vllm.device_allocator.cumem.CuMemAllocator")
@@ -159,8 +159,8 @@ class TestGPUWorkerSleep:
             mock_gpu_worker.sleep(level=1)
 
 
-class TestGPUWorkerWakeUp:
-    """Test GPUWorker.wake_up method."""
+class TestDiffusionWorkerWakeUp:
+    """Test DiffusionWorker.wake_up method."""
 
     @patch("vllm.device_allocator.cumem.CuMemAllocator")
     def test_wake_up_without_buffers(self, mock_allocator_class, mock_gpu_worker):

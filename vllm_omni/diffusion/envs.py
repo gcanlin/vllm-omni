@@ -1,29 +1,41 @@
 # Copyright 2024 xDiT team.
 # Adapted from
 # https://github.com/xdit-project/xDiT/blob/main/xfuser/envs.py
-"""
-Diffusion environment utilities.
+import os
 
-This module provides environment checking utilities for diffusion models.
-Most device-related functionality has been moved to the platform layer
-(vllm_omni.platforms). For device detection and configuration, use
-`current_omni_platform` from `vllm_omni.platforms`.
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
-Example:
-    from vllm_omni.platforms import current_omni_platform
+import torch
 
-    # Get device for a given rank
-    device = current_omni_platform.get_torch_device(local_rank)
-
-    # Get distributed backend
-    backend = current_omni_platform.dist_backend
-
-    # Check platform type
-    if current_omni_platform.is_cuda():
-        ...
-"""
 from vllm.logger import init_logger
+from packaging import version
 from vllm_omni.platforms import current_omni_platform
+
+if TYPE_CHECKING:
+    MASTER_ADDR: str = ""
+    MASTER_PORT: int | None = None
+    CUDA_HOME: str | None = None
+    LOCAL_RANK: int = 0
+    CUDA_VISIBLE_DEVICES: str | None = None
+    CUDA_VERSION: version.Version
+    TORCH_VERSION: version.Version
+
+environment_variables: dict[str, Callable[[], Any]] = {
+    # ================== Runtime Env Vars ==================
+    # used in distributed environment to determine the master address
+    "MASTER_ADDR": lambda: os.getenv("MASTER_ADDR", ""),
+    # used in distributed environment to manually set the communication port
+    "MASTER_PORT": lambda: (int(os.getenv("MASTER_PORT", "0")) if "MASTER_PORT" in os.environ else None),
+    # path to cudatoolkit home directory, under which should be bin, include,
+    # and lib directories.
+    "CUDA_HOME": lambda: os.environ.get("CUDA_HOME", None),
+    # local rank of the process in the distributed setting, used to determine
+    # the GPU device id
+    "LOCAL_RANK": lambda: int(os.environ.get("LOCAL_RANK", "0")),
+    # used to control the visible devices in the distributed setting
+    "CUDA_VISIBLE_DEVICES": lambda: os.environ.get("CUDA_VISIBLE_DEVICES", None),
+}
 
 logger = init_logger(__name__)
 
@@ -81,3 +93,22 @@ class PackagesEnvChecker:
 
 
 PACKAGES_CHECKER = PackagesEnvChecker()
+
+variables: dict[str, Callable[[], Any]] = {
+    # ================== Other Vars ==================
+    # used in version checking
+    "CUDA_VERSION": lambda: version.parse(current_omni_platform.get_device_version() or "0.0"),
+    "TORCH_VERSION": lambda: version.parse(version.parse(torch.__version__).base_version),
+}
+
+def __getattr__(name):
+    # lazy evaluation of environment variables
+    if name in environment_variables:
+        return environment_variables[name]()
+    if name in variables:
+        return variables[name]()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return list(environment_variables.keys())
