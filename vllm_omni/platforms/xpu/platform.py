@@ -1,11 +1,3 @@
-"""
-XPU/Intel GPU implementation of OmniPlatform.
-
-Uses multiple inheritance to combine:
-- OmniPlatform: Omni-specific interfaces
-- XPUPlatform: vLLM's XPU platform implementation
-"""
-
 import torch
 from vllm.logger import init_logger
 from vllm.platforms.xpu import XPUPlatform
@@ -15,7 +7,7 @@ from vllm_omni.platforms.interface import OmniPlatform, OmniPlatformEnum
 logger = init_logger(__name__)
 
 
-class XpuOmniPlatform(OmniPlatform, XPUPlatform):
+class XPUOmniPlatform(OmniPlatform, XPUPlatform):
     """XPU/Intel GPU implementation of OmniPlatform.
 
     Inherits all XPU-specific implementations from vLLM's XPUPlatform,

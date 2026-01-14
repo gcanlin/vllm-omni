@@ -1,9 +1,5 @@
-"""
-vllm-omni Platform module.
-
-Similar to vLLM's platform system, but for Omni-specific interfaces.
-Both CUDA and NPU are built-in platforms.
-"""
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import logging
 import traceback

@@ -1,9 +1,5 @@
-"""
-vllm-omni plugin system.
-
-Similar to vLLM's plugin system, but independent.
-Provides entry points for OmniPlatform plugins.
-"""
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import logging
 from collections.abc import Callable

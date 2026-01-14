@@ -1,10 +1,5 @@
-"""
-vllm-omni Platform interface.
-
-This module defines the OmniPlatform abstraction for vllm-omni.
-OmniPlatform inherits from vLLM's Platform and adds Omni-specific interfaces.
-Both CUDA and NPU are built-in platforms (not OOT).
-"""
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 from abc import abstractmethod
 from enum import Enum
@@ -74,25 +69,21 @@ class OmniPlatform(Platform):
     @classmethod
     @abstractmethod
     def get_torch_device(cls, local_rank: int | None = None) -> torch.device:
-        """Get the torch.device for the current platform."""
         raise NotImplementedError
 
     @classmethod
     @abstractmethod
     def get_device_count(cls) -> int:
-        """Return the device count for the current platform."""
         raise NotImplementedError
 
     @classmethod
     @abstractmethod
     def get_device_version(cls) -> str | None:
-        """Return the device runtime version (e.g., CUDA/ROCm), or None."""
         raise NotImplementedError
 
     @classmethod
     @abstractmethod
     def synchronize(cls) -> None:
-        """Synchronize the current device."""
         raise NotImplementedError
 
     @classmethod

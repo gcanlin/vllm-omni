@@ -1,10 +1,5 @@
-"""
-ROCm/AMD GPU implementation of OmniPlatform.
-
-Uses multiple inheritance to combine:
-- OmniPlatform: Omni-specific interfaces
-- RocmPlatform: vLLM's ROCm platform implementation
-"""
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import torch
 from vllm.logger import init_logger
@@ -32,8 +27,6 @@ class RocmOmniPlatform(OmniPlatform, RocmPlatform):
     def get_omni_generation_worker_cls(cls) -> str:
         return "vllm_omni.worker.gpu_generation_worker.GPUGenerationWorker"
 
-    # Diffusion attention backend configuration for ROCm
-    # Similar to CUDA but may have different Flash Attention support
     _DIFFUSION_BACKEND_CONFIG = {
         "FLASH_ATTN": "vllm_omni.diffusion.attention.backends.flash_attn.FlashAttentionBackend",
         "TORCH_SDPA": "vllm_omni.diffusion.attention.backends.sdpa.SDPABackend",
@@ -85,10 +78,6 @@ class RocmOmniPlatform(OmniPlatform, RocmPlatform):
     @classmethod
     def synchronize(cls) -> None:
         torch.cuda.synchronize()
-
-    # ================== Diffusion Worker Methods ==================
-    # Note: set_device() should be inherited from RocmPlatform
-    # Note: is_sleep_mode_available() is inherited from Platform base class
 
     @classmethod
     def supports_torch_compile(cls) -> bool:
