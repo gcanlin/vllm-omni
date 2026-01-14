@@ -80,11 +80,6 @@ class RocmOmniPlatform(OmniPlatform, RocmPlatform):
         torch.cuda.synchronize()
 
     @classmethod
-    def supports_torch_compile(cls) -> bool:
-        # ROCm has limited torch.compile support
-        return False
-
-    @classmethod
     def get_free_memory(cls, device: torch.device | None = None) -> int:
         free, _ = torch.cuda.mem_get_info(device)
         return free

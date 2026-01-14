@@ -87,9 +87,5 @@ class OmniPlatform(Platform):
         raise NotImplementedError
 
     @classmethod
-    def supports_torch_compile(cls) -> bool:
-        return False
-
-    @classmethod
     def get_free_memory(cls, device: torch.device | None = None) -> int:
         raise NotImplementedError

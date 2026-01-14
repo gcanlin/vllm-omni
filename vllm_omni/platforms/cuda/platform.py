@@ -27,6 +27,10 @@ class CudaOmniPlatform(OmniPlatform, CudaPlatformBase):
     def get_omni_generation_worker_cls(cls) -> str:
         return "vllm_omni.worker.gpu_generation_worker.GPUGenerationWorker"
 
+    @classmethod
+    def get_default_stage_config_path(cls) -> str:
+        return "vllm_omni/model_executor/stage_configs"
+
     _DIFFUSION_BACKEND_CONFIG = {
         "FLASH_ATTN": "vllm_omni.diffusion.attention.backends.flash_attn.FlashAttentionBackend",
         "TORCH_SDPA": "vllm_omni.diffusion.attention.backends.sdpa.SDPABackend",
@@ -81,10 +85,6 @@ class CudaOmniPlatform(OmniPlatform, CudaPlatformBase):
     @classmethod
     def synchronize(cls) -> None:
         torch.cuda.synchronize()
-
-    @classmethod
-    def supports_torch_compile(cls) -> bool:
-        return True
 
     @classmethod
     def get_free_memory(cls, device: torch.device | None = None) -> int:

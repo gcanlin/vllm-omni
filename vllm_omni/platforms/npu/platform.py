@@ -80,10 +80,6 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
         torch.npu.synchronize()
 
     @classmethod
-    def supports_torch_compile(cls) -> bool:
-        return False
-
-    @classmethod
     def get_free_memory(cls, device: torch.device | None = None) -> int:
         free, _ = torch.npu.mem_get_info(device)
         return free

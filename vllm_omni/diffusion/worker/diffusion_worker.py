@@ -123,7 +123,7 @@ class DiffusionWorker:
             apply_offload_hooks(self.pipeline, self.od_config, device=self.device)
 
         # Try torch.compile if platform supports it
-        if not self.od_config.enforce_eager and current_omni_platform.supports_torch_compile():
+        if not self.od_config.enforce_eager:
             try:
                 self.pipeline.transformer = regionally_compile(
                     self.pipeline.transformer,

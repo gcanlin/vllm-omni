@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+
 import torch
 from vllm.logger import init_logger
 from vllm.platforms.xpu import XPUPlatform
@@ -72,11 +75,6 @@ class XPUOmniPlatform(OmniPlatform, XPUPlatform):
     @classmethod
     def synchronize(cls) -> None:
         torch.xpu.synchronize()
-
-    @classmethod
-    def supports_torch_compile(cls) -> bool:
-        # XPU has limited torch.compile support
-        return False
 
     @classmethod
     def get_free_memory(cls, device: torch.device | None = None) -> int:

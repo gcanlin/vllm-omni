@@ -90,7 +90,7 @@ def xpu_omni_platform_plugin() -> str | None:
     except Exception as e:
         logger.debug("XPU OmniPlatform is not available because: %s", str(e))
 
-    return "vllm_omni.platforms.xpu.platform.XpuOmniPlatform" if is_xpu else None
+    return "vllm_omni.platforms.xpu.platform.XPUOmniPlatform" if is_xpu else None
 
 
 builtin_omni_platform_plugins = {
