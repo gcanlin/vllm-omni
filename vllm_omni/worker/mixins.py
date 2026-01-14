@@ -9,5 +9,5 @@ class OmniWorkerMixin:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         from vllm_omni.plugins import load_omni_general_plugins
-        
+
         load_omni_general_plugins()

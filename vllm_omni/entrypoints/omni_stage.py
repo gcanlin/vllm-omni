@@ -451,6 +451,7 @@ def _stage_worker(
     logger.info(f"Starting stage worker with model: {model}")
     import os as _os
     import time as _time
+
     from vllm_omni.plugins import load_omni_general_plugins
 
     load_omni_general_plugins()
@@ -938,6 +939,7 @@ async def _stage_worker_async(
     # Use local aliases to avoid conflicts with global imports in worker process
     import os as _os
     import time as _time
+
     from vllm_omni.plugins import load_omni_general_plugins
 
     load_omni_general_plugins()

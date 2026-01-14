@@ -2,14 +2,13 @@
 # Adapted from
 # https://github.com/xdit-project/xDiT/blob/main/xfuser/envs.py
 import os
-
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import torch
-
-from vllm.logger import init_logger
 from packaging import version
+from vllm.logger import init_logger
+
 from vllm_omni.platforms import current_omni_platform
 
 if TYPE_CHECKING:
@@ -81,10 +80,7 @@ class PackagesEnvChecker:
             return True
         except ImportError:
             if not packages_info.get("has_aiter", False):
-                logger.warning(
-                    'Flash Attention library "flash_attn" not found, '
-                    "using pytorch attention implementation"
-                )
+                logger.warning('Flash Attention library "flash_attn" not found, using pytorch attention implementation')
             return False
 
     def get_packages_info(self) -> dict:
@@ -100,6 +96,7 @@ variables: dict[str, Callable[[], Any]] = {
     "CUDA_VERSION": lambda: version.parse(current_omni_platform.get_device_version() or "0.0"),
     "TORCH_VERSION": lambda: version.parse(version.parse(torch.__version__).base_version),
 }
+
 
 def __getattr__(name):
     # lazy evaluation of environment variables

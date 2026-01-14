@@ -1,8 +1,9 @@
 """
 Import utilities for dynamic class loading.
 """
+
 import importlib
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import types
@@ -16,11 +17,13 @@ def import_pynvml() -> "types.ModuleType":
     """
     try:
         import nvidia_ml_py as pynvml
+
         return pynvml
     except ImportError:
         pass
 
     import pynvml
+
     return pynvml
 
 

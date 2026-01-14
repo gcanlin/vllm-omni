@@ -5,6 +5,7 @@ Uses multiple inheritance to combine:
 - OmniPlatform: Omni-specific interfaces
 - RocmPlatform: vLLM's ROCm platform implementation
 """
+
 import torch
 from vllm.logger import init_logger
 from vllm.platforms.rocm import RocmPlatform

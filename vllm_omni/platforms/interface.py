@@ -5,16 +5,17 @@ This module defines the OmniPlatform abstraction for vllm-omni.
 OmniPlatform inherits from vLLM's Platform and adds Omni-specific interfaces.
 Both CUDA and NPU are built-in platforms (not OOT).
 """
+
 from abc import abstractmethod
 from enum import Enum
 
 import torch
-
 from vllm.platforms import Platform
 
 
 class OmniPlatformEnum(Enum):
     """Enum for supported Omni platforms."""
+
     CUDA = "cuda"
     ROCM = "rocm"
     NPU = "npu"
@@ -38,13 +39,11 @@ class OmniPlatform(Platform):
 
     @classmethod
     @abstractmethod
-    def get_omni_ar_worker_cls(cls) -> str:
-        ...
+    def get_omni_ar_worker_cls(cls) -> str: ...
 
     @classmethod
     @abstractmethod
-    def get_omni_generation_worker_cls(cls) -> str:
-        ...
+    def get_omni_generation_worker_cls(cls) -> str: ...
 
     @classmethod
     @abstractmethod
@@ -59,7 +58,7 @@ class OmniPlatform(Platform):
     ) -> str:
         """Get the diffusion attention backend class path for this platform.
 
-        This method selects the appropriate attention backend for diffusion 
+        This method selects the appropriate attention backend for diffusion
         models based on platform capabilities and user preferences.
 
         Args:

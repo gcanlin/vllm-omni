@@ -16,6 +16,7 @@ Usage:
     # Or override via environment variable
     # export DIFFUSION_ATTENTION_BACKEND=FLASH_ATTN
 """
+
 import importlib
 import os
 from functools import cache

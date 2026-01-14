@@ -5,6 +5,7 @@ Uses multiple inheritance to combine:
 - OmniPlatform: Omni-specific interfaces
 - CudaPlatform: vLLM's CUDA platform implementation
 """
+
 import torch
 from vllm.logger import init_logger
 from vllm.platforms.cuda import CudaPlatformBase

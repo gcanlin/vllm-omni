@@ -18,7 +18,6 @@ from vllm_omni.platforms import current_omni_platform
 logger = init_logger(__name__)
 
 
-
 TensorMetadata = namedtuple("TensorMetadata", ["device", "dtype", "size"])
 
 env_info = envs.PACKAGES_CHECKER.get_packages_info()
