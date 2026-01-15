@@ -23,6 +23,8 @@ class CustomOp(nn.Module):
             return self.forward_cuda
         elif current_omni_platform.is_npu():
             return self.forward_npu
+        elif current_omni_platform.is_xpu():
+            return self.forward_xpu
         else:
             return self.forward_native
 
@@ -41,6 +43,9 @@ class CustomOp(nn.Module):
         raise NotImplementedError
 
     def forward_npu(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def forward_xpu(self, *args, **kwargs):
         raise NotImplementedError
 
     def forward_hip(self, *args, **kwargs):
