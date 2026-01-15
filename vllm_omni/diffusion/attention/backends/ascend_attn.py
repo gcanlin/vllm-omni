@@ -11,15 +11,10 @@ from vllm_omni.diffusion.attention.backends.abstract import (
     AttentionImpl,
     AttentionMetadata,
 )
-from vllm_omni.diffusion.attention.backends.registry import (
-    DiffusionAttentionBackendEnum,
-    register_diffusion_backend,
-)
 
 logger = init_logger(__name__)
 
 
-@register_diffusion_backend(DiffusionAttentionBackendEnum.ASCEND)
 class AscendAttentionBackend(AttentionBackend):
     accept_output_buffer: bool = True
 
@@ -29,7 +24,7 @@ class AscendAttentionBackend(AttentionBackend):
 
     @staticmethod
     def get_name() -> str:
-        return "ASCEND"
+        return "ASCEND_ATTN"
 
     @staticmethod
     def get_impl_cls() -> type["AscendAttentionBackendImpl"]:
