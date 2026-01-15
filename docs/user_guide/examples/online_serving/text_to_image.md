@@ -11,9 +11,6 @@ This example demonstrates how to deploy Qwen-Image model for online image genera
 
 ```bash
 vllm serve Qwen/Qwen-Image --omni --port 8091
-
-# (Optional) If happens OOM, enable vae slicing and tiling to reduce memory usage
-# vllm serve Qwen/Qwen-Image --omni --port 8091 --vae-use-slicing --vae-use-tiling
 ```
 
 ### Start with Parameters
