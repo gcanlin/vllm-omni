@@ -237,7 +237,7 @@ class DiffusionWorker:
         return True
 
     def _maybe_get_memory_pool_context(self, tag: str) -> AbstractContextManager:
-        if self.od_config.enable_sleep_mode and current_omni_platform.is_sleep_mode_available():
+        if self.od_config.enable_sleep_mode:
             from vllm.device_allocator.cumem import CuMemAllocator
 
             allocator = CuMemAllocator.get_instance()
