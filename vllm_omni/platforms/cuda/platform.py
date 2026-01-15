@@ -41,10 +41,10 @@ class CudaOmniPlatform(OmniPlatform, CudaPlatformBase):
         if selected_backend is not None:
             backend_upper = selected_backend.upper()
             backend = DiffusionAttentionBackendEnum[backend_upper]
-            logger.info("Using diffusion attention backend '%s' for CUDA", backend_upper)
+            logger.info("Using diffusion attention backend '%s'", backend_upper)
             return backend.get_path()
 
-        logger.info("Using SDPA backend for diffusion")
+        logger.info("Defaulting to diffusion attention backend SDPA")
         return DiffusionAttentionBackendEnum.TORCH_SDPA.get_path()
 
     @classmethod

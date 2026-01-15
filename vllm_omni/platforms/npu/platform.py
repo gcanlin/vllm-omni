@@ -45,12 +45,11 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
         if selected_backend is not None:
             backend_upper = selected_backend.upper()
             backend = DiffusionAttentionBackendEnum[backend_upper]
-            logger.info("Using diffusion attention backend '%s' for NPU", backend_upper)
+            logger.info("Using diffusion attention backend '%s'", backend_upper)
             return backend.get_path()
 
-        logger.info("Using Ascend attention backend for diffusion")
-        return DiffusionAttentionBackendEnum.ASCEND.get_path()
-
+        logger.info("Falling back to diffusion attention backend SDPA")
+        return DiffusionAttentionBackendEnum.TORCH_SDPA.get_path()
     @classmethod
     def get_torch_device(cls, local_rank: int | None = None) -> torch.device:
         if local_rank is None:
