@@ -5,8 +5,6 @@ import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-import torch
-from packaging import version
 from vllm.logger import init_logger
 
 from vllm_omni.platforms import current_omni_platform
@@ -28,7 +26,7 @@ environment_variables: dict[str, Callable[[], Any]] = {
     "CUDA_HOME": lambda: os.environ.get("CUDA_HOME", None),
     # local rank of the process in the distributed setting, used to determine
     # the GPU device id
-    "LOCAL_RANK": lambda: int(os.environ.get("LOCAL_RANK", "0"))
+    "LOCAL_RANK": lambda: int(os.environ.get("LOCAL_RANK", "0")),
 }
 
 logger = init_logger(__name__)
@@ -84,6 +82,7 @@ class PackagesEnvChecker:
 
 
 PACKAGES_CHECKER = PackagesEnvChecker()
+
 
 def __getattr__(name):
     # lazy evaluation of environment variables
