@@ -27,7 +27,6 @@ if str(REPO_ROOT) not in sys.path:
 
 from vllm_omni import Omni
 from vllm_omni.diffusion.data import DiffusionParallelConfig
-from vllm_omni.diffusion.distributed.parallel_state import device_count
 from vllm_omni.platforms import current_omni_platform
 
 os.environ["VLLM_TEST_CLEAN_GPU_MEMORY"] = "1"
@@ -36,16 +35,6 @@ os.environ["VLLM_TEST_CLEAN_GPU_MEMORY"] = "1"
 models = ["riverclouds/qwen_image_random"]
 
 PROMPT = "a photo of a cat sitting on a laptop keyboard"
-
-
-def _get_generator_device() -> str:
-    if current_omni_platform.is_cuda():
-        return "cuda"
-    if current_omni_platform.is_npu():
-        return "npu"
-    if current_omni_platform.device_type in ("mps", "musa"):
-        return current_omni_platform.device_type
-    return "cpu"
 
 
 def _pil_to_float_rgb_tensor(img: Image.Image) -> torch.Tensor:
@@ -116,8 +105,10 @@ def test_sequence_parallel(
         )
 
     # Skip if not enough GPUs available for SP run
-    if device_count() < ulysses_degree * ring_degree:
-        pytest.skip(f"Test requires {ulysses_degree * ring_degree} GPUs but only {device_count()} available")
+    if current_omni_platform.get_device_count() < ulysses_degree * ring_degree:
+        pytest.skip(
+            f"Test requires {ulysses_degree * ring_degree} GPUs but only {current_omni_platform.get_device_count()} available"
+        )
 
     # Use minimal settings for fast testing
     height = 256
@@ -140,7 +131,7 @@ def test_sequence_parallel(
             width=width,
             num_inference_steps=num_inference_steps,
             guidance_scale=0.0,
-            generator=torch.Generator(_get_generator_device()).manual_seed(seed),
+            generator=torch.Generator(current_omni_platform.device_type).manual_seed(seed),
             num_outputs_per_prompt=1,
         )
         baseline_images = outputs[0].request_output[0].images
@@ -172,7 +163,7 @@ def test_sequence_parallel(
             width=width,
             num_inference_steps=num_inference_steps,
             guidance_scale=0.0,
-            generator=torch.Generator(_get_generator_device()).manual_seed(seed),
+            generator=torch.Generator(current_omni_platform.device_type).manual_seed(seed),
             num_outputs_per_prompt=1,
         )
         sp_images = outputs[0].request_output[0].images
@@ -227,8 +218,10 @@ def test_sequence_parallel_ulysses_sp_only(
     ring_degree = 1
 
     # Skip if not enough GPUs available for SP run
-    if device_count() < ulysses_degree * ring_degree:
-        pytest.skip(f"Test requires {ulysses_degree * ring_degree} GPUs but only {device_count()} available")
+    if current_omni_platform.get_device_count() < ulysses_degree * ring_degree:
+        pytest.skip(
+            f"Test requires {ulysses_degree * ring_degree} GPUs but only {current_omni_platform.get_device_count()} available"
+        )
 
     # (272/8) * (272/8) = 17 * 17 = 289 Not divisible by sp_size=4
     height = 272
@@ -251,7 +244,7 @@ def test_sequence_parallel_ulysses_sp_only(
             width=width,
             num_inference_steps=num_inference_steps,
             guidance_scale=0.0,
-            generator=torch.Generator(_get_generator_device()).manual_seed(seed),
+            generator=torch.Generator(current_omni_platform.device_type).manual_seed(seed),
             num_outputs_per_prompt=1,
         )
         baseline_images = outputs[0].request_output[0].images
@@ -283,7 +276,7 @@ def test_sequence_parallel_ulysses_sp_only(
             width=width,
             num_inference_steps=num_inference_steps,
             guidance_scale=0.0,
-            generator=torch.Generator(_get_generator_device()).manual_seed(seed),
+            generator=torch.Generator(current_omni_platform.device_type).manual_seed(seed),
             num_outputs_per_prompt=1,
         )
         sp_images = outputs[0].request_output[0].images

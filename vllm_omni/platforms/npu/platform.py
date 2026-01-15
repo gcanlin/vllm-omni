@@ -50,6 +50,7 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
 
         logger.info("Falling back to diffusion attention backend SDPA")
         return DiffusionAttentionBackendEnum.TORCH_SDPA.get_path()
+
     @classmethod
     def get_torch_device(cls, local_rank: int | None = None) -> torch.device:
         if local_rank is None:
