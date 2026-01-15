@@ -27,7 +27,7 @@ import torch
 
 from vllm_omni.entrypoints.omni import Omni
 from vllm_omni.outputs import OmniRequestOutput
-from vllm_omni.utils.platform_utils import detect_device_type, is_npu
+from vllm_omni.platforms import current_omni_platform
 
 
 def parse_args() -> argparse.Namespace:
@@ -73,8 +73,7 @@ def calculate_dimensions(image: PIL.Image.Image, max_area: int = 480 * 832) -> t
 
 def main():
     args = parse_args()
-    device = detect_device_type()
-    generator = torch.Generator(device=device).manual_seed(args.seed)
+    generator = torch.Generator(device=current_omni_platform.device_type).manual_seed(args.seed)
 
     # Load input image
     image = PIL.Image.open(args.image).convert("RGB")
@@ -92,8 +91,8 @@ def main():
     image = image.resize((width, height), PIL.Image.Resampling.LANCZOS)
 
     # Enable VAE memory optimizations on NPU
-    vae_use_slicing = is_npu()
-    vae_use_tiling = is_npu()
+    vae_use_slicing = current_omni_platform.is_npu()
+    vae_use_tiling = current_omni_platform.is_npu()
 
     omni = Omni(
         model=args.model,

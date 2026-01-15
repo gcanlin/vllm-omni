@@ -72,7 +72,7 @@ from PIL import Image
 from vllm_omni.diffusion.data import DiffusionParallelConfig, logger
 from vllm_omni.entrypoints.omni import Omni
 from vllm_omni.outputs import OmniRequestOutput
-from vllm_omni.utils.platform_utils import detect_device_type, is_npu
+from vllm_omni.platforms import current_omni_platform
 
 
 def parse_args() -> argparse.Namespace:
@@ -281,12 +281,11 @@ def main():
     else:
         input_image = input_images
 
-    device = detect_device_type()
-    generator = torch.Generator(device=device).manual_seed(args.seed)
+    generator = torch.Generator(device=current_omni_platform.device_type).manual_seed(args.seed)
 
     # Enable VAE memory optimizations on NPU
-    vae_use_slicing = is_npu()
-    vae_use_tiling = is_npu()
+    vae_use_slicing = current_omni_platform.is_npu()
+    vae_use_tiling = current_omni_platform.is_npu()
     parallel_config = DiffusionParallelConfig(
         ulysses_degree=args.ulysses_degree, ring_degree=args.ring_degree, cfg_parallel_size=args.cfg_parallel_size
     )

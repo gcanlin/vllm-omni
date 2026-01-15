@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from vllm_omni.utils.platform_utils import is_npu, is_rocm
+from vllm_omni.platforms import current_omni_platform
 
 # ruff: noqa: E402
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -51,7 +51,7 @@ class GPUMemoryMonitor:
 models = ["riverclouds/qwen_image_random"]
 
 
-@pytest.mark.skipif(is_npu() or is_rocm(), reason="Hardware not supported")
+@pytest.mark.skipif(current_omni_platform.is_npu() or current_omni_platform.is_rocm(), reason="Hardware not supported")
 @pytest.mark.parametrize("model_name", models)
 def test_cpu_offload_diffusion_model(model_name: str):
     def inference(offload: bool = True):

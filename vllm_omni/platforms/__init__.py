@@ -159,7 +159,7 @@ def __getattr__(name: str):
         raise AttributeError(f"No attribute named '{name}' exists in {__name__}.")
 
 
-def __setattr__(name: str, value):
+def __setattr__(name: str, value):  # noqa: N807
     if name == "current_omni_platform":
         global _current_omni_platform
         _current_omni_platform = value

@@ -64,7 +64,6 @@ class DiffusionWorker:
         os.environ["RANK"] = str(rank)
         os.environ["WORLD_SIZE"] = str(world_size)
 
-        # Use platform API for device initialization
         self.device = current_omni_platform.get_torch_device(rank)
         current_omni_platform.set_device(self.device)
 
@@ -122,7 +121,6 @@ class DiffusionWorker:
 
             apply_offload_hooks(self.pipeline, self.od_config, device=self.device)
 
-        # Try torch.compile if platform supports it
         if not self.od_config.enforce_eager:
             try:
                 self.pipeline.transformer = regionally_compile(
@@ -133,7 +131,7 @@ class DiffusionWorker:
             except Exception as e:
                 logger.warning(f"Worker {self.rank}: torch.compile failed with error: {e}. Using eager mode.")
 
-        # Setup cache backend based on type
+        # Setup cache backend based on type (both backends use enable()/reset() interface)
         self.cache_backend = get_cache_backend(self.od_config.cache_backend, self.od_config.cache_config)
 
         if self.cache_backend is not None:
@@ -178,15 +176,13 @@ class DiffusionWorker:
     def sleep(self, level: int = 1) -> bool:
         """
         Put the worker to sleep. The worker should not process any requests.
-
+        The caller should guarantee that no requests are being processed
+        during the sleep period, before `wake_up` is called.
         Args:
             level: The sleep level. Level 1 sleep will offload the model
                 weights and discard the kv cache.
+                Currently only support level 1.
         """
-        if not current_omni_platform.is_sleep_mode_available():
-            logger.warning("Sleep mode is not supported on this platform.")
-            return False
-
         from vllm.device_allocator.cumem import CuMemAllocator
 
         free_bytes_before_sleep = current_omni_platform.get_free_memory()
@@ -215,15 +211,17 @@ class DiffusionWorker:
 
     def wake_up(self, tags: list[str] | None = None) -> bool:
         """
-        Wake up the worker from sleep mode.
-
+        Wake up the worker from sleep mode. See the sleep function
+        method for more details.
         Args:
-            tags: An optional list of tags to reallocate the worker memory.
-        """
-        if not current_omni_platform.is_sleep_mode_available():
-            logger.warning("Sleep mode is not supported on this platform.")
-            return False
+            tags: An optional list of tags to reallocate the worker memory
 
+
+                for specific memory allocations. Values must be in
+                `("weights")`. If None, all memory is reallocated.
+                wake_up should be called with all tags (or None) before the
+                 worker is used again.
+        """
         from vllm.device_allocator.cumem import CuMemAllocator
 
         allocator = CuMemAllocator.get_instance()
@@ -267,14 +265,17 @@ class WorkerProc:
         # Inter-process Communication
         self.context = zmq.Context(io_threads=2)
 
-        # Initialize MessageQueue reader from handle
+        # Initialize MessageQueue reader from handle (unified for generation & RPC)
         self.mq = MessageQueue.create_from_handle(broadcast_handle, gpu_id)
 
         self.result_mq = None
         self.result_mq_handle = None
 
-        # Setup result sender (only for rank 0)
+        # Setup result sender (only for rank 0 for now, or whoever needs to reply)
+        # Assuming only rank 0 replies to scheduler as per original logic
         if gpu_id == 0:
+            # Create MessageQueue for results (1 writer -> 1 reader)
+            # We assume the reader (SyncScheduler) will act as rank 0
             self.result_mq = MessageQueue(n_reader=1, n_local_reader=1, local_reader_ranks=[0])
             self.result_mq_handle = self.result_mq.export_handle()
             logger.info(f"Worker {gpu_id} created result MessageQueue")
@@ -293,12 +294,17 @@ class WorkerProc:
         )
 
     def return_result(self, output: DiffusionOutput):
-        """Reply to client, only on rank 0."""
+        """
+        replies to client, only on rank 0
+        """
         if self.result_mq is not None:
             self.result_mq.enqueue(output)
 
     def recv_message(self):
-        """Receive unified messages from broadcast queue."""
+        """
+        Receive unified messages (RPC requests, shutdown) from broadcast queue.
+        Uses indefinite=True to block until a message arrives.
+        """
         return self.mq.dequeue(indefinite=True)
 
     def execute_rpc(self, rpc_request: dict) -> tuple[object | None, bool]:
@@ -327,12 +333,14 @@ class WorkerProc:
             logger.error(f"Error executing RPC: {e}", exc_info=True)
             return {"status": "error", "error": str(e)}, should_reply
 
+    # TODO: queueing, cancellation
     def worker_busy_loop(self) -> None:
         """Main busy loop for Multiprocessing Workers"""
 
         logger.info(f"Worker {self.gpu_id} ready to receive requests via shared memory")
 
         while self._running:
+            # Receive unified message (generation request, RPC request, or shutdown)
             msg = None
             try:
                 msg = self.recv_message()
@@ -349,6 +357,7 @@ class WorkerProc:
 
             # Route message based on type
             if isinstance(msg, dict) and msg.get("type") == "rpc":
+                # Handle RPC request
                 try:
                     result, should_reply = self.execute_rpc(msg)
                     if should_reply:
@@ -359,12 +368,13 @@ class WorkerProc:
                         self.return_result({"status": "error", "error": str(e)})
 
             elif isinstance(msg, dict) and msg.get("type") == "shutdown":
+                # Handle shutdown message
                 logger.info("Worker %s: Received shutdown message", self.gpu_id)
                 self._running = False
                 continue
 
             else:
-                # Handle generation request
+                # Handle generation request (OmniDiffusionRequest list)
                 try:
                     output = self.worker.execute_model(msg, self.od_config)
                 except Exception as e:
@@ -377,6 +387,7 @@ class WorkerProc:
                 try:
                     self.return_result(output)
                 except zmq.ZMQError as e:
+                    # Reply failed; log and keep loop alive to accept future requests
                     logger.error(f"ZMQ error sending reply: {e}")
                     continue
 

@@ -6,7 +6,7 @@ import torch
 
 from vllm_omni.entrypoints.omni import Omni
 from vllm_omni.outputs import OmniRequestOutput
-from vllm_omni.utils.platform_utils import detect_device_type, is_npu
+from vllm_omni.platforms import current_omni_platform
 
 ASPECT_RATIOS: dict[str, tuple[int, int]] = {
     "1:1": (1328, 1328),
@@ -61,8 +61,8 @@ def parse_args() -> argparse.Namespace:
 @lru_cache(maxsize=1)
 def get_omni(model_name: str) -> Omni:
     # Enable VAE memory optimizations on NPU
-    vae_use_slicing = is_npu()
-    vae_use_tiling = is_npu()
+    vae_use_slicing = current_omni_platform.is_npu()
+    vae_use_tiling = current_omni_platform.is_npu()
     return Omni(
         model=model_name,
         vae_use_slicing=vae_use_slicing,
@@ -71,7 +71,6 @@ def get_omni(model_name: str) -> Omni:
 
 
 def build_demo(args: argparse.Namespace) -> gr.Blocks:
-    device = detect_device_type()
     omni = get_omni(args.model)
 
     def run_inference(
@@ -98,7 +97,7 @@ def build_demo(args: argparse.Namespace) -> gr.Blocks:
             raise gr.Error("Inference steps must be a positive integer.")
         if num_images not in {1, 2, 3, 4}:
             raise gr.Error("Number of images must be 1, 2, 3, or 4.")
-        generator = torch.Generator(device=device).manual_seed(seed)
+        generator = torch.Generator(device=current_omni_platform.device_type).manual_seed(seed)
         outputs = omni.generate(
             prompt.strip(),
             height=height,
