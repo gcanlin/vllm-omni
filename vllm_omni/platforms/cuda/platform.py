@@ -5,6 +5,7 @@ import torch
 from vllm.logger import init_logger
 from vllm.platforms.cuda import CudaPlatformBase
 
+from vllm_omni.diffusion.attention.backends.registry import DiffusionAttentionBackendEnum
 from vllm_omni.platforms.interface import OmniPlatform, OmniPlatformEnum
 
 logger = init_logger(__name__)
@@ -31,12 +32,6 @@ class CudaOmniPlatform(OmniPlatform, CudaPlatformBase):
     def get_default_stage_config_path(cls) -> str:
         return "vllm_omni/model_executor/stage_configs"
 
-    _DIFFUSION_BACKEND_CONFIG = {
-        "FLASH_ATTN": "vllm_omni.diffusion.attention.backends.flash_attn.FlashAttentionBackend",
-        "TORCH_SDPA": "vllm_omni.diffusion.attention.backends.sdpa.SDPABackend",
-        "SAGE_ATTN": "vllm_omni.diffusion.attention.backends.sage_attn.SageAttentionBackend",
-    }
-
     @classmethod
     def get_diffusion_attn_backend_cls(
         cls,
@@ -45,28 +40,12 @@ class CudaOmniPlatform(OmniPlatform, CudaPlatformBase):
     ) -> str:
         if selected_backend is not None:
             backend_upper = selected_backend.upper()
-            if backend_upper in cls._DIFFUSION_BACKEND_CONFIG:
-                logger.info(
-                    "Using diffusion attention backend '%s' for CUDA",
-                    backend_upper,
-                )
-                return cls._DIFFUSION_BACKEND_CONFIG[backend_upper]
-            raise ValueError(
-                f"Invalid diffusion attention backend '{selected_backend}' for CUDA. "
-                f"Valid backends: {list(cls._DIFFUSION_BACKEND_CONFIG.keys())}"
-            )
+            backend = DiffusionAttentionBackendEnum[backend_upper]
+            logger.info("Using diffusion attention backend '%s' for CUDA", backend_upper)
+            return backend.get_path()
 
-        try:
-            from flash_attn import __version__
-
-            if __version__ >= "2.6.0":
-                logger.info("Using Flash Attention backend for diffusion (CUDA)")
-                return cls._DIFFUSION_BACKEND_CONFIG["FLASH_ATTN"]
-        except ImportError:
-            pass
-
-        logger.info("Using SDPA backend for diffusion (CUDA)")
-        return cls._DIFFUSION_BACKEND_CONFIG["TORCH_SDPA"]
+        logger.info("Using SDPA backend for diffusion")
+        return DiffusionAttentionBackendEnum.TORCH_SDPA.get_path()
 
     @classmethod
     def get_torch_device(cls, local_rank: int | None = None) -> torch.device:

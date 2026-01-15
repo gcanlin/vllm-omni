@@ -5,6 +5,7 @@ import torch
 from vllm.logger import init_logger
 from vllm.platforms.xpu import XPUPlatform
 
+from vllm_omni.diffusion.attention.backends.registry import DiffusionAttentionBackendEnum
 from vllm_omni.platforms.interface import OmniPlatform, OmniPlatformEnum
 
 logger = init_logger(__name__)
@@ -27,10 +28,6 @@ class XPUOmniPlatform(OmniPlatform, XPUPlatform):
     def get_omni_generation_worker_cls(cls) -> str:
         return "vllm_omni.platforms.xpu.worker.xpu_generation_worker.XPUGenerationWorker"
 
-    _DIFFUSION_BACKEND_CONFIG = {
-        "TORCH_SDPA": "vllm_omni.diffusion.attention.backends.sdpa.SDPABackend",
-    }
-
     @classmethod
     def get_diffusion_attn_backend_cls(
         cls,
@@ -39,19 +36,12 @@ class XPUOmniPlatform(OmniPlatform, XPUPlatform):
     ) -> str:
         if selected_backend is not None:
             backend_upper = selected_backend.upper()
-            if backend_upper in cls._DIFFUSION_BACKEND_CONFIG:
-                logger.info(
-                    "Using diffusion attention backend '%s' for XPU",
-                    backend_upper,
-                )
-                return cls._DIFFUSION_BACKEND_CONFIG[backend_upper]
-            raise ValueError(
-                f"Invalid diffusion attention backend '{selected_backend}' for XPU. "
-                f"Valid backends: {list(cls._DIFFUSION_BACKEND_CONFIG.keys())}"
-            )
+            backend = DiffusionAttentionBackendEnum[backend_upper]
+            logger.info("Using diffusion attention backend '%s' for XPU", backend_upper)
+            return backend.get_path()
 
-        logger.info("Using SDPA backend for diffusion (XPU)")
-        return cls._DIFFUSION_BACKEND_CONFIG["TORCH_SDPA"]
+        logger.info("Using SDPA backend for diffusion")
+        return DiffusionAttentionBackendEnum.TORCH_SDPA.get_path()
 
     @classmethod
     def get_default_stage_config_path(cls) -> str:
