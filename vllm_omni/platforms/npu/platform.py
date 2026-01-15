@@ -39,9 +39,6 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
         selected_backend: str | None,
         head_size: int,
     ) -> str:
-        # Import to trigger registration of ASCEND backend
-        import vllm_omni.platforms.npu.diffusion.attention  # noqa: F401
-
         if selected_backend is not None:
             backend_upper = selected_backend.upper()
             backend = DiffusionAttentionBackendEnum[backend_upper]
