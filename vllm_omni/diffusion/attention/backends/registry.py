@@ -31,8 +31,7 @@ class _DiffusionBackendEnumMeta(EnumMeta):
             members = list(cls.__members__.keys())
             valid_backends = ", ".join(members)
             raise ValueError(
-                f"Unknown diffusion attention backend: '{name}'. "
-                f"Valid options are: {valid_backends}"
+                f"Unknown diffusion attention backend: '{name}'. Valid options are: {valid_backends}"
             ) from None
 
 
