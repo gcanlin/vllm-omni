@@ -77,17 +77,18 @@ class TestDiffusionWorkerLoadWeights:
 class TestDiffusionWorkerSleep:
     """Test DiffusionWorker.sleep method."""
 
-    @patch("vllm_omni.diffusion.worker.gpu_worker.torch.cuda.mem_get_info")
+    @patch("vllm_omni.diffusion.worker.diffusion_worker.current_omni_platform")
     @patch("vllm.device_allocator.cumem.CuMemAllocator")
-    def test_sleep_level_1(self, mock_allocator_class, mock_mem_info, mock_gpu_worker):
+    def test_sleep_level_1(self, mock_allocator_class, mock_platform, mock_gpu_worker):
         """Test sleep mode level 1 (offload weights only)."""
         # Setup memory info mocks
-        # Before sleep: 1GB free, 8GB total
-        # After sleep: 3GB free, 8GB total (freed 2GB)
-        mock_mem_info.side_effect = [
-            (1 * 1024**3, 8 * 1024**3),  # Before sleep
-            (3 * 1024**3, 8 * 1024**3),  # After sleep
+        # Before sleep: 1GB free
+        # After sleep: 3GB free (freed 2GB)
+        mock_platform.get_free_memory.side_effect = [
+            1 * 1024**3,  # Before sleep
+            3 * 1024**3,  # After sleep
         ]
+        mock_platform.is_sleep_mode_available.return_value = True
 
         # Setup allocator mock
         mock_allocator = Mock()
@@ -103,15 +104,16 @@ class TestDiffusionWorkerSleep:
         # Verify buffers were NOT saved (level 1 doesn't save buffers)
         assert len(mock_gpu_worker._sleep_saved_buffers) == 0
 
-    @patch("vllm_omni.diffusion.worker.gpu_worker.torch.cuda.mem_get_info")
+    @patch("vllm_omni.diffusion.worker.diffusion_worker.current_omni_platform")
     @patch("vllm.device_allocator.cumem.CuMemAllocator")
-    def test_sleep_level_2(self, mock_allocator_class, mock_mem_info, mock_gpu_worker):
+    def test_sleep_level_2(self, mock_allocator_class, mock_platform, mock_gpu_worker):
         """Test sleep mode level 2 (offload all, save buffers)."""
         # Setup memory info mocks
-        mock_mem_info.side_effect = [
-            (1 * 1024**3, 8 * 1024**3),  # Before sleep
-            (5 * 1024**3, 8 * 1024**3),  # After sleep (freed 4GB)
+        mock_platform.get_free_memory.side_effect = [
+            1 * 1024**3,  # Before sleep
+            5 * 1024**3,  # After sleep (freed 4GB)
         ]
+        mock_platform.is_sleep_mode_available.return_value = True
 
         # Setup allocator mock
         mock_allocator = Mock()
@@ -140,15 +142,16 @@ class TestDiffusionWorkerSleep:
         assert "buffer1" in mock_gpu_worker._sleep_saved_buffers
         assert "buffer2" in mock_gpu_worker._sleep_saved_buffers
 
-    @patch("vllm_omni.diffusion.worker.gpu_worker.torch.cuda.mem_get_info")
+    @patch("vllm_omni.diffusion.worker.diffusion_worker.current_omni_platform")
     @patch("vllm.device_allocator.cumem.CuMemAllocator")
-    def test_sleep_memory_freed_validation(self, mock_allocator_class, mock_mem_info, mock_gpu_worker):
+    def test_sleep_memory_freed_validation(self, mock_allocator_class, mock_platform, mock_gpu_worker):
         """Test that sleep validates memory was actually freed."""
         # Simulate memory increase (should trigger assertion error)
-        mock_mem_info.side_effect = [
-            (3 * 1024**3, 8 * 1024**3),  # Before sleep: 3GB free
-            (1 * 1024**3, 8 * 1024**3),  # After sleep: 1GB free (negative freed!)
+        mock_platform.get_free_memory.side_effect = [
+            3 * 1024**3,  # Before sleep: 3GB free
+            1 * 1024**3,  # After sleep: 1GB free (negative freed!)
         ]
+        mock_platform.is_sleep_mode_available.return_value = True
 
         mock_allocator = Mock()
         mock_allocator_class.get_instance = Mock(return_value=mock_allocator)
@@ -157,6 +160,15 @@ class TestDiffusionWorkerSleep:
         # This should raise an assertion error
         with pytest.raises(AssertionError, match="Memory usage increased after sleeping"):
             mock_gpu_worker.sleep(level=1)
+
+    @patch("vllm_omni.diffusion.worker.diffusion_worker.current_omni_platform")
+    def test_sleep_not_available(self, mock_platform, mock_gpu_worker):
+        """Test sleep returns False when sleep mode is not available."""
+        mock_platform.is_sleep_mode_available.return_value = False
+
+        result = mock_gpu_worker.sleep(level=1)
+
+        assert result is False
 
 
 class TestDiffusionWorkerWakeUp:
