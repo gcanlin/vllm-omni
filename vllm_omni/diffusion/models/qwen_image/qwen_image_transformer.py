@@ -23,7 +23,7 @@ from vllm_omni.diffusion.attention.backends.abstract import (
     AttentionMetadata,
 )
 from vllm_omni.diffusion.attention.layer import Attention
-from vllm_omni.diffusion.attention.selector import _BACKENDS_SUPPORT_ATTENTION_MASK, get_attn_backend
+from vllm_omni.diffusion.attention.selector import get_attn_backend
 from vllm_omni.diffusion.cache.base import CachedTransformer
 from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.parallel_state import (
@@ -791,7 +791,7 @@ class QwenImageTransformer2DModel(CachedTransformer):
 
             if seq_len % sp_size != 0:
                 #  ring_attn, sage_attn do not support attention_mask
-                if get_attn_backend(-1).get_name() not in _BACKENDS_SUPPORT_ATTENTION_MASK:
+                if not get_attn_backend(-1).supports_attention_mask():
                     raise ValueError(
                         f"When generating image shape that the sequence length is NOT divisible by sp_size={sp_size},"
                         f"cannot use {get_attn_backend(-1).get_name()} which does not support attention_mask."
