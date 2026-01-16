@@ -13,6 +13,10 @@ class AttentionBackend(ABC):
 
     accept_output_buffer: bool = False
 
+    @classmethod
+    def supports_attention_mask(cls) -> bool:
+        return False
+
     @staticmethod
     @abstractmethod
     def get_name() -> str:

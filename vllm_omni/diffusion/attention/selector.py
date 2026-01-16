@@ -27,8 +27,6 @@ from vllm_omni.diffusion.attention.backends.abstract import AttentionBackend
 
 logger = init_logger(__name__)
 
-_BACKENDS_SUPPORT_ATTENTION_MASK = ["SDPA", "ASCEND", "FLASH_ATTN"]
-
 
 def _load_backend_cls(cls_path: str) -> type[AttentionBackend]:
     """Load a backend class from its fully qualified path.
