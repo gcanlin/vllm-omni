@@ -10,6 +10,7 @@ from vllm.config import CUDAGraphMode
 from vllm.distributed import get_tensor_model_parallel_world_size
 from vllm.distributed.parallel_state import get_pp_group
 from vllm.logger import init_logger
+from vllm_ascend.compilation.acl_graph import ACLGraphWrapper
 from vllm.model_executor.layers.rotary_embedding import MRotaryEmbedding
 from vllm.model_executor.models.interfaces import supports_mrope
 from vllm.model_executor.models.interfaces_base import VllmModelForPooling
@@ -39,6 +40,25 @@ class OmniNPUModelRunner(NPUModelRunner):
         self._omni_per_req_additional_information: dict[str, dict] | None = None
         self._omni_num_scheduled_tokens_np: np.ndarray | None = None
         self._omni_last_model_output: object | None = None
+
+    def load_model(self, *args, **kwargs) -> None:
+        super().load_model(*args, **kwargs)
+        # TODO move this model specific logic to a separate class
+        if hasattr(self.model, "talker_mtp") and self.model.talker is not None:
+            self.talker_mtp = self.model.talker_mtp
+            cudagraph_mode = self.compilation_config.cudagraph_mode
+            assert cudagraph_mode is not None
+            if cudagraph_mode.has_full_cudagraphs():
+                self.talker_mtp = ACLGraphWrapper(
+                    self.model.talker_mtp, self.vllm_config, runtime_mode=CUDAGraphMode.FULL
+                )
+            hidden_size = self.model_config.hf_config.talker_config.text_config.hidden_size
+            self.talker_mtp_input_ids = self._make_buffer(self.max_num_reqs, dtype=torch.int32)
+            self.talker_mtp_inputs_embeds = self._make_buffer(
+                self.max_num_reqs, hidden_size, dtype=self.dtype, numpy=False
+            )
+            self.last_talker_hidden = self._make_buffer(self.max_num_reqs, hidden_size, dtype=self.dtype, numpy=False)
+            self.text_step = self._make_buffer(self.max_num_reqs, hidden_size, dtype=self.dtype, numpy=False)
 
     def _init_mrope_positions(self, req_state: CachedRequestState):
         image_grid_thw = []
@@ -302,18 +322,19 @@ class OmniNPUModelRunner(NPUModelRunner):
         self.input_batch.refresh_metadata()
 
     @torch.inference_mode()
-    def extract_multimodal_outputs(
-        self, hidden_states: torch.Tensor | list[torch.Tensor] | OmniOutput
-    ) -> tuple[torch.Tensor, torch.Tensor | list[torch.Tensor] | dict]:
-        """Extract multimodal outputs from hidden states."""
-        if hasattr(self.model, "have_multimodal_outputs") and self.model.have_multimodal_outputs:
+    def extract_multimodal_outputs(self, hidden_states: torch.Tensor | list[torch.Tensor] | OmniOutput) -> dict:
+        if (
+            hasattr(self.model, "have_multimodal_outputs")
+            and self.model.have_multimodal_outputs
+            and isinstance(hidden_states, OmniOutput)
+        ):
             text_hidden_states = hidden_states.text_hidden_states
             multimodal_outputs = hidden_states.multimodal_outputs
 
         elif isinstance(hidden_states, torch.Tensor):
             text_hidden_states = hidden_states
             multimodal_outputs = {}
-        elif isinstance(hidden_states, list):
+        elif isinstance(hidden_states, list) or isinstance(hidden_states, tuple):
             text_hidden_states = hidden_states[0]
             multimodal_outputs = {}
         else:
@@ -496,6 +517,13 @@ class OmniNPUModelRunner(NPUModelRunner):
                 model_instance=self.model,
                 weight_prefetch_method=self.weight_prefetch_method,
             ):
+                if getattr(self.model, "talker", None) is not None and hasattr(self.model, "talker_mtp"):
+                    hidden_states = self.talker_mtp(
+                        self.talker_mtp_input_ids.gpu[:num_tokens_padded],
+                        self.talker_mtp_inputs_embeds.gpu[:num_tokens_padded],
+                        self.last_talker_hidden.gpu[:num_tokens_padded],
+                        self.text_step.gpu[:num_tokens_padded],
+                    )
                 hidden_states = self._generate_dummy_run_hidden_states(
                     input_ids, positions, num_tokens_padded, intermediate_tensors, inputs_embeds
                 )
@@ -663,6 +691,8 @@ class OmniNPUModelRunner(NPUModelRunner):
             **model_kwargs,
             **model_kwargs_extra,
         )
+        if not isinstance(model_output, OmniOutput) and hasattr(self.model, "make_omni_output"):
+            model_output = self.model.make_omni_output(model_output, **model_kwargs_extra)
         # Cache model output so later sample_tokens can consume multimodal results.
         self._omni_last_model_output = model_output
         return model_output
