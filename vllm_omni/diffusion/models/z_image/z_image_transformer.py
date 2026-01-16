@@ -32,6 +32,7 @@ from vllm.model_executor.layers.linear import (
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
 from vllm_omni.diffusion.attention.layer import Attention
+from vllm_omni.diffusion.cache.base import CachedTransformer
 from vllm_omni.diffusion.forward_context import get_forward_context, is_forward_context_available
 from vllm_omni.diffusion.layers.rope import RotaryEmbedding
 
@@ -455,7 +456,7 @@ class RopeEmbedder:
         return torch.cat(cos_result, dim=-1), torch.cat(sin_result, dim=-1)
 
 
-class ZImageTransformer2DModel(nn.Module):
+class ZImageTransformer2DModel(CachedTransformer):
     _repeated_blocks = ["ZImageTransformerBlock"]
 
     def __init__(
