@@ -10,7 +10,6 @@ from vllm.config import CUDAGraphMode
 from vllm.distributed import get_tensor_model_parallel_world_size
 from vllm.distributed.parallel_state import get_pp_group
 from vllm.logger import init_logger
-from vllm_ascend.compilation.acl_graph import ACLGraphWrapper
 from vllm.model_executor.layers.rotary_embedding import MRotaryEmbedding
 from vllm.model_executor.models.interfaces import supports_mrope
 from vllm.model_executor.models.interfaces_base import VllmModelForPooling
@@ -19,6 +18,7 @@ from vllm.sequence import IntermediateTensors
 from vllm.utils.math_utils import cdiv
 from vllm.v1.worker.gpu_input_batch import CachedRequestState
 from vllm_ascend.ascend_forward_context import set_ascend_forward_context
+from vllm_ascend.compilation.acl_graph import ACLGraphWrapper
 from vllm_ascend.utils import enable_sp, lmhead_tp_enable
 from vllm_ascend.worker.model_runner_v1 import NPUModelRunner
 
