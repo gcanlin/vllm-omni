@@ -6,12 +6,13 @@ import traceback
 from itertools import chain
 from typing import TYPE_CHECKING
 
+from vllm.utils.import_utils import resolve_obj_by_qualname
+
 from vllm_omni.platforms.interface import OmniPlatform, OmniPlatformEnum
 from vllm_omni.plugins import (
     OMNI_PLATFORM_PLUGINS_GROUP,
     load_omni_plugins_by_group,
 )
-from vllm.utils.import_utils import resolve_obj_by_qualname
 
 logger = logging.getLogger(__name__)
 
