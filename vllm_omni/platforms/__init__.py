@@ -11,7 +11,7 @@ from vllm_omni.plugins import (
     OMNI_PLATFORM_PLUGINS_GROUP,
     load_omni_plugins_by_group,
 )
-from vllm_omni.utils.import_utils import resolve_obj_by_qualname
+from vllm.utils.import_utils import resolve_obj_by_qualname
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ def cuda_omni_platform_plugin() -> str | None:
     is_cuda = False
     logger.debug("Checking if CUDA OmniPlatform is available.")
     try:
-        from vllm_omni.utils.import_utils import import_pynvml
+        from vllm.utils.import_utils import import_pynvml
 
         pynvml = import_pynvml()
         pynvml.nvmlInit()
