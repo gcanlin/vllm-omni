@@ -99,16 +99,22 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Number of GPUs used for tensor parallelism (TP) inside the DiT.",
     )
+    parser.add_argument(
+        "--vae_use_slicing",
+        action="store_true",
+        help="Enable VAE slicing for memory optimization.",
+    )
+    parser.add_argument(
+        "--vae_use_tiling",
+        action="store_true",
+        help="Enable VAE tiling for memory optimization.",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
     generator = torch.Generator(device=current_omni_platform.device_type).manual_seed(args.seed)
-
-    # Enable VAE memory optimizations on NPU
-    vae_use_slicing = current_omni_platform.is_npu()
-    vae_use_tiling = current_omni_platform.is_npu()
 
     # Configure cache based on backend type
     cache_config = None
@@ -149,8 +155,8 @@ def main():
 
     omni = Omni(
         model=args.model,
-        vae_use_slicing=vae_use_slicing,
-        vae_use_tiling=vae_use_tiling,
+        vae_use_slicing=args.vae_use_slicing,
+        vae_use_tiling=args.vae_use_tiling,
         cache_backend=args.cache_backend,
         cache_config=cache_config,
         parallel_config=parallel_config,
