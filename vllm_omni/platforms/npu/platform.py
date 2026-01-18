@@ -70,3 +70,8 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
     def get_free_memory(cls, device: torch.device | None = None) -> int:
         free, _ = torch.npu.mem_get_info(device)
         return free
+
+    @classmethod
+    def get_device_total_memory(cls, device_id: int = 0) -> int:
+        device_props = torch.npu.get_device_properties(device_id)
+        return device_props.total_memory

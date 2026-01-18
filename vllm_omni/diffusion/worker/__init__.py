@@ -2,20 +2,14 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Worker classes for diffusion models."""
 
-<<<<<<< HEAD
-from vllm_omni.diffusion.worker.diffusion_worker import DiffusionWorker, WorkerProc
-
-__all__ = ["DiffusionWorker", "WorkerProc"]
-=======
-from vllm_omni.diffusion.worker.gpu_diffusion_model_runner import GPUDiffusionModelRunner
-from vllm_omni.diffusion.worker.gpu_diffusion_worker import (
-    GPUDiffusionWorker,
+from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunner
+from vllm_omni.diffusion.worker.diffusion_worker import (
+    DiffusionWorker,
     WorkerProc,
 )
 
 __all__ = [
-    "GPUDiffusionModelRunner",
-    "GPUDiffusionWorker",
+    "DiffusionModelRunner",
+    "DiffusionWorker",
     "WorkerProc",
 ]
->>>>>>> main

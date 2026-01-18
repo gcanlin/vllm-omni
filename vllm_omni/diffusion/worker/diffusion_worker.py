@@ -4,7 +4,7 @@
 Diffusion Worker for vLLM-Omni.
 
 Handles GPU infrastructure initialization and delegates model operations
-to GPUDiffusionModelRunner.
+to DiffusionModelRunner.
 """
 
 import multiprocessing as mp
@@ -29,21 +29,13 @@ from vllm_omni.diffusion.distributed.parallel_state import (
 )
 from vllm_omni.diffusion.forward_context import set_forward_context
 from vllm_omni.diffusion.request import OmniDiffusionRequest
-<<<<<<<< HEAD:vllm_omni/diffusion/worker/diffusion_worker.py
+from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunner
 from vllm_omni.platforms import current_omni_platform
-========
-from vllm_omni.diffusion.worker.gpu_diffusion_model_runner import GPUDiffusionModelRunner
->>>>>>>> main:vllm_omni/diffusion/worker/gpu_diffusion_worker.py
 
 logger = init_logger(__name__)
 
 
-<<<<<<<< HEAD:vllm_omni/diffusion/worker/diffusion_worker.py
 class DiffusionWorker:
-    """
-    A platform-agnostic worker that executes diffusion models.
-========
-class GPUDiffusionWorker:
     """
     A worker that manages GPU infrastructure and delegates to the model runner.
 
@@ -53,8 +45,7 @@ class GPUDiffusionWorker:
     - Memory management (sleep/wake)
 
     All model-related operations (loading, compilation, execution) are
-    delegated to GPUDiffusionModelRunner.
->>>>>>>> main:vllm_omni/diffusion/worker/gpu_diffusion_worker.py
+    delegated to DiffusionModelRunner.
     """
 
     def __init__(
@@ -68,7 +59,7 @@ class GPUDiffusionWorker:
         self.od_config = od_config
         self.device: torch.device | None = None
         self.vllm_config: VllmConfig | None = None
-        self.model_runner: GPUDiffusionModelRunner | None = None
+        self.model_runner: DiffusionModelRunner | None = None
         self._sleep_saved_buffers: dict[str, torch.Tensor] = {}
         self.init_device()
 
@@ -84,18 +75,11 @@ class GPUDiffusionWorker:
         os.environ["RANK"] = str(rank)
         os.environ["WORLD_SIZE"] = str(world_size)
 
-<<<<<<<< HEAD:vllm_omni/diffusion/worker/diffusion_worker.py
+        # Setup device
         self.device = current_omni_platform.get_torch_device(rank)
         current_omni_platform.set_device(self.device)
 
-        # Initialize vLLM config
-========
-        # Setup device
-        self.device = torch.device(f"cuda:{rank}")
-        torch.cuda.set_device(self.device)
-
         # Create vllm_config for parallel configuration
->>>>>>>> main:vllm_omni/diffusion/worker/gpu_diffusion_worker.py
         vllm_config = VllmConfig()
         vllm_config.parallel_config.tensor_parallel_size = self.od_config.parallel_config.tensor_parallel_size
         vllm_config.parallel_config.data_parallel_size = self.od_config.parallel_config.data_parallel_size
@@ -117,30 +101,11 @@ class GPUDiffusionWorker:
                 pipeline_parallel_size=parallel_config.pipeline_parallel_size,
             )
 
-<<<<<<<< HEAD:vllm_omni/diffusion/worker/diffusion_worker.py
-            load_config = LoadConfig()
-            model_loader = DiffusersPipelineLoader(load_config)
-            time_before_load = time.perf_counter()
-
-            with self._maybe_get_memory_pool_context(tag="weights"):
-                with DeviceMemoryProfiler() as m:
-                    self.pipeline = model_loader.load_model(
-                        od_config=self.od_config,
-                        load_device=load_device,
-                    )
-            time_after_load = time.perf_counter()
-
-        logger.info(
-            "Model loading took %.4f GiB and %.6f seconds",
-            m.consumed_memory / GiB_bytes,
-            time_after_load - time_before_load,
-========
         # Create model runner and load model
-        self.model_runner = GPUDiffusionModelRunner(
+        self.model_runner = DiffusionModelRunner(
             vllm_config=self.vllm_config,
             od_config=self.od_config,
             device=self.device,
->>>>>>>> main:vllm_omni/diffusion/worker/gpu_diffusion_worker.py
         )
         self.model_runner.load_model(
             memory_pool_context_fn=self._maybe_get_memory_pool_context,
@@ -163,14 +128,8 @@ class GPUDiffusionWorker:
 
     def sleep(self, level: int = 1) -> bool:
         """
-<<<<<<<< HEAD:vllm_omni/diffusion/worker/diffusion_worker.py
-        Put the worker to sleep. The worker should not process any requests.
-        The caller should guarantee that no requests are being processed
-        during the sleep period, before `wake_up` is called.
-========
         Put the worker to sleep, offloading model weights.
 
->>>>>>>> main:vllm_omni/diffusion/worker/gpu_diffusion_worker.py
         Args:
             level: Sleep level. Level 1 offloads weights, level 2 also saves buffers.
         """
@@ -185,13 +144,11 @@ class GPUDiffusionWorker:
 
         allocator = CuMemAllocator.get_instance()
         allocator.sleep(offload_tags=("weights",) if level == 1 else tuple())
-
         free_bytes_after_sleep = current_omni_platform.get_free_memory()
         device_id = self.device.index if self.device.index is not None else 0
         total = current_omni_platform.get_device_total_memory(device_id)
         freed_bytes = free_bytes_after_sleep - free_bytes_before_sleep
         used_bytes = total - free_bytes_after_sleep
-
         assert freed_bytes >= 0, "Memory usage increased after sleeping."
         logger.info(
             "Sleep mode freed %.2f GiB memory, %.2f GiB memory is still in use.",
@@ -204,14 +161,13 @@ class GPUDiffusionWorker:
         """
         Wake up the worker from sleep mode. See the sleep function
         method for more details.
+
         Args:
             tags: An optional list of tags to reallocate the worker memory
-
-
                 for specific memory allocations. Values must be in
                 `("weights")`. If None, all memory is reallocated.
                 wake_up should be called with all tags (or None) before the
-                 worker is used again.
+                worker is used again.
         """
         from vllm.device_allocator.cumem import CuMemAllocator
 
@@ -275,15 +231,9 @@ class WorkerProc:
         self.gpu_id = gpu_id
         self._running = True
 
-<<<<<<<< HEAD:vllm_omni/diffusion/worker/diffusion_worker.py
     def _create_worker(self, gpu_id: int, od_config: OmniDiffusionConfig) -> DiffusionWorker:
-        """Create a worker instance."""
-        return DiffusionWorker(
-========
-    def _create_worker(self, gpu_id: int, od_config: OmniDiffusionConfig) -> GPUDiffusionWorker:
         """Create a worker instance. Override in subclasses for different worker types."""
-        return GPUDiffusionWorker(
->>>>>>>> main:vllm_omni/diffusion/worker/gpu_diffusion_worker.py
+        return DiffusionWorker(
             local_rank=gpu_id,
             rank=gpu_id,
             od_config=od_config,
@@ -390,13 +340,9 @@ class WorkerProc:
         broadcast_handle,
     ) -> None:
         """Worker initialization and execution loops."""
-<<<<<<<< HEAD:vllm_omni/diffusion/worker/diffusion_worker.py
         from vllm_omni.plugins import load_omni_general_plugins
 
         load_omni_general_plugins()
-
-========
->>>>>>>> main:vllm_omni/diffusion/worker/gpu_diffusion_worker.py
         worker_proc = WorkerProc(
             od_config,
             gpu_id=rank,

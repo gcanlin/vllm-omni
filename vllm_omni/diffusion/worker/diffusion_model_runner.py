@@ -30,7 +30,7 @@ from vllm_omni.diffusion.request import OmniDiffusionRequest
 logger = init_logger(__name__)
 
 
-class GPUDiffusionModelRunner:
+class DiffusionModelRunner:
     """
     Model runner that handles model loading and execution for diffusion models.
 
