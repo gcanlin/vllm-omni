@@ -57,6 +57,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output", type=str, default="i2v_output.mp4", help="Path to save the video (mp4).")
     parser.add_argument("--fps", type=int, default=16, help="Frames per second for the output video.")
+    parser.add_argument(
+        "--vae_use_slicing",
+        action="store_true",
+        help="Enable VAE slicing for memory optimization.",
+    )
+    parser.add_argument(
+        "--vae_use_tiling",
+        action="store_true",
+        help="Enable VAE tiling for memory optimization.",
+    )
     return parser.parse_args()
 
 
@@ -90,14 +100,10 @@ def main():
     # Resize image to target dimensions
     image = image.resize((width, height), PIL.Image.Resampling.LANCZOS)
 
-    # Enable VAE memory optimizations on NPU
-    vae_use_slicing = current_omni_platform.is_npu()
-    vae_use_tiling = current_omni_platform.is_npu()
-
     omni = Omni(
         model=args.model,
-        vae_use_slicing=vae_use_slicing,
-        vae_use_tiling=vae_use_tiling,
+        vae_use_slicing=args.vae_use_slicing,
+        vae_use_tiling=args.vae_use_tiling,
         boundary_ratio=args.boundary_ratio,
         flow_shift=args.flow_shift,
     )

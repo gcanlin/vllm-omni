@@ -273,6 +273,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable torch.compile and force eager execution.",
     )
+    parser.add_argument(
+        "--vae_use_slicing",
+        action="store_true",
+        help="Enable VAE slicing for memory optimization.",
+    )
+    parser.add_argument(
+        "--vae_use_tiling",
+        action="store_true",
+        help="Enable VAE tiling for memory optimization.",
+    )
     return parser.parse_args()
 
 
@@ -296,9 +306,6 @@ def main():
 
     generator = torch.Generator(device=current_omni_platform.device_type).manual_seed(args.seed)
 
-    # Enable VAE memory optimizations on NPU
-    vae_use_slicing = current_omni_platform.is_npu()
-    vae_use_tiling = current_omni_platform.is_npu()
     parallel_config = DiffusionParallelConfig(
         ulysses_degree=args.ulysses_degree, ring_degree=args.ring_degree, cfg_parallel_size=args.cfg_parallel_size
     )
@@ -328,8 +335,8 @@ def main():
     # Initialize Omni with appropriate pipeline
     omni = Omni(
         model=args.model,
-        vae_use_slicing=vae_use_slicing,
-        vae_use_tiling=vae_use_tiling,
+        vae_use_slicing=args.vae_use_slicing,
+        vae_use_tiling=args.vae_use_tiling,
         cache_backend=args.cache_backend,
         cache_config=cache_config,
         parallel_config=parallel_config,
