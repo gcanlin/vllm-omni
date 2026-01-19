@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 import torch
 
-from vllm_omni.platforms import current_omni_platform
 from tests.utils import GPUMemoryMonitor
+from vllm_omni.platforms import current_omni_platform
 
 # ruff: noqa: E402
 REPO_ROOT = Path(__file__).resolve().parents[2]
