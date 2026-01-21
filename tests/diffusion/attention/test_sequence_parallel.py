@@ -162,7 +162,7 @@ def test_sequence_parallel(
     sequence_parallel_size = ulysses_degree * ring_degree
 
     # Skip if not enough GPUs available
-    available_gpus = torch_device.device_count()
+    available_gpus = current_omni_platform.get_device_count()
     if available_gpus < sequence_parallel_size:
         pytest.skip(f"Test requires {sequence_parallel_size} GPUs but only {available_gpus} available")
 

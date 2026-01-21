@@ -41,7 +41,7 @@ def test_4d_identity(
 ):
     """Test that two consecutive all-to-all operations return the original input."""
     # Skip if not enough GPUs available
-    available_gpus = torch_device.device_count()
+    available_gpus = current_omni_platform.get_device_count()
     if available_gpus < world_size:
         pytest.skip(f"Test requires {world_size} GPUs but only {available_gpus} available")
 
@@ -175,7 +175,7 @@ def test_5d_identity(
 ):
     """Test that two consecutive all-to-all operations return the original input."""
     # Skip if not enough GPUs available
-    available_gpus = torch_device.device_count()
+    available_gpus = current_omni_platform.get_device_count()
     if available_gpus < world_size:
         pytest.skip(f"Test requires {world_size} GPUs but only {available_gpus} available")
 
@@ -308,7 +308,7 @@ def test_ring_p2p(
 ):
     """Test Ring P2P communication (send_recv)."""
     # Skip if not enough GPUs available
-    available_gpus = torch_device.device_count()
+    available_gpus = current_omni_platform.get_device_count()
     if available_gpus < world_size:
         pytest.skip(f"Test requires {world_size} GPUs but only {available_gpus} available")
 
