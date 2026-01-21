@@ -29,8 +29,6 @@ from vllm_omni import Omni
 from vllm_omni.diffusion.data import DiffusionParallelConfig
 from vllm_omni.platforms import current_omni_platform
 
-os.environ["VLLM_TEST_CLEAN_GPU_MEMORY"] = "1"
-
 # Use random weights model for testing
 models = ["riverclouds/qwen_image_random"]
 
