@@ -13,6 +13,7 @@ import vllm_omni.logger  # noqa: F401
 from vllm_omni.engine import OmniEngineCoreOutput, OmniEngineCoreOutputs, OmniEngineCoreRequest
 from vllm_omni.inputs.data import OmniTokensPrompt
 from vllm_omni.model_executor.layers.mrope import MRotaryEmbedding
+from vllm_omni.platforms import current_omni_platform
 from vllm_omni.request import OmniRequest
 
 for module_name, module in sys.modules.items():
@@ -33,77 +34,63 @@ for module_name, module in sys.modules.items():
         module.EngineCoreRequest = OmniEngineCoreRequest
 
 
-# # Patch for vllm-ascend prefetch functions bug fix
-# # Issue: The original functions access forward_context attributes like
-# # prefetch_mlp_gate_up_proj, prefetch_mlp_down_proj, layer_idx without checking
-# # if they exist, which causes AttributeError when prefetch_mlp_enabled is not set.
-# # TODO: Remove this patch after upgrading to vllm-ascend v0.13.0 or later.
-# # This issue has been fixed in https://github.com/vllm-project/vllm-ascend/pull/5035
-# def detect_device_type() -> str:
-#     device_type = getattr(current_platform, "device_type", None)
-#     if isinstance(device_type, str) and device_type:
-#         return device_type.lower()
-#     if torch.cuda.is_available():
-#         return "cuda"
-#     if hasattr(torch, "npu") and torch.npu.is_available():  # type: ignore[attr-defined]
-#         return "npu"
-#     return "cpu"
+# Patch for vllm-ascend prefetch functions bug fix
+# Issue: The original functions access forward_context attributes like
+# prefetch_mlp_gate_up_proj, prefetch_mlp_down_proj, layer_idx without checking
+# if they exist, which causes AttributeError when prefetch_mlp_enabled is not set.
+# TODO: Remove this patch after upgrading to vllm-ascend v0.13.0 or later.
+# This issue has been fixed in https://github.com/vllm-project/vllm-ascend/pull/5035
+if current_omni_platform.is_npu():
+    import torch
+    import torch.nn as nn
+    from vllm.model_executor.models.qwen2_5_omni_thinker import Qwen2_5_VLImageInputs, Qwen2_5_VLVideoInputs
+    from vllm_ascend.ascend_forward_context import set_ascend_forward_context
 
+    from vllm_omni.model_executor.models.qwen2_5_omni.qwen2_5_omni_thinker import (
+        Qwen2_5OmniThinkerForConditionalGeneration,
+    )
 
-# def is_npu() -> bool:
-#     return detect_device_type() == "npu"
+    class AscendQwen2_5OmniThinkerForConditionalGeneration(nn.Module):
+        def _process_image_input(self, image_input: Qwen2_5_VLImageInputs) -> tuple[torch.Tensor, ...]:
+            if image_input["type"] == "image_embeds":
+                return image_input["image_embeds"].type(self.visual.dtype)
 
-# if is_npu():  # Temp avoid import platform, we will remove this patch later
-#     import torch
-#     import torch.nn as nn
-#     from vllm.model_executor.models.qwen2_5_omni_thinker import Qwen2_5_VLImageInputs, Qwen2_5_VLVideoInputs
-#     from vllm_ascend.ascend_forward_context import set_ascend_forward_context
+            grid_thw = image_input["image_grid_thw"]
+            assert grid_thw.ndim == 2
 
-#     from vllm_omni.model_executor.models.qwen2_5_omni.qwen2_5_omni_thinker import (
-#         Qwen2_5OmniThinkerForConditionalGeneration,
-#     )
+            pixel_values = image_input["pixel_values"].type(self.visual.dtype)
+            with set_ascend_forward_context(None, self.vllm_config):
+                image_embeds = self.visual(pixel_values, grid_thw=grid_thw)
+            # Split concatenated embeddings for each image item.
+            merge_size = self.visual.spatial_merge_size
+            sizes = grid_thw.prod(-1) // merge_size // merge_size
 
-#     class AscendQwen2_5OmniThinkerForConditionalGeneration(nn.Module):
-#         def _process_image_input(self, image_input: Qwen2_5_VLImageInputs) -> tuple[torch.Tensor, ...]:
-#             if image_input["type"] == "image_embeds":
-#                 return image_input["image_embeds"].type(self.visual.dtype)
+            return image_embeds.split(sizes.tolist())
 
-#             grid_thw = image_input["image_grid_thw"]
-#             assert grid_thw.ndim == 2
+        def _process_video_input(
+            self,
+            video_input: Qwen2_5_VLVideoInputs,
+            video_hashes: list[str] | None = None,
+            cached_video_embeds: torch.Tensor | None = None,
+        ) -> torch.Tensor:
+            if video_input["type"] == "video_embeds":
+                return video_input["video_embeds"].type(self.visual.dtype)
 
-#             pixel_values = image_input["pixel_values"].type(self.visual.dtype)
-#             with set_ascend_forward_context(None, self.vllm_config):
-#                 image_embeds = self.visual(pixel_values, grid_thw=grid_thw)
-#             # Split concatenated embeddings for each image item.
-#             merge_size = self.visual.spatial_merge_size
-#             sizes = grid_thw.prod(-1) // merge_size // merge_size
+            grid_thw = video_input["video_grid_thw"]
+            assert grid_thw.ndim == 2
 
-#             return image_embeds.split(sizes.tolist())
+            pixel_values_videos = video_input["pixel_values_videos"].type(self.visual.dtype)
+            with set_ascend_forward_context(None, self.vllm_config):
+                video_embeds = self.visual(pixel_values_videos, grid_thw=grid_thw)
+            # Split concatenated embeddings for each video item.
+            merge_size = self.visual.spatial_merge_size
+            sizes = grid_thw.prod(-1) // merge_size // merge_size
 
-#         def _process_video_input(
-#             self,
-#             video_input: Qwen2_5_VLVideoInputs,
-#             video_hashes: list[str] | None = None,
-#             cached_video_embeds: torch.Tensor | None = None,
-#         ) -> torch.Tensor:
-#             if video_input["type"] == "video_embeds":
-#                 return video_input["video_embeds"].type(self.visual.dtype)
+            return video_embeds.split(sizes.tolist())
 
-#             grid_thw = video_input["video_grid_thw"]
-#             assert grid_thw.ndim == 2
-
-#             pixel_values_videos = video_input["pixel_values_videos"].type(self.visual.dtype)
-#             with set_ascend_forward_context(None, self.vllm_config):
-#                 video_embeds = self.visual(pixel_values_videos, grid_thw=grid_thw)
-#             # Split concatenated embeddings for each video item.
-#             merge_size = self.visual.spatial_merge_size
-#             sizes = grid_thw.prod(-1) // merge_size // merge_size
-
-#             return video_embeds.split(sizes.tolist())
-
-#     Qwen2_5OmniThinkerForConditionalGeneration._process_image_input = (
-#         AscendQwen2_5OmniThinkerForConditionalGeneration._process_image_input
-#     )
-#     Qwen2_5OmniThinkerForConditionalGeneration._process_video_input = (
-#         AscendQwen2_5OmniThinkerForConditionalGeneration._process_video_input
-#     )
+    Qwen2_5OmniThinkerForConditionalGeneration._process_image_input = (
+        AscendQwen2_5OmniThinkerForConditionalGeneration._process_image_input
+    )
+    Qwen2_5OmniThinkerForConditionalGeneration._process_video_input = (
+        AscendQwen2_5OmniThinkerForConditionalGeneration._process_video_input
+    )
