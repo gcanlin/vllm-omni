@@ -18,7 +18,7 @@ steps:
   #     queue: "ascend"
 
   - label: "Simple Unit Test"
-    depends_on: ~
+    depends_on: image-build
     commands:
       - ".buildkite/scripts/simple_test.sh"
     agents:
