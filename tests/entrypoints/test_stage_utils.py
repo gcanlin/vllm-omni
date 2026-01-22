@@ -59,10 +59,10 @@ def test_set_stage_devices_respects_logical_ids(monkeypatch):
     dummy_torch = _make_dummy_torch(call_log)
     monkeypatch.setitem(sys.modules, "torch", dummy_torch)
 
-    # Mock the platform instead of individual functions
+    # Mock the platform at the source module where it's defined
     mock_platform = _make_mock_platform(device_type="cuda", env_var="CUDA_VISIBLE_DEVICES")
     monkeypatch.setattr(
-        "vllm_omni.entrypoints.stage_utils.current_omni_platform",
+        "vllm_omni.platforms.current_omni_platform",
         mock_platform,
     )
 
@@ -96,10 +96,10 @@ def test_set_stage_devices_npu_platform(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "torch", _NpuTorch)
 
-    # Mock NPU platform
+    # Mock NPU platform at the source module where it's defined
     mock_platform = _make_mock_platform(device_type="npu", env_var="ASCEND_RT_VISIBLE_DEVICES")
     monkeypatch.setattr(
-        "vllm_omni.entrypoints.stage_utils.current_omni_platform",
+        "vllm_omni.platforms.current_omni_platform",
         mock_platform,
     )
 
