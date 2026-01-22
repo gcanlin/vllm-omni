@@ -21,9 +21,13 @@ import importlib
 import os
 from functools import cache
 
+import torch
 from vllm.logger import init_logger
 
-from vllm_omni.diffusion.attention.backends.abstract import AttentionBackend
+from vllm_omni.diffusion.attention.backends.abstract import (
+    AttentionBackend,
+)
+from vllm_omni.diffusion.attention.backends.sdpa import SDPABackend
 
 logger = init_logger(__name__)
 
@@ -73,6 +77,21 @@ def get_attn_backend(head_size: int) -> type[AttentionBackend]:
 
     # Check environment variable for user override
     selected_backend: str | None = os.environ.get("DIFFUSION_ATTENTION_BACKEND")
+
+    if current_omni_platform.is_cuda():
+        compute_capability = current_omni_platform.get_device_capability()
+        if compute_capability is not None:
+            major, minor = compute_capability
+            capability = major * 10 + minor
+            if 80 <= capability < 100:
+                if selected_backend is None:
+                    selected_backend = "FLASH_ATTN"
+            elif selected_backend == "FLASH_ATTN":
+                logger.warning(
+                    "Flash Attention requires GPU with compute capability >= 8.0 and < 10.0. "
+                    "Falling back to TORCH_SDPA backend."
+                )
+                selected_backend = "TORCH_SDPA"
 
     # Delegate to platform for backend selection
     backend_cls_path = current_omni_platform.get_diffusion_attn_backend_cls(
