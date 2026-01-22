@@ -119,7 +119,7 @@ def _run_sp(
             width=width,
             num_inference_steps=4,
             guidance_scale=0.0,
-            generator=torch.Generator(get_device_name()).manual_seed(seed),
+            generator=torch.Generator(current_omni_platform.device_type).manual_seed(seed),
             num_outputs_per_prompt=1,
         )
         return outputs[0].request_output[0].images
@@ -237,7 +237,9 @@ def test_sequence_parallel_ulysses4(model_name: str, dtype: torch.dtype, attn_ba
     ring_degree = 1
 
     if current_omni_platform.get_device_count() < ulysses_degree * ring_degree:
-        pytest.skip(f"Test requires {ulysses_degree * ring_degree} GPUs but only {current_omni_platform.get_device_count()} available")
+        pytest.skip(
+            f"Test requires {ulysses_degree * ring_degree} GPUs but only {current_omni_platform.get_device_count()} available"
+        )
 
     height = 272
     width = 272
