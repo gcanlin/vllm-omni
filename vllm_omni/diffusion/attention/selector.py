@@ -21,13 +21,11 @@ import importlib
 import os
 from functools import cache
 
-import torch
 from vllm.logger import init_logger
 
 from vllm_omni.diffusion.attention.backends.abstract import (
     AttentionBackend,
 )
-from vllm_omni.diffusion.attention.backends.sdpa import SDPABackend
 
 logger = init_logger(__name__)
 

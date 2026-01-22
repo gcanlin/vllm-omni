@@ -1154,8 +1154,7 @@ async def _stage_worker_async(
                         # Check if we've been waiting too long
                         if _time.time() - wait_start > stage_init_timeout:
                             logger.warning(
-                                "Timeout waiting for device %s initialization lock, "
-                                "proceeding anyway with timeout %s",
+                                "Timeout waiting for device %s initialization lock, proceeding anyway with timeout %s",
                                 device_id,
                                 stage_init_timeout,
                             )
