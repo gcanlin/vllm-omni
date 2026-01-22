@@ -25,7 +25,7 @@ steps:
       - pytest -v -s tests/model_executor/models/qwen2_5_omni/test_audio_length.py
       - pytest -v -s tests/worker/
     agents:
-      queue: "cpu_queue_premerge"
+      queue: "gpu_1_queue"
     plugins:
       - docker#v5.2.0:
           image: public.ecr.aws/q9t5s3a7/vllm-ci-test-repo:$BUILDKITE_COMMIT
