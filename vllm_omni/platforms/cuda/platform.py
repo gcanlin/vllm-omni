@@ -4,6 +4,7 @@
 import torch
 from vllm.logger import init_logger
 from vllm.platforms.cuda import CudaPlatformBase
+from vllm.platforms.interface import DeviceCapability
 
 from vllm_omni.diffusion.attention.backends.registry import DiffusionAttentionBackendEnum
 from vllm_omni.platforms.interface import OmniPlatform, OmniPlatformEnum
@@ -44,6 +45,14 @@ class CudaOmniPlatform(OmniPlatform, CudaPlatformBase):
             logger.info("Using diffusion attention backend '%s'", backend_upper)
             return backend.get_path()
 
+        compute_capability = cls.get_device_capability()
+        if compute_capability is not None:
+            major, minor = compute_capability
+            capability = major * 10 + minor
+            if 80 <= capability < 100:
+                logger.info("Defaulting to diffusion attention backend FLASH_ATTN")
+                return DiffusionAttentionBackendEnum.FLASH_ATTN.get_path()
+
         logger.info("Defaulting to diffusion attention backend SDPA")
         return DiffusionAttentionBackendEnum.TORCH_SDPA.get_path()
 
@@ -52,6 +61,11 @@ class CudaOmniPlatform(OmniPlatform, CudaPlatformBase):
         if local_rank is None:
             return torch.device("cuda")
         return torch.device("cuda", local_rank)
+
+    @classmethod
+    def get_device_capability(cls, device_id: int = 0) -> DeviceCapability | None:
+        major, minor = torch.cuda.get_device_capability(device_id)
+        return DeviceCapability(major=major, minor=minor)
 
     @classmethod
     def get_device_count(cls) -> int:
