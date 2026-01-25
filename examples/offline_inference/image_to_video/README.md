@@ -56,5 +56,7 @@ Key arguments:
 - `--output`: Path to save the generated video.
 - `--vae_use_slicing`: Enable VAE slicing for memory optimization.
 - `--vae_use_tiling`: Enable VAE tiling for memory optimization.
+- `--enable-cpu-offload`: enable CPU offloading for diffusion models.
 
 > ℹ️ If you encounter OOM errors, try using `--vae_use_slicing` and `--vae_use_tiling` to reduce memory usage.
+
