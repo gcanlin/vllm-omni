@@ -89,3 +89,8 @@ class OmniPlatform(Platform):
     @classmethod
     def get_free_memory(cls, device: torch.device | None = None) -> int:
         raise NotImplementedError
+
+
+class UnspecifiedOmniPlatform(OmniPlatform):
+    _omni_enum = OmniPlatformEnum.UNSPECIFIED
+    device_type = ""

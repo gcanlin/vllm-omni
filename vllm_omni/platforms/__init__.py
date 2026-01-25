@@ -7,6 +7,7 @@ from itertools import chain
 from typing import TYPE_CHECKING
 
 from vllm.utils.import_utils import resolve_obj_by_qualname
+from vllm.utils.torch_utils import supports_xccl
 
 from vllm_omni.platforms.interface import OmniPlatform, OmniPlatformEnum
 from vllm_omni.plugins import (
@@ -83,13 +84,25 @@ def xpu_omni_platform_plugin() -> str | None:
     is_xpu = False
     logger.debug("Checking if XPU OmniPlatform is available.")
     try:
+        # installed IPEX if the machine has XPUs.
+        import intel_extension_for_pytorch  # noqa: F401
         import torch
+
+        if supports_xccl():
+            dist_backend = "xccl"
+        else:
+            dist_backend = "ccl"
+            import oneccl_bindings_for_pytorch  # noqa: F401
 
         if hasattr(torch, "xpu") and torch.xpu.is_available():
             is_xpu = True
-            logger.debug("Confirmed XPU OmniPlatform is available.")
+            from vllm_omni.platforms.xpu import XPUOmniPlatform
+
+            XPUOmniPlatform.dist_backend = dist_backend
+            logger.debug("Confirmed %s backend is available.", XPUOmniPlatform.dist_backend)
+            logger.debug("Confirmed XPU platform is available.")
     except Exception as e:
-        logger.debug("XPU OmniPlatform is not available because: %s", str(e))
+        logger.debug("XPU omni platform is not available because: %s", str(e))
 
     return "vllm_omni.platforms.xpu.platform.XPUOmniPlatform" if is_xpu else None
 
@@ -131,8 +144,8 @@ def resolve_current_omni_platform_cls_qualname() -> str:
         platform_cls_qualname = builtin_omni_platform_plugins[activated_builtin_plugins[0]]()
         logger.debug("Automatically detected OmniPlatform %s.", activated_builtin_plugins[0])
     else:
-        platform_cls_qualname = "vllm_omni.platforms.cuda.platform.CudaOmniPlatform"
-        logger.debug("No OmniPlatform detected, using CudaOmniPlatform as default")
+        platform_cls_qualname = "vllm_omni.platforms.interface.UnspecifiedOmniPlatform"
+        logger.debug("No platform detected, vLLM-Omni is running on UnspecifiedOmniPlatform")
 
     return platform_cls_qualname
 
