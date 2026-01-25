@@ -15,7 +15,6 @@ from pathlib import Path
 import openai
 import pytest
 
-from vllm_omni.platforms import current_omni_platform
 from tests.conftest import (
     OmniServer,
     convert_audio_to_text,
@@ -25,6 +24,7 @@ from tests.conftest import (
     generate_synthetic_image,
     generate_synthetic_video,
 )
+from vllm_omni.platforms import current_omni_platform
 
 models = ["Qwen/Qwen3-Omni-30B-A3B-Instruct"]
 
@@ -111,7 +111,9 @@ def get_max_batch_size(size_type="few"):
     return batch_sizes.get(size_type, 5)
 
 
-@pytest.mark.skipif(current_omni_platform.is_rocm(), reason="Test skipped on AMD environment due to known output issues")
+@pytest.mark.skipif(
+    current_omni_platform.is_rocm(), reason="Test skipped on AMD environment due to known output issues"
+)
 @pytest.mark.parametrize("omni_server", test_params, indirect=True)
 def test_mix_to_text_audio_001(client: openai.OpenAI, omni_server) -> None:
     """
@@ -186,7 +188,9 @@ def test_mix_to_text_audio_001(client: openai.OpenAI, omni_server) -> None:
     assert similarity > 0.9, "The audio content is not same as the text"
 
 
-@pytest.mark.skipif(is_rocm(), reason="Test skipped on AMD environment due to known output issues")
+@pytest.mark.skipif(
+    current_omni_platform.is_rocm(), reason="Test skipped on AMD environment due to known output issues"
+)
 @pytest.mark.parametrize("omni_server", test_params, indirect=True)
 def test_text_to_text_audio_001(client: openai.OpenAI, omni_server) -> None:
     """
