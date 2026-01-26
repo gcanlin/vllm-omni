@@ -14,7 +14,6 @@ from vllm_omni.engine import OmniEngineCoreOutput, OmniEngineCoreOutputs, OmniEn
 from vllm_omni.inputs.data import OmniTokensPrompt
 from vllm_omni.model_executor.layers.mrope import MRotaryEmbedding
 from vllm_omni.request import OmniRequest
-from vllm_omni.utils import is_npu
 
 for module_name, module in sys.modules.items():
     # only do patch on module of vllm, pass others
