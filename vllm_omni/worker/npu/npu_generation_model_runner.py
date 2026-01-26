@@ -34,6 +34,17 @@ from vllm_omni.worker.npu.npu_model_runner import OmniNPUModelRunner
 class NPUGenerationModelRunner(OmniNPUModelRunner):
     """Generation model runner for vLLM-omni on NPU (non-autoregressive)."""
 
+    def _update_request_states(self, scheduler_output: SchedulerOutput):
+        cached_reqs = scheduler_output.scheduled_cached_reqs
+        for _, req_id in enumerate(cached_reqs.req_ids):
+            req_state = self.requests.get(req_id)
+            assert req_state is not None
+            req_state.prompt_token_ids = cached_reqs.prompt_token_ids.get(req_id)
+            self.input_batch.remove_request(req_id)
+            # update the request state in self.input_batch
+            self.input_batch.add_request(req_state)
+            self._init_mrope_positions(req_state)
+
     @torch.inference_mode()
     def execute_model(
         self,
@@ -44,6 +55,10 @@ class NPUGenerationModelRunner(OmniNPUModelRunner):
             raise RuntimeError("State error: sample_tokens() must be called after execute_model() returns None.")
 
         with ProfileExecuteDuration().capture_async("prepare input"):
+            #  -------------------------------------- Omni-new -------------------------------------------------
+            if self.model_config.async_chunk:
+                self._update_request_states(scheduler_output)
+            #  -------------------------------------- Omni-new -------------------------------------------------
             self._update_states(scheduler_output)
             if has_ec_transfer() and get_ec_transfer().is_producer:
                 with self.maybe_get_ec_connector_output(
