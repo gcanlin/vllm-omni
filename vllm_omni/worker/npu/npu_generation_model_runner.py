@@ -220,11 +220,9 @@ class NPUGenerationModelRunner(OmniNPUModelRunner):
                 pooler_output.append({key: out.detach().to("cpu").contiguous() if out is not None else None})
         else:
             raise RuntimeError("Unsupported diffusion output type")
-        req_ids_output_copy = list(self.input_batch.req_ids)
-        req_id_to_index_output_copy = dict(self.input_batch.req_id_to_index)
         output = OmniModelRunnerOutput(
-            req_ids=req_ids_output_copy,
-            req_id_to_index=req_id_to_index_output_copy,
+            req_ids=self.input_batch.req_ids,
+            req_id_to_index=self.input_batch.req_id_to_index,
             sampled_token_ids=[],
             logprobs=None,
             prompt_logprobs_dict={},

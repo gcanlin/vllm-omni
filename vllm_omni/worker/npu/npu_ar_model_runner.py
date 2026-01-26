@@ -31,12 +31,7 @@ from vllm_ascend.attention.attention_v1 import AscendAttentionState
 
 # yapf conflicts with isort for this block
 # yapf: disable
-from vllm_ascend.compilation.acl_graph import (
-    update_attn_dcp_pcp_params,
-    update_attn_params,
-    update_mla_attn_dcp_pcp_params,
-    update_mla_attn_params,
-)
+from vllm_ascend.compilation.acl_graph import update_full_graph_params
 from vllm_ascend.ops.rotary_embedding import update_cos_sin
 from vllm_ascend.utils import ProfileExecuteDuration
 
@@ -472,24 +467,9 @@ class NPUARModelRunner(OmniNPUModelRunner):
             and not self.use_sparse:
             if self.vllm_config.model_config.use_mla:
                 if self.pcp_size * self.dcp_size > 1:
-                    # FIXME: Try using `auto_dispatch_capture=True`
-                    update_mla_attn_dcp_pcp_params(self.update_stream,
-                                                   forward_context,
-                                                   num_input_tokens)
-                else:
-                    # FIXME: Try using `auto_dispatch_capture=True`
-                    update_mla_attn_params(self.update_stream, forward_context,
-                                           num_input_tokens,
-                                           self.speculative_config)
-            else:
-                if self.pcp_size * self.dcp_size > 1:
-                    update_attn_dcp_pcp_params(self.update_stream,
-                                               forward_context,
-                                               num_input_tokens)
-                else:
-                    update_attn_params(self.update_stream, forward_context,
-                                       num_input_tokens,
-                                       self.vllm_config)
+                    update_full_graph_params(self.attn_backend, self.update_stream, forward_context,
+                                     num_input_tokens, self.vllm_config,
+                                      self.vllm_config.speculative_config)
 
         if get_forward_context().sp_enabled and not isinstance(
                 hidden_states, IntermediateTensors):
