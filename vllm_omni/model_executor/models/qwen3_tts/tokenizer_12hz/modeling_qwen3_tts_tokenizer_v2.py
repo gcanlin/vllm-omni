@@ -49,6 +49,14 @@ from .configuration_qwen3_tts_tokenizer_v2 import (
 logger = logging.get_logger(__name__)
 
 
+# See https://github.com/vllm-project/vllm-omni/issues/963.
+# TODO: Remove this workaround when the issue is resolved.
+try:
+    _CHECK_MODEL_INPUTS = check_model_inputs()
+except TypeError:
+    _CHECK_MODEL_INPUTS = check_model_inputs
+
+
 @dataclass
 @auto_docstring
 class Qwen3TTSTokenizerV2EncoderOutput(ModelOutput):
@@ -495,7 +503,7 @@ class Qwen3TTSTokenizerV2DecoderTransformerModel(Qwen3TTSTokenizerV2DecoderPreTr
         # Initialize weights and apply final processing
         self.post_init()
 
-    @check_model_inputs()
+    @_CHECK_MODEL_INPUTS
     @auto_docstring
     def forward(
         self,
