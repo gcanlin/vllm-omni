@@ -39,19 +39,31 @@ class CudaOmniPlatform(OmniPlatform, CudaPlatformBase):
         selected_backend: str | None,
         head_size: int,
     ) -> str:
+        # Check compute capability for Flash Attention support
+        # Flash Attention requires compute capability >= 8.0 and < 10.0
+        compute_capability = cls.get_device_capability()
+        flash_attn_supported = False
+        if compute_capability is not None:
+            major, minor = compute_capability
+            capability = major * 10 + minor
+            flash_attn_supported = 80 <= capability < 100
+
         if selected_backend is not None:
             backend_upper = selected_backend.upper()
+            if backend_upper == "FLASH_ATTN" and not flash_attn_supported:
+                logger.warning(
+                    "Flash Attention requires GPU with compute capability >= 8.0 "
+                    "and < 10.0. Falling back to TORCH_SDPA backend."
+                )
+                logger.info("Defaulting to diffusion attention backend SDPA")
+                return DiffusionAttentionBackendEnum.TORCH_SDPA.get_path()
             backend = DiffusionAttentionBackendEnum[backend_upper]
             logger.info("Using diffusion attention backend '%s'", backend_upper)
             return backend.get_path()
 
-        compute_capability = cls.get_device_capability()
-        if compute_capability is not None:
-            major, minor = compute_capability
-            capability = major * 10 + minor
-            if 80 <= capability < 100:
-                logger.info("Defaulting to diffusion attention backend FLASH_ATTN")
-                return DiffusionAttentionBackendEnum.FLASH_ATTN.get_path()
+        if flash_attn_supported:
+            logger.info("Defaulting to diffusion attention backend FLASH_ATTN")
+            return DiffusionAttentionBackendEnum.FLASH_ATTN.get_path()
 
         logger.info("Defaulting to diffusion attention backend SDPA")
         return DiffusionAttentionBackendEnum.TORCH_SDPA.get_path()

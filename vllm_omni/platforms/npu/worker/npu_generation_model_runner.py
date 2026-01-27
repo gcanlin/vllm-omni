@@ -27,7 +27,7 @@ from vllm_ascend.platform import NPUPlatform
 from vllm_ascend.utils import ProfileExecuteDuration, enable_sp, lmhead_tp_enable
 
 from vllm_omni.outputs import OmniModelRunnerOutput
-from vvllm_omni.platforms.npu.worker.npu_ar_model_runner import ExecuteModelState
+from vllm_omni.platforms.npu.worker.npu_ar_model_runner import ExecuteModelState
 from vllm_omni.platforms.npu.worker.npu_model_runner import OmniNPUModelRunner
 
 
