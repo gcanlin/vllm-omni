@@ -32,8 +32,8 @@ from vllm_omni.diffusion.lora.manager import DiffusionLoRAManager
 from vllm_omni.diffusion.profiler import CurrentProfiler
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunner
-from vllm_omni.platforms import current_omni_platform
 from vllm_omni.lora.request import LoRARequest
+from vllm_omni.platforms import current_omni_platform
 
 logger = init_logger(__name__)
 
