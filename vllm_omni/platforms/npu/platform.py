@@ -39,11 +39,18 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
         selected_backend: str | None,
         head_size: int,
     ) -> str:
+        from importlib.util import find_spec
+
         if selected_backend is not None:
             backend_upper = selected_backend.upper()
             backend = DiffusionAttentionBackendEnum[backend_upper]
             logger.info("Using diffusion attention backend '%s'", backend_upper)
             return backend.get_path()
+
+        # Try FLASH_ATTN if mindiesd is available, otherwise fall back to SDPA
+        if find_spec("mindiesd"):
+            logger.info("Defaulting to diffusion attention backend FLASH_ATTN")
+            return DiffusionAttentionBackendEnum.FLASH_ATTN.get_path()
 
         logger.info("Falling back to diffusion attention backend SDPA")
         return DiffusionAttentionBackendEnum.TORCH_SDPA.get_path()
