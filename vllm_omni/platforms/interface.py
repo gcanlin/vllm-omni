@@ -5,7 +5,6 @@ from enum import Enum
 
 import torch
 from vllm.platforms import Platform
-from vllm.platforms.interface import PlatformEnum
 
 
 class OmniPlatformEnum(Enum):
