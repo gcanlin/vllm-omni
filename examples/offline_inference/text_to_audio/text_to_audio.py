@@ -21,8 +21,9 @@ import numpy as np
 import torch
 
 from vllm_omni.entrypoints.omni import Omni
-from vllm_omni.platforms import current_omni_platform
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
+from vllm_omni.platforms import current_omni_platform
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate audio with Stable Audio Open.")
