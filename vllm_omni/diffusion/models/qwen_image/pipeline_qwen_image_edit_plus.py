@@ -53,6 +53,30 @@ CONDITION_IMAGE_SIZE = 384 * 384
 VAE_IMAGE_SIZE = 1024 * 1024
 
 
+def _normalize_image_channels(image: PIL.Image.Image | np.ndarray | torch.Tensor):
+    if isinstance(image, PIL.Image.Image):
+        if image.mode != "RGB":
+            logger.info("Dropping alpha channel from PIL image (mode=%s)", image.mode)
+            return image.convert("RGB")
+        return image
+    if isinstance(image, np.ndarray):
+        if image.ndim == 3 and image.shape[-1] == 4:
+            logger.info("Dropping alpha channel from numpy image (shape=%s)", image.shape)
+            return image[..., :3]
+        return image
+    if torch.is_tensor(image):
+        if image.ndim == 3 and image.shape[0] == 4:
+            logger.info("Dropping alpha channel from torch image (shape=%s)", tuple(image.shape))
+            return image[:3, ...]
+        if image.ndim == 3 and image.shape[-1] == 4:
+            logger.info("Dropping alpha channel from torch image (shape=%s)", tuple(image.shape))
+            return image[..., :3]
+        if image.ndim >= 4 and image.shape[1] == 4:
+            logger.info("Dropping alpha channel from torch batch image (shape=%s)", tuple(image.shape))
+            return image[:, :3, ...]
+    return image
+
+
 def get_qwen_image_edit_plus_pre_process_func(
     od_config: OmniDiffusionConfig,
 ):
@@ -89,7 +113,9 @@ def get_qwen_image_edit_plus_pre_process_func(
             if not isinstance(raw_image, list):
                 raw_image = [raw_image]
             image = [
-                PIL.Image.open(im) if isinstance(im, str) else cast(PIL.Image.Image | np.ndarray | torch.Tensor, im)
+                _normalize_image_channels(
+                    PIL.Image.open(im) if isinstance(im, str) else cast(PIL.Image.Image | np.ndarray | torch.Tensor, im)
+                )
                 for im in raw_image
             ]
 
@@ -696,7 +722,7 @@ class QwenImageEditPlusPipeline(nn.Module, SupportImageInput):
                 raise ValueError("Image is required for QwenImageEditPlusPipeline")
 
             if not isinstance(image, list):
-                image = [image]
+                image = [_normalize_image_channels(img) for img in image]
 
             image_size = image[0].size
             calculated_width, calculated_height = calculate_dimensions(VAE_IMAGE_SIZE, image_size[0] / image_size[1])
