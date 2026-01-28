@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-from abc import abstractmethod
 from enum import Enum
 
 import torch
 from vllm.platforms import Platform
+from vllm.platforms.interface import PlatformEnum
 
 
 class OmniPlatformEnum(Enum):
@@ -33,15 +33,14 @@ class OmniPlatform(Platform):
         return self._omni_enum == OmniPlatformEnum.NPU
 
     @classmethod
-    @abstractmethod
-    def get_omni_ar_worker_cls(cls) -> str: ...
+    def get_omni_ar_worker_cls(cls) -> str:
+        raise NotImplementedError
 
     @classmethod
-    @abstractmethod
-    def get_omni_generation_worker_cls(cls) -> str: ...
+    def get_omni_generation_worker_cls(cls) -> str:
+        raise NotImplementedError
 
     @classmethod
-    @abstractmethod
     def get_default_stage_config_path(cls) -> str:
         raise NotImplementedError
 
@@ -67,22 +66,18 @@ class OmniPlatform(Platform):
         raise NotImplementedError
 
     @classmethod
-    @abstractmethod
     def get_torch_device(cls, local_rank: int | None = None) -> torch.device:
         raise NotImplementedError
 
     @classmethod
-    @abstractmethod
     def get_device_count(cls) -> int:
         raise NotImplementedError
 
     @classmethod
-    @abstractmethod
     def get_device_version(cls) -> str | None:
         raise NotImplementedError
 
     @classmethod
-    @abstractmethod
     def synchronize(cls) -> None:
         raise NotImplementedError
 
