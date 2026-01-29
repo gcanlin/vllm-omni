@@ -1,0 +1,4 @@
+# NPU-specific dependencies (Ascend)
+# Add NPU-specific acceleration libraries here
+onnxruntime-cann>=1.23.2
+sox>=1.5.0

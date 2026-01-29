@@ -1,0 +1,2 @@
+# XPU-specific dependencies (Intel)
+# Add Intel XPU-specific acceleration libraries here

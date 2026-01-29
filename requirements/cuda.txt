@@ -1,0 +1,3 @@
+fa3-fwd
+onnxruntime>=1.19.0
+sox>=1.5.0

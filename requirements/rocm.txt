@@ -1,0 +1,4 @@
+# ROCm-specific dependencies
+# Add AMD-specific acceleration libraries here
+onnxruntime-rocm>=1.22.2
+sox>=1.5.0
