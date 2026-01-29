@@ -188,4 +188,5 @@ extend-ignore-identifiers-re = [
     ".*NOTHINK.*",
     ".*nin.*",
     "Ono_Anna",
+    ".*cann.*",
 ]
