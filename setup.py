@@ -13,6 +13,7 @@ Detection Priority:
 
 Supported platforms: cuda, rocm, npu, xpu, cpu
 """
+
 from __future__ import annotations
 
 import os
