@@ -24,12 +24,12 @@ def _maybe_modify_attn_mask_npu(query: torch.Tensor, key: torch.Tensor, attn_mas
         attn_mask is not None
         and attn_mask.ndim == 2
         and attn_mask.shape[0] == query.shape[0]
-        and attn_mask.shape[1] == key.shape[2]
+        and attn_mask.shape[1] == key.shape[1]
     ):
         # query/key are already permuted to [B, H, Sq, D]
-        B, Sq, Skv = attn_mask.shape[0], query.shape[2], key.shape[2]
+        B, Sq, Skv = attn_mask.shape[0], query.shape[1], key.shape[1]
         attn_mask = attn_mask.to(torch.bool)
-        attn_mask = attn_mask.unsqueeze(1).unsqueeze(2).expand(B, 1, Sq, Skv).contiguous()
+        attn_mask = attn_mask.unsqueeze(1).expand(B, Sq, Skv).unsqueeze(1).contiguous()
     return attn_mask
 
 
@@ -97,7 +97,7 @@ class SDPAImpl(AttentionImpl):
     ) -> torch.Tensor:
         return self.forward_cuda(query, key, value, attn_metadata)
 
-    def forward_rocm(
+    def forward_hip(
         self,
         query: torch.Tensor,
         key: torch.Tensor,
@@ -113,17 +113,7 @@ class SDPAImpl(AttentionImpl):
         value: torch.Tensor,
         attn_metadata: AttentionMetadata | None = None,
     ) -> torch.Tensor:
-        query, key, value = (x.permute(0, 2, 1, 3) for x in (query, key, value))
-        attention_mask = attn_metadata.attn_mask if attn_metadata else None
-        attention_mask = _maybe_modify_attn_mask_npu(query, key, attention_mask)
-        output = torch.nn.functional.scaled_dot_product_attention(
-            query,
-            key,
-            value,
-            attn_mask=attention_mask,
-            dropout_p=0.0,
-            is_causal=self.causal,
-            scale=self.softmax_scale,
-        )
-        out = output.permute(0, 2, 1, 3)
-        return out
+        if attn_metadata:
+            attention_mask = _maybe_modify_attn_mask_npu(query, key, attn_metadata.attn_mask)
+            setattr(attn_metadata, 'attn_mask', attention_mask)
+        return self.forward_cuda(query, key, value, attn_metadata)
