@@ -7,7 +7,7 @@ import logging
 import math
 import os
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import PIL.Image
@@ -25,13 +25,21 @@ from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2Tokenizer, Qwe
 from vllm.model_executor.models.utils import AutoWeightsLoader
 
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
+from vllm_omni.diffusion.distributed.parallel_state import (
+    get_cfg_group,
+    get_classifier_free_guidance_rank,
+    get_classifier_free_guidance_world_size,
+)
 from vllm_omni.diffusion.distributed.utils import get_local_device
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
+from vllm_omni.diffusion.models.interface import SupportImageInput
 from vllm_omni.diffusion.models.qwen_image.pipeline_qwen_image import calculate_shift
 from vllm_omni.diffusion.models.qwen_image.qwen_image_transformer import (
     QwenImageTransformer2DModel,
 )
 from vllm_omni.diffusion.request import OmniDiffusionRequest
+from vllm_omni.diffusion.utils.tf_utils import get_transformer_config_kwargs
+from vllm_omni.inputs.data import OmniTextPrompt
 from vllm_omni.model_executor.model_loader.weight_utils import (
     download_weights_from_hf_specific,
 )
@@ -57,16 +65,33 @@ def get_qwen_image_edit_pre_process_func(
     latent_channels = vae_config.get("z_dim", 16)
 
     def pre_process_func(
-        requests: list[OmniDiffusionRequest],
+        request: OmniDiffusionRequest,
     ):
         """Pre-process requests for QwenImageEditPipeline."""
-        for req in requests:
-            image = req.pil_image
+        for i, prompt in enumerate(request.prompts):
+            multi_modal_data = prompt.get("multi_modal_data", {}) if not isinstance(prompt, str) else None
+            raw_image = multi_modal_data.get("image", None) if multi_modal_data is not None else None
+            if isinstance(prompt, str):
+                prompt = OmniTextPrompt(prompt=prompt)
+            if "additional_information" not in prompt:
+                prompt["additional_information"] = {}
 
-            image_size = image[0].size if isinstance(image, list) else image.size
+            # Only handles single image
+            if raw_image is None or isinstance(raw_image, list):
+                raise ValueError(
+                    """Received no image or a list of image. Only a single image is supported by this model."""
+                    """Please correctly set `"multi_modal_data": {"image": <an image object or file path>, …}`"""
+                )
+
+            if isinstance(raw_image, str):
+                image = PIL.Image.open(raw_image)
+            else:
+                image = cast(PIL.Image.Image | torch.Tensor | np.ndarray, raw_image)
+
+            image_size = image.size
             calculated_width, calculated_height = calculate_dimensions(1024 * 1024, image_size[0] / image_size[1])
-            height = req.height or calculated_height
-            width = req.width or calculated_width
+            height = request.sampling_params.height or calculated_height
+            width = request.sampling_params.width or calculated_width
 
             # Ensure dimensions are multiples of vae_scale_factor * 2
             multiple_of = vae_scale_factor * 2
@@ -74,10 +99,10 @@ def get_qwen_image_edit_pre_process_func(
             width = width // multiple_of * multiple_of
 
             # Store calculated dimensions in request
-            req.calculated_height = calculated_height
-            req.calculated_width = calculated_width
-            req.height = height
-            req.width = width
+            prompt["additional_information"]["calculated_height"] = calculated_height
+            prompt["additional_information"]["calculated_width"] = calculated_width
+            request.sampling_params.height = height
+            request.sampling_params.width = width
 
             # Preprocess image
             if image is not None and not (
@@ -89,10 +114,10 @@ def get_qwen_image_edit_pre_process_func(
                 image = image.unsqueeze(2)
 
                 # Store preprocessed image and prompt image in request
-                req.preprocessed_image = image
-                req.prompt_image = prompt_image
-
-        return requests
+                prompt["additional_information"]["preprocessed_image"] = image
+                prompt["additional_information"]["prompt_image"] = prompt_image
+            request.prompts[i] = prompt
+        return request
 
     return pre_process_func
 
@@ -190,6 +215,7 @@ def retrieve_latents(
 
 class QwenImageEditPipeline(
     nn.Module,
+    SupportImageInput,
 ):
     def __init__(
         self,
@@ -224,7 +250,8 @@ class QwenImageEditPipeline(
         self.vae = AutoencoderKLQwenImage.from_pretrained(model, subfolder="vae", local_files_only=local_files_only).to(
             self.device
         )
-        self.transformer = QwenImageTransformer2DModel(od_config=od_config)
+        transformer_kwargs = get_transformer_config_kwargs(od_config.tf_model_config, QwenImageTransformer2DModel)
+        self.transformer = QwenImageTransformer2DModel(od_config=od_config, **transformer_kwargs)
         self.tokenizer = Qwen2Tokenizer.from_pretrained(model, subfolder="tokenizer", local_files_only=local_files_only)
         self.processor = Qwen2VLProcessor.from_pretrained(
             model, subfolder="processor", local_files_only=local_files_only
@@ -602,47 +629,92 @@ class QwenImageEditPipeline(
                 latent_model_input = torch.cat([latents, image_latents], dim=1)
 
             self.transformer.do_true_cfg = do_true_cfg  # used in teacache hook
-            # Forward pass for positive prompt (or unconditional if no CFG)
-            noise_pred = self.transformer(
-                hidden_states=latent_model_input,
-                timestep=timestep / 1000,
-                guidance=guidance,
-                encoder_hidden_states_mask=prompt_embeds_mask,
-                encoder_hidden_states=prompt_embeds,
-                img_shapes=img_shapes,
-                txt_seq_lens=txt_seq_lens,
-                attention_kwargs=self.attention_kwargs,
-                return_dict=False,
-            )[0]
-            noise_pred = noise_pred[:, : latents.size(1)]
+            cfg_parallel_ready = do_true_cfg and get_classifier_free_guidance_world_size() > 1
 
-            # Forward pass for negative prompt (CFG)
-            if do_true_cfg:
-                neg_noise_pred = self.transformer(
+            if cfg_parallel_ready:
+                cfg_group = get_cfg_group()
+                cfg_rank = get_classifier_free_guidance_rank()
+
+                if cfg_rank == 0:
+                    local_pred = self.transformer(
+                        hidden_states=latent_model_input,
+                        timestep=timestep / 1000,
+                        guidance=guidance,
+                        encoder_hidden_states_mask=prompt_embeds_mask,
+                        encoder_hidden_states=prompt_embeds,
+                        img_shapes=img_shapes,
+                        txt_seq_lens=txt_seq_lens,
+                        attention_kwargs=self.attention_kwargs,
+                        return_dict=False,
+                    )[0]
+                else:
+                    local_pred = self.transformer(
+                        hidden_states=latent_model_input,
+                        timestep=timestep / 1000,
+                        guidance=guidance,
+                        encoder_hidden_states_mask=negative_prompt_embeds_mask,
+                        encoder_hidden_states=negative_prompt_embeds,
+                        img_shapes=img_shapes,
+                        txt_seq_lens=negative_txt_seq_lens,
+                        attention_kwargs=self.attention_kwargs,
+                        return_dict=False,
+                    )[0]
+
+                local_pred = local_pred[:, : latents.size(1)]
+
+                gathered = cfg_group.all_gather(local_pred, separate_tensors=True)
+                if cfg_rank == 0:
+                    noise_pred = gathered[0]
+                    neg_noise_pred = gathered[1]
+                    comb_pred = neg_noise_pred + true_cfg_scale * (noise_pred - neg_noise_pred)
+                    cond_norm = torch.norm(noise_pred, dim=-1, keepdim=True)
+                    noise_norm = torch.norm(comb_pred, dim=-1, keepdim=True)
+                    noise_pred = comb_pred * (cond_norm / noise_norm)
+                    latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
+                cfg_group.broadcast(latents, src=0)
+
+            else:
+                # Forward pass for positive prompt (or unconditional if no CFG)
+                noise_pred = self.transformer(
                     hidden_states=latent_model_input,
                     timestep=timestep / 1000,
                     guidance=guidance,
-                    encoder_hidden_states_mask=negative_prompt_embeds_mask,
-                    encoder_hidden_states=negative_prompt_embeds,
+                    encoder_hidden_states_mask=prompt_embeds_mask,
+                    encoder_hidden_states=prompt_embeds,
                     img_shapes=img_shapes,
-                    txt_seq_lens=negative_txt_seq_lens,
+                    txt_seq_lens=txt_seq_lens,
                     attention_kwargs=self.attention_kwargs,
                     return_dict=False,
                 )[0]
-                neg_noise_pred = neg_noise_pred[:, : latents.size(1)]
-                comb_pred = neg_noise_pred + true_cfg_scale * (noise_pred - neg_noise_pred)
-                cond_norm = torch.norm(noise_pred, dim=-1, keepdim=True)
-                noise_norm = torch.norm(comb_pred, dim=-1, keepdim=True)
-                noise_pred = comb_pred * (cond_norm / noise_norm)
-            # compute the previous noisy sample x_t -> x_t-1
-            latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
+                noise_pred = noise_pred[:, : latents.size(1)]
+
+                # Forward pass for negative prompt (CFG)
+                if do_true_cfg:
+                    neg_noise_pred = self.transformer(
+                        hidden_states=latent_model_input,
+                        timestep=timestep / 1000,
+                        guidance=guidance,
+                        encoder_hidden_states_mask=negative_prompt_embeds_mask,
+                        encoder_hidden_states=negative_prompt_embeds,
+                        img_shapes=img_shapes,
+                        txt_seq_lens=negative_txt_seq_lens,
+                        attention_kwargs=self.attention_kwargs,
+                        return_dict=False,
+                    )[0]
+                    neg_noise_pred = neg_noise_pred[:, : latents.size(1)]
+                    comb_pred = neg_noise_pred + true_cfg_scale * (noise_pred - neg_noise_pred)
+                    cond_norm = torch.norm(noise_pred, dim=-1, keepdim=True)
+                    noise_norm = torch.norm(comb_pred, dim=-1, keepdim=True)
+                    noise_pred = comb_pred * (cond_norm / noise_norm)
+                # compute the previous noisy sample x_t -> x_t-1
+                latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
         return latents
 
     def forward(
         self,
         req: OmniDiffusionRequest,
-        prompt: str | list[str] = "",
-        negative_prompt: str | list[str] = "",
+        prompt: str | list[str] | None = None,
+        negative_prompt: str | list[str] | None = None,
         image: PIL.Image.Image | torch.Tensor | None = None,
         true_cfg_scale: float = 4.0,
         height: int | None = None,
@@ -663,17 +735,27 @@ class QwenImageEditPipeline(
         max_sequence_length: int = 512,
     ) -> DiffusionOutput:
         """Forward pass for image editing."""
-        prompt = req.prompt if req.prompt is not None else prompt
-        negative_prompt = req.negative_prompt if req.negative_prompt is not None else negative_prompt
+        # TODO: In online mode, sometimes it receives [{"negative_prompt": None}, {...}], so cannot use .get("...", "")
+        # TODO: May be some data formatting operations on the API side. Hack for now.
+        if len(req.prompts) > 1:
+            logger.warning(
+                """This model only supports a single prompt, not a batched request.""",
+                """Taking only the first image for now.""",
+            )
+        first_prompt = req.prompts[0]
+        prompt = first_prompt if isinstance(first_prompt, str) else (first_prompt.get("prompt") or "")
+        negative_prompt = None if isinstance(first_prompt, str) else first_prompt.get("negative_prompt")
 
         # Get preprocessed image from request (pre-processing is done in DiffusionEngine)
-        if hasattr(req, "preprocessed_image"):
-            prompt_image = req.prompt_image
-            image = req.preprocessed_image
-            calculated_height = req.calculated_height
-            calculated_width = req.calculated_width
-            height = req.height
-            width = req.width
+        if not isinstance(first_prompt, str) and "preprocessed_image" in (
+            additional_information := first_prompt.get("additional_information", {})
+        ):
+            prompt_image = additional_information.get("prompt_image")
+            image = additional_information.get("preprocessed_image")
+            calculated_height = additional_information.get("calculated_height")
+            calculated_width = additional_information.get("calculated_width")
+            height = req.sampling_params.height
+            width = req.sampling_params.width
         else:
             # fallback to run pre-processing in pipeline (debug only)
             image_size = image[0].size if isinstance(image, list) else image.size
@@ -691,12 +773,18 @@ class QwenImageEditPipeline(
                 image = self.image_processor.preprocess(image, calculated_height, calculated_width)
                 image = image.unsqueeze(2)
 
-        num_inference_steps = req.num_inference_steps or num_inference_steps
-        generator = req.generator or generator
-        true_cfg_scale = req.true_cfg_scale or true_cfg_scale
-        req_num_outputs = getattr(req, "num_outputs_per_prompt", None)
-        if req_num_outputs and req_num_outputs > 0:
-            num_images_per_prompt = req_num_outputs
+        num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
+        sigmas = req.sampling_params.sigmas or sigmas
+        max_sequence_length = req.sampling_params.max_sequence_length or max_sequence_length
+        generator = req.sampling_params.generator or generator
+        true_cfg_scale = req.sampling_params.true_cfg_scale or true_cfg_scale
+        if req.sampling_params.guidance_scale_provided:
+            guidance_scale = req.sampling_params.guidance_scale
+        num_images_per_prompt = (
+            req.sampling_params.num_outputs_per_prompt
+            if req.sampling_params.num_outputs_per_prompt > 0
+            else num_images_per_prompt
+        )
 
         # 1. check inputs
         # 2. encode prompts

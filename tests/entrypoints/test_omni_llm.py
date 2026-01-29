@@ -5,6 +5,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from vllm import SamplingParams
 
 from vllm_omni.entrypoints.stage_utils import SHUTDOWN_TASK
 
@@ -82,8 +83,9 @@ class _FakeStage:
         self.stage_id = getattr(config, "stage_id", 0)
         self.engine_args = config.engine_args
         self.model_stage = getattr(config.engine_args, "model_stage", None)
+        self.stage_type = "llm"
         # set default sampling params
-        self.default_sampling_params = {"temperature": 1.0}
+        self.default_sampling_params = SamplingParams(temperature=1.0)
         # Allow configuring final_output and final_output_type
         self.final_output = config.final_output if hasattr(config, "final_output") else False
         self.final_output_type = getattr(config, "final_output_type", None)
@@ -445,7 +447,7 @@ def mock_get_config(monkeypatch):
 def test_initialize_stage_configs_called_when_none(monkeypatch, fake_stage_config):
     """Test that stage configs are auto-loaded when stage_configs_path is None."""
 
-    def _fake_loader(model: str):
+    def _fake_loader(model: str, base_engine_args=None):
         return [
             _FakeStageConfig(fake_stage_config),
             _FakeStageConfig(fake_stage_config),
@@ -510,7 +512,7 @@ def test_initialize_stage_configs_called_when_none(monkeypatch, fake_stage_confi
 def test_generate_raises_on_length_mismatch(monkeypatch, fake_stage_config):
     """Test that generate raises ValueError when sampling_params_list length doesn't match."""
 
-    def _fake_loader(model: str):
+    def _fake_loader(model: str, base_engine_args=None):
         return [_FakeStageConfig(fake_stage_config)]
 
     import sys
@@ -562,7 +564,7 @@ def test_generate_pipeline_and_final_outputs(monkeypatch, fake_stage_config):
     stage_cfg1 = dict(fake_stage_config)
     stage_cfg1["processed_input"] = ["processed-for-stage-1"]
 
-    def _fake_loader(model: str):
+    def _fake_loader(model: str, base_engine_args=None):
         return [_FakeStageConfig(stage_cfg0), _FakeStageConfig(stage_cfg1)]
 
     import sys
@@ -637,8 +639,10 @@ def test_generate_pipeline_and_final_outputs(monkeypatch, fake_stage_config):
         }
     )
 
-    # Use dicts instead of object() for serializable sampling params
-    sampling_params_list = [{"temperature": 0.7}, {"temperature": 0.8}]
+    sampling_params_list = [
+        SamplingParams(temperature=0.7),
+        SamplingParams(temperature=0.8),
+    ]
     prompts = ["hi"]
     outputs = omni.generate(prompts=prompts, sampling_params_list=sampling_params_list)
 
@@ -660,7 +664,7 @@ def test_generate_no_final_output_returns_empty(monkeypatch, fake_stage_config):
     stage_cfg0["final_output"] = False
     stage_cfg1["final_output"] = False
 
-    def _fake_loader(model: str):
+    def _fake_loader(model: str, base_engine_args=None):
         return [_FakeStageConfig(stage_cfg0), _FakeStageConfig(stage_cfg1)]
 
     import sys
@@ -722,8 +726,13 @@ def test_generate_no_final_output_returns_empty(monkeypatch, fake_stage_config):
         }
     )
 
-    # Use dicts instead of object() for serializable sampling params
-    outputs = omni.generate(prompts=["p"], sampling_params_list=[{"temperature": 0.7}, {"temperature": 0.8}])
+    outputs = omni.generate(
+        prompts=["p"],
+        sampling_params_list=[
+            SamplingParams(temperature=0.7),
+            SamplingParams(temperature=0.8),
+        ],
+    )
     assert outputs == []
 
 
@@ -734,7 +743,7 @@ def test_generate_sampling_params_none_use_default(monkeypatch, fake_stage_confi
     stage_cfg0["final_output"] = False
     stage_cfg1["final_output"] = False
 
-    def _fake_loader(model: str):
+    def _fake_loader(model: str, base_engine_args=None):
         return [_FakeStageConfig(stage_cfg0), _FakeStageConfig(stage_cfg1)]
 
     import sys
@@ -802,7 +811,7 @@ def test_generate_sampling_params_none_use_default(monkeypatch, fake_stage_confi
 def test_wait_for_stages_ready_timeout(monkeypatch, fake_stage_config):
     """Test that _wait_for_stages_ready handles timeout correctly."""
 
-    def _fake_loader(model: str):
+    def _fake_loader(model: str, base_engine_args=None):
         return [_FakeStageConfig(fake_stage_config)]
 
     import sys
@@ -858,7 +867,7 @@ def test_wait_for_stages_ready_timeout(monkeypatch, fake_stage_config):
 def test_generate_handles_error_messages(monkeypatch, fake_stage_config):
     """Test that generate handles error messages from stages correctly."""
 
-    def _fake_loader(model: str):
+    def _fake_loader(model: str, base_engine_args=None):
         return [_FakeStageConfig(fake_stage_config)]
 
     import sys
@@ -922,8 +931,7 @@ def test_generate_handles_error_messages(monkeypatch, fake_stage_config):
     )
 
     # Generate should handle error gracefully (log but continue)
-    # Use dict instead of object() for serializable sampling params
-    sampling_params_list = [{"temperature": 0.7}]
+    sampling_params_list = [SamplingParams(temperature=0.7)]
     outputs = omni.generate(prompts=["hi"], sampling_params_list=sampling_params_list)
     # Should return final output (error was logged but didn't stop processing)
     assert isinstance(outputs, list)
@@ -934,7 +942,7 @@ def test_generate_handles_error_messages(monkeypatch, fake_stage_config):
 def test_close_sends_shutdown_signal(monkeypatch, fake_stage_config):
     """Test that close() sends shutdown signal to all input queues."""
 
-    def _fake_loader(model: str):
+    def _fake_loader(model: str, base_engine_args=None):
         return [_FakeStageConfig(fake_stage_config)]
 
     import sys
