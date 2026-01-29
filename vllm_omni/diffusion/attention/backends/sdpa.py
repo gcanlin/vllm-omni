@@ -115,5 +115,5 @@ class SDPAImpl(AttentionImpl):
     ) -> torch.Tensor:
         if attn_metadata:
             attention_mask = _maybe_modify_attn_mask_npu(query, key, attn_metadata.attn_mask)
-            setattr(attn_metadata, 'attn_mask', attention_mask)
+            setattr(attn_metadata, "attn_mask", attention_mask)
         return self.forward_cuda(query, key, value, attn_metadata)
