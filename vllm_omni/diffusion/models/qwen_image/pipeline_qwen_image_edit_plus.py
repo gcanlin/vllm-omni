@@ -696,7 +696,7 @@ class QwenImageEditPlusPipeline(nn.Module, SupportImageInput):
                 raise ValueError("Image is required for QwenImageEditPlusPipeline")
 
             if not isinstance(image, list):
-                image = [_normalize_image_channels(img) for img in image]
+                image = [image]
 
             image_size = image[0].size
             calculated_width, calculated_height = calculate_dimensions(VAE_IMAGE_SIZE, image_size[0] / image_size[1])
