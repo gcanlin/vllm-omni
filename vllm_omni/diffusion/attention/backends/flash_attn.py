@@ -12,6 +12,7 @@ from vllm_omni.diffusion.attention.backends.abstract import (
 
 logger = init_logger(__name__)
 
+
 class FlashAttentionBackend(AttentionBackend):
     accept_output_buffer: bool = True
 
