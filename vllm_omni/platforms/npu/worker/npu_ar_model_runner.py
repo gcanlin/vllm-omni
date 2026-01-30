@@ -521,4 +521,3 @@ class NPUARModelRunner(OmniNPUModelRunner):
                 return global_id.decode("utf-8")
             return str(global_id)
         return req_id
-
