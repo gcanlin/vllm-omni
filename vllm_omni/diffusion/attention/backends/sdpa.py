@@ -13,7 +13,11 @@ from vllm_omni.diffusion.attention.backends.abstract import (
 logger = init_logger(__name__)
 
 
-def _maybe_modify_attn_mask_npu(query: torch.Tensor, key: torch.Tensor, attn_mask: torch.Tensor | None = None):
+def _maybe_reshape_attn_mask(query: torch.Tensor, key: torch.Tensor, attn_mask: torch.Tensor | None = None):
+    """
+    Reshape Attention Mask
+    [batch_size, seq_len_k] -> [batch_size, 1, seq_len_q, seq_len_k]
+    """
     # Skip Attention Mask if all values are 1, `None` mask can speedup the computation
     if attn_mask is not None and torch.all(attn_mask != 0):
         attn_mask = None
@@ -26,7 +30,6 @@ def _maybe_modify_attn_mask_npu(query: torch.Tensor, key: torch.Tensor, attn_mas
         and attn_mask.shape[0] == query.shape[0]
         and attn_mask.shape[1] == key.shape[1]
     ):
-        # query/key are already permuted to [B, H, Sq, D]
         B, Sq, Skv = attn_mask.shape[0], query.shape[1], key.shape[1]
         attn_mask = attn_mask.to(torch.bool)
         attn_mask = attn_mask.unsqueeze(1).expand(B, Sq, Skv).unsqueeze(1).contiguous()
@@ -114,6 +117,6 @@ class SDPAImpl(AttentionImpl):
         attn_metadata: AttentionMetadata | None = None,
     ) -> torch.Tensor:
         if attn_metadata:
-            attention_mask = _maybe_modify_attn_mask_npu(query, key, attn_metadata.attn_mask)
+            attention_mask = _maybe_reshape_attn_mask(query, key, attn_metadata.attn_mask)
             setattr(attn_metadata, "attn_mask", attention_mask)
         return self.forward_cuda(query, key, value, attn_metadata)
