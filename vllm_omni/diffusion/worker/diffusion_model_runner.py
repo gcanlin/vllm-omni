@@ -29,6 +29,7 @@ from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineL
 from vllm_omni.diffusion.offload import apply_offload_hooks
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.distributed.omni_connectors.kv_transfer_manager import OmniKVTransferManager
+from vllm_omni.platforms import current_omni_platform
 
 logger = init_logger(__name__)
 
@@ -119,8 +120,6 @@ class DiffusionModelRunner:
 
         # Apply torch.compile if not in eager mode
         if not self.od_config.enforce_eager:
-            from vllm_omni.platforms import current_omni_platform
-
             if current_omni_platform.supports_torch_inductor():
                 try:
                     self.pipeline.transformer = regionally_compile(
