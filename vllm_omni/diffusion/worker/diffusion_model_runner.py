@@ -119,14 +119,22 @@ class DiffusionModelRunner:
 
         # Apply torch.compile if not in eager mode
         if not self.od_config.enforce_eager:
-            try:
-                self.pipeline.transformer = regionally_compile(
-                    self.pipeline.transformer,
-                    dynamic=True,
+            from vllm_omni.platforms import current_omni_platform
+
+            if current_omni_platform.supports_torch_inductor():
+                try:
+                    self.pipeline.transformer = regionally_compile(
+                        self.pipeline.transformer,
+                        dynamic=True,
+                    )
+                    logger.info("Model runner: Model compiled with torch.compile.")
+                except Exception as e:
+                    logger.warning(f"Model runner: torch.compile failed with error: {e}. Using eager mode.")
+            else:
+                logger.warning(
+                    "Model runner: Platform %s does not support torch inductor, skipping torch.compile.",
+                    current_omni_platform.get_torch_device(),
                 )
-                logger.info("Model runner: Model compiled with torch.compile.")
-            except Exception as e:
-                logger.warning(f"Model runner: torch.compile failed with error: {e}. Using eager mode.")
 
         # Setup cache backend
         self.cache_backend = get_cache_backend(self.od_config.cache_backend, self.od_config.cache_config)
