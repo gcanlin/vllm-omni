@@ -20,7 +20,7 @@ from typing import Annotated, Any, cast
 import httpx
 import vllm.envs as envs
 from fastapi import Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from PIL import Image
 from starlette.datastructures import State
 from starlette.routing import Route
@@ -1418,3 +1418,24 @@ def apply_stage_default_sampling_params(
             for param_name, param_value in stage_defaults.items():
                 if hasattr(sampling_params, param_name):
                     setattr(sampling_params, param_name, param_value)
+
+
+# Profiling endpoints - always available for vLLM-Omni
+
+
+@router.post("/start_profile")
+async def start_profile(raw_request: Request):
+    """Start profiling for the engine."""
+    logger.info("Starting profiler...")
+    await raw_request.app.state.engine_client.start_profile()
+    logger.info("Profiler started.")
+    return Response(status_code=200)
+
+
+@router.post("/stop_profile")
+async def stop_profile(raw_request: Request):
+    """Stop profiling for the engine."""
+    logger.info("Stopping profiler...")
+    await raw_request.app.state.engine_client.stop_profile()
+    logger.info("Profiler stopped.")
+    return Response(status_code=200)
