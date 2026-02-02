@@ -39,8 +39,8 @@ cd /vllm-workspace
 git clone -b v0.14.0 https://github.com/vllm-project/vllm-omni.git
 
 # Remove this replace when the dispatch of requirements is ready
-sed -i 's/^fa3-fwd==0.0.1/# fa3-fwd==0.0.1/' pyproject.toml \
- && sed -i 's/\bonnxruntime\b/onnxruntime-cann/' pyproject.toml
+RUN sed -i -E 's/^([[:space:]]*)"fa3-fwd==0\.0\.1",/\1# "fa3-fwd==0.0.1",/' pyproject.toml \
+ && sed -i -E 's/\bonnxruntime\b/onnxruntime-cann/g' pyproject.toml
 
 cd vllm-omni
 pip install -v -e .
@@ -107,11 +107,11 @@ Or build IMAGE from **source code**:
 
 ```bash
 git clone https://github.com/vllm-project/vllm-omni.git
-cd vllm-omni/docker
+cd vllm-omni
 # A2
-docker build -t vllm-omni-dev-image:latest -f ./Dockerfile.npu .
+docker build -t vllm-omni-dev-image:latest -f ./docker/Dockerfile.npu .
 # A3
-docker build -t vllm-omni-dev-image:latest -f ./Dockerfile.npu.a3 .
+docker build -t vllm-omni-dev-image:latest -f ./docker/Dockerfile.npu.a3 .
 ```
 
 # --8<-- [end:pre-built-images]
