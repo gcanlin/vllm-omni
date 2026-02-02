@@ -7,6 +7,10 @@ WORKDIR ${APP_DIR}
 
 COPY . .
 
+# Remove this replace when the dispatch of requirements is ready
+RUN sed -i 's/^fa3-fwd==0.0.1/# fa3-fwd==0.0.1/' pyproject.toml \
+ && sed -i 's/\bonnxruntime\b/onnxruntime-cann/' pyproject.toml
+
 # Install vllm-omni with dev dependencies
 RUN pip install --no-cache-dir -e ".[dev]"
 
