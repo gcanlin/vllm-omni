@@ -372,6 +372,30 @@ class DiffusionEngine:
             self.executor.shutdown()
 
     def abort(self, request_id: str | Iterable[str]) -> None:
-        # TODO implement it
-        logger.warning("DiffusionEngine abort is not implemented yet")
-        pass
+        """
+        Abort one or more diffusion generation requests.
+
+        This will set the interrupt flag on the worker pipeline to stop
+        the diffusion loop after the current timestep completes.
+
+        Args:
+            request_id: Single request ID or iterable of request IDs to abort
+        """
+        if isinstance(request_id, str):
+            request_ids = [request_id]
+        else:
+            request_ids = list(request_id)
+
+        logger.info(f"Aborting diffusion requests: {request_ids}")
+
+        try:
+            # Send abort signal to all workers via RPC
+            self.executor.collective_rpc(
+                method="abort_request",
+                args=(request_ids,),
+                kwargs={},
+            )
+            logger.info(f"Abort signal sent for requests: {request_ids}")
+        except Exception as e:
+            logger.error(f"Failed to abort requests {request_ids}: {e}")
+            raise
