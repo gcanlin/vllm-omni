@@ -237,6 +237,32 @@ class DiffusionWorker:
         else:
             return nullcontext()
 
+    def abort_request(self, request_ids: list[str]) -> bool:
+        """
+        Abort ongoing diffusion generation requests.
+
+        Sets the interrupt flag on the pipeline to stop the diffusion loop
+        after the current timestep completes.
+
+        Args:
+            request_ids: List of request IDs to abort
+
+        Returns:
+            True if abort was successful
+        """
+        if self.model_runner is None or self.model_runner.pipeline is None:
+            logger.warning("Cannot abort: model runner or pipeline not initialized")
+            return False
+
+        logger.info(f"Worker {self.rank}: Aborting requests {request_ids}")
+
+        # Set interrupt flag on the pipeline
+        # The pipeline checks this flag in the diffuse loop
+        self.model_runner.pipeline._interrupt = True
+
+        logger.info(f"Worker {self.rank}: Interrupt flag set for requests {request_ids}")
+        return True
+
     def shutdown(self) -> None:
         """Shutdown the worker and cleanup distributed environment."""
         destroy_distributed_env()

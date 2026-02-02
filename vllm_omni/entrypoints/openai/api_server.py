@@ -879,7 +879,8 @@ async def show_available_models(raw_request: Request) -> JSONResponse:
         HTTPStatus.INTERNAL_SERVER_ERROR.value: {"model": ErrorResponse},
     },
 )
-async def generate_images(request: ImageGenerationRequest, raw_request: Request) -> ImageGenerationResponse:
+@with_cancellation
+async def generate_images(request: ImageGenerationRequest, raw_request: Request) -> ImageGenerationResponse | None:
     """Generate images from text prompts using diffusion models.
 
     OpenAI DALL-E compatible endpoint for text-to-image generation.
@@ -991,6 +992,7 @@ async def generate_images(request: ImageGenerationRequest, raw_request: Request)
         HTTPStatus.INTERNAL_SERVER_ERROR.value: {"model": ErrorResponse},
     },
 )
+@with_cancellation
 async def edit_images(
     raw_request: Request,
     image: list[UploadFile] | None = File(None),
@@ -1014,7 +1016,7 @@ async def edit_images(
     seed: int | None = Form(None),
     # vllm-omni extension for per-request LoRA.
     lora: str | None = Form(None),  # Json string
-) -> ImageGenerationResponse:
+) -> ImageGenerationResponse | None:
     """
     OpenAI-compatible image edit endpoint.
     """

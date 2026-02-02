@@ -106,6 +106,10 @@ class AsyncOmniDiffusion:
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._closed = False
 
+        # Track active requests for abort functionality
+        self._active_requests: dict[str, asyncio.Task] = {}
+        self._request_lock = asyncio.Lock()
+
         logger.info("AsyncOmniDiffusion initialized with model: %s", model)
 
     async def generate(
@@ -145,6 +149,12 @@ class AsyncOmniDiffusion:
 
         logger.debug("Starting generation for request %s", request_id)
 
+        # Register this task for tracking
+        current_task = asyncio.current_task()
+        if current_task:
+            async with self._request_lock:
+                self._active_requests[request_id] = current_task
+
         # Run engine in thread pool
         loop = asyncio.get_event_loop()
         try:
@@ -158,6 +168,10 @@ class AsyncOmniDiffusion:
         except Exception as e:
             logger.error("Generation failed for request %s: %s", request_id, e)
             raise RuntimeError(f"Diffusion generation failed: {e}") from e
+        finally:
+            # Unregister the request
+            async with self._request_lock:
+                self._active_requests.pop(request_id, None)
 
         # Update request_id if needed
         if not result.request_id:
@@ -220,8 +234,45 @@ class AsyncOmniDiffusion:
             pass
 
     async def abort(self, request_id: str | Iterable[str]) -> None:
-        """Abort a request."""
-        self.engine.abort(request_id)
+        """Abort one or more diffusion generation requests.
+
+        This sends an abort signal to the engine to interrupt ongoing generation
+        and optionally cancels the associated asyncio task.
+
+        Args:
+            request_id: Single request ID or iterable of request IDs to abort
+
+        Example:
+            >>> await async_diffusion.abort("req-123")
+            >>> await async_diffusion.abort(["req-1", "req-2"])
+        """
+        # Convert to list if needed
+        if isinstance(request_id, str):
+            request_ids = [request_id]
+        else:
+            request_ids = list(request_id)
+
+        logger.info("Aborting diffusion request(s): %s", request_ids)
+
+        # Send abort signal to engine (this sets interrupt flags on workers)
+        self.engine.abort(request_ids)
+
+        # Cancel associated asyncio tasks
+        async with self._request_lock:
+            for req_id in request_ids:
+                task = self._active_requests.get(req_id)
+                if task and not task.done():
+                    logger.debug("Cancelling task for request %s", req_id)
+                    task.cancel()
+
+    async def get_active_requests(self) -> list[str]:
+        """Get list of currently active request IDs.
+
+        Returns:
+            List of request IDs currently being processed
+        """
+        async with self._request_lock:
+            return list(self._active_requests.keys())
 
     @property
     def is_running(self) -> bool:
