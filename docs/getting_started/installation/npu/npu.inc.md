@@ -111,7 +111,7 @@ cd vllm-omni
 # A2
 docker build -t vllm-omni-dev-image:latest -f ./docker/Dockerfile.npu .
 # A3
-docker build -t vllm-omni-dev-image:latest -f ./docker/Dockerfile.npu.a3 .
+# docker build -t vllm-omni-dev-image:latest -f ./docker/Dockerfile.npu.a3 .
 ```
 
 # --8<-- [end:pre-built-images]

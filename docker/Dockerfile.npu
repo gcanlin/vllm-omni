@@ -1,4 +1,4 @@
-ARG VLLM_ASCEND_IMAGE=quay.nju.edu.cn/ascend/vllm-ascend
+ARG VLLM_ASCEND_IMAGE=quay.io/ascend/vllm-ascend
 ARG VLLM_ASCEND_TAG=v0.14.0rc1
 FROM ${VLLM_ASCEND_IMAGE}:${VLLM_ASCEND_TAG}
 
