@@ -12,9 +12,6 @@ vllm serve Qwen/Qwen-Image --omni --port 8091
 !!! note
     If you encounter Out-of-Memory (OOM) issues or have limited GPU memory, you can enable VAE slicing and tiling to reduce memory usage, --vae-use-slicing --vae-use-tiling
 
-# (Optional) If happens OOM, enable vae slicing and tiling to reduce memory usage
-# vllm serve Qwen/Qwen-Image --omni --port 8091 --vae-use-slicing --vae-use-tiling
-
 ### Start with Parameters
 
 Or use the startup script:
