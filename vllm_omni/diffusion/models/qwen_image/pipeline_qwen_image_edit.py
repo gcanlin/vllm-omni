@@ -632,7 +632,7 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
             logger.warning(
                 "negative_prompt is not set. The official Qwen-Image-Edit model "
                 "may produce lower-quality results without a negative_prompt. "
-                "Qwen official repository recommends to use empty string as negative_prompt. "
+                "Qwen official repository recommends to use whitespace string as negative_prompt. "
                 "Note: some distilled variants may not be affected by this."
             )
 
