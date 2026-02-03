@@ -628,11 +628,11 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
         first_prompt = req.prompts[0]
         prompt = first_prompt if isinstance(first_prompt, str) else (first_prompt.get("prompt") or "")
         negative_prompt = None if isinstance(first_prompt, str) else first_prompt.get("negative_prompt")
-        if not negative_prompt:
+        if negative_prompt is None:
             logger.warning(
                 "negative_prompt is not set. The official Qwen-Image-Edit model "
                 "may produce lower-quality results without a negative_prompt. "
-                "In official repository of Qwen, it recommends to use empty string as negative_prompt. "
+                "Qwen official repository recommends to use empty string as negative_prompt. "
                 "Note: some distilled variants may not be affected by this."
             )
 
