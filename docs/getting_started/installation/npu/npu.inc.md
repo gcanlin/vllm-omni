@@ -64,9 +64,7 @@ Supported images as following.
 | image name | Hardware | OS |
 |-|-|-|
 | image-tag | Atlas A2 | Ubuntu |
-| image-tag-openeuler | Atlas A2 | openEuler |
 | image-tag-a3 | Atlas A3 | Ubuntu |
-| image-tag-a3-openeuler | Atlas A3 | openEuler |
 
 vLLM-Omni offers Docker images for Ascend NPU deployment. You can just pull the **prebuilt image** from the image repository [ascend/vllm-ascend](https://quay.io/repository/ascend/vllm-ascend?tab=tags) and run it with bash.
 
