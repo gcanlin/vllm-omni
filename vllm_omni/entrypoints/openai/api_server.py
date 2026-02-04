@@ -1046,7 +1046,7 @@ async def edit_images(
     guidance_scale: float | None = Form(None),
     true_cfg_scale: float | None = Form(None),
     seed: int | None = Form(None),
-    generator_device: str | None = Form("cpu"),
+    generator_device: str | None = Form(None),
     # vllm-omni extension for per-request LoRA.
     lora: str | None = Form(None),  # Json string
 ) -> ImageGenerationResponse:
