@@ -1,12 +1,14 @@
 # adapted from sglang and fastvideo
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+from __future__ import annotations
+
 import enum
 import os
 import random
 from collections.abc import Callable
 from dataclasses import dataclass, field, fields
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 from pydantic import model_validator
@@ -15,6 +17,9 @@ from vllm.config.utils import config
 from vllm.logger import init_logger
 
 from vllm_omni.diffusion.utils.network_utils import is_port_available
+
+if TYPE_CHECKING:
+    from vllm_omni.diffusion.profiler.config import DiffusionProfilerConfig
 
 logger = init_logger(__name__)
 
@@ -365,6 +370,8 @@ class OmniDiffusionConfig:
     # Omni configuration (injected from stage config)
     omni_kv_config: dict[str, Any] = field(default_factory=dict)
 
+    profiler_config: DiffusionProfilerConfig | dict[str, Any] | None = None
+
     def settle_port(self, port: int, port_inc: int = 42, max_attempts: int = 100) -> int:
         """
         Find an available port with retry logic.
@@ -450,6 +457,10 @@ class OmniDiffusionConfig:
         elif not isinstance(self.cache_config, DiffusionCacheConfig):
             # If it's neither dict nor DiffusionCacheConfig, convert to empty config
             self.cache_config = DiffusionCacheConfig()
+
+        if isinstance(self.profiler_config, dict):
+            from vllm_omni.diffusion.profiler.config import DiffusionProfilerConfig
+            self.profiler_config = DiffusionProfilerConfig(**self.profiler_config)
 
         if self.max_cpu_loras is None:
             self.max_cpu_loras = 1
