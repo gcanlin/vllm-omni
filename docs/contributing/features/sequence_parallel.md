@@ -333,12 +333,55 @@ _sp_plan = {
 
 **Problem:** `SequenceParallelInput(auto_pad=False)` - auto_pad should be True to enable automatic sequence padding.
 
-**Solution:** In `SequenceParallelInput`, set `auto_pad=True`:
+**Solution:** In `SequenceParallelInput`, set `auto_pad=True` and add attention mask support:
+
+1. Enable `auto_pad=True` for all sequence-dimension inputs in `_sp_plan`:
 ```python
-"blocks.0": {
-    "hidden_states": SequenceParallelInput(split_dim=1, expected_dims=3, auto_pad=True)
+_sp_plan = {
+    "rope": {
+        0: SequenceParallelInput(split_dim=1, expected_dims=4, split_output=True, auto_pad=True),
+        1: SequenceParallelInput(split_dim=1, expected_dims=4, split_output=True, auto_pad=True),
+    },
+    "blocks.0": {
+        "hidden_states": SequenceParallelInput(split_dim=1, expected_dims=3, auto_pad=True)
+    },
+    ...
 }
 ```
+
+2. Create attention mask dynamically when padding is applied:
+```python
+from vllm_omni.diffusion.forward_context import get_forward_context
+from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
+
+# In model forward(), before transformer blocks:
+hidden_states_mask = None
+ctx = get_forward_context()
+if ctx.sp_original_seq_len is not None and ctx.sp_padding_size > 0:
+    batch_size = hidden_states.shape[0]
+    padded_seq_len = ctx.sp_original_seq_len + ctx.sp_padding_size
+    hidden_states_mask = torch.ones(batch_size, padded_seq_len, dtype=torch.bool, device=hidden_states.device)
+    hidden_states_mask[:, ctx.sp_original_seq_len:] = False
+
+# Pass mask to attention layers
+attn_metadata = AttentionMetadata(attn_mask=hidden_states_mask) if hidden_states_mask is not None else None
+output = self.attn(query, key, value, attn_metadata)
+```
+
+**Important Quality Considerations:**
+
+While `auto_pad` enables generation for irregular resolutions, be aware of potential quality impacts:
+
+| Aspect | Impact |
+|--------|--------|
+| **Training Distribution** | Models perform best on aspect ratios seen during training (e.g., 1:1, 16:9, 4:3). Unusual ratios like 700x400 (1.75:1) may produce lower quality results. |
+| **Sequence Length** | Very long sequences (e.g., 70K+ tokens) can cause attention pattern degradation and numerical instability. |
+| **Padding Overhead** | Padded positions consume compute even when masked. For best efficiency, prefer resolutions divisible by `sp_size`. |
+
+**Recommendations for users:**
+- Use standard aspect ratios when possible (e.g., 768x432 for 16:9 instead of 700x400)
+- Ensure post-patch dimensions are divisible by `sp_size` for optimal quality
+- Test generation quality when using unusual resolutions
 
 ### Issue: Inline operations not sharded
 
