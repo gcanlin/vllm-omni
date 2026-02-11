@@ -716,6 +716,10 @@ class WanTransformer3DModel(nn.Module):
         "to_qkv": ["to_q", "to_k", "to_v"],
     }
 
+    from vllm_omni.diffusion.models.wan2_2.fsdp_shard_conditions import WAN_FSDP_SHARD_CONDITIONS
+
+    _fsdp_shard_conditions = WAN_FSDP_SHARD_CONDITIONS
+
     # Sequence Parallelism for Wan (following diffusers' _cp_plan pattern)
     #
     # The _sp_plan specifies sharding/gathering at module boundaries:

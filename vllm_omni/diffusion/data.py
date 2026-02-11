@@ -414,7 +414,9 @@ class OmniDiffusionConfig:
             self.parallel_config = DiffusionParallelConfig()
 
         if self.num_gpus is None:
-            if self.parallel_config is not None:
+            if self.use_fsdp_inference and self.hsdp_shard_dim > 0:
+                self.num_gpus = self.hsdp_replicate_dim * self.hsdp_shard_dim
+            elif self.parallel_config is not None:
                 self.num_gpus = self.parallel_config.world_size
             else:
                 self.num_gpus = 1

@@ -24,6 +24,7 @@ from vllm.model_executor.model_loader.weight_utils import (
 from vllm.utils.torch_utils import set_default_torch_dtype
 
 from vllm_omni.diffusion.data import OmniDiffusionConfig
+from vllm_omni.diffusion.distributed.fsdp import FSDPInferenceConfig
 from vllm_omni.diffusion.registry import initialize_model
 
 logger = init_logger(__name__)
@@ -211,13 +212,49 @@ class DiffusersPipelineLoader:
         """Load a model with the given configurations."""
         target_device = torch.device(load_device)
         with set_default_torch_dtype(od_config.dtype):
-            with target_device:
-                model = initialize_model(od_config)
+            if od_config.use_fsdp_inference:
+                model = self._load_model_with_fsdp(od_config)
+            else:
+                with target_device:
+                    model = initialize_model(od_config)
 
-            logger.debug("Loading weights on %s ...", load_device)
-            # Quantization does not happen in `load_weights` but after it
-            self.load_weights(model)
+                logger.debug("Loading weights on %s ...", load_device)
+                self.load_weights(model)
         return model.eval()
+
+    def _load_model_with_fsdp(self, od_config: OmniDiffusionConfig) -> nn.Module:
+        """Load model with FSDP sharding for inference.
+
+        The pipeline contains multiple components (text_encoder, VAE, transformer).
+        Only the transformer is sharded with FSDP. Other components are loaded normally.
+
+        Approach: Load weights first using model's load_weights (handles QKV fusion etc.),
+        then apply FSDP sharding to redistribute weights across GPUs.
+        """
+        from vllm_omni.diffusion.distributed.fsdp.loader import apply_fsdp_to_model
+
+        fsdp_config = FSDPInferenceConfig(
+            enabled=True,
+            hsdp_replicate_dim=od_config.hsdp_replicate_dim,
+            hsdp_shard_dim=od_config.hsdp_shard_dim,
+            cpu_offload=od_config.enable_cpu_offload,
+            pin_cpu_memory=od_config.pin_cpu_memory,
+            param_dtype=od_config.dtype,
+        )
+
+        # Initialize model and load weights normally
+        # The model's load_weights handles weight mapping (QKV fusion, etc.)
+        model = initialize_model(od_config)
+        self.load_weights(model)
+
+        transformer = getattr(model, "transformer", None)
+        if transformer is None:
+            raise ValueError("Model has no transformer attribute for FSDP")
+
+        # Apply FSDP sharding to transformer (redistributes already-loaded weights)
+        apply_fsdp_to_model(transformer, fsdp_config)
+
+        return model
 
     def load_weights(self, model: nn.Module) -> None:
         weights_to_load = {name for name, _ in model.named_parameters()}
