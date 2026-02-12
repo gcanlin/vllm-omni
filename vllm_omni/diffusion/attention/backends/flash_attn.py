@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import os
+
 import torch
 from vllm.logger import init_logger
 
@@ -132,6 +134,10 @@ class FlashAttentionImpl(AttentionImpl):
                 "Otherwise, use SDPA backend by setting DIFFUSION_ATTENTION_BACKEND=TORCH_SDPA"
             )
 
+        # Get attention op_type from environment variable
+        # Supported values: 'prompt_flash_attn', 'fused_attn_score', 'ascend_laser_attention'
+        op_type = os.environ.get("MINDIE_SD_ATTENTION_TYPE", "fused_attn_score")
+
         attention_mask = attn_metadata.attn_mask if attn_metadata else None
         output = attention_forward(
             query,
@@ -139,7 +145,7 @@ class FlashAttentionImpl(AttentionImpl):
             value,
             attn_mask=attention_mask,
             opt_mode="manual",
-            op_type="fused_attn_score",
+            op_type=op_type,
             layout="BNSD",
         )
         return output
