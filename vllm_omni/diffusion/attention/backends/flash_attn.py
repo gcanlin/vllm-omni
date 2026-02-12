@@ -136,7 +136,7 @@ class FlashAttentionImpl(AttentionImpl):
 
         # Get attention op_type from environment variable
         # Supported values: 'prompt_flash_attn', 'fused_attn_score', 'ascend_laser_attention'
-        op_type = os.environ.get("MINDIE_SD_ATTENTION_TYPE", "fused_attn_score")
+        op_type = os.environ.get("MINDIE_SD_FA_TYPE", "fused_attn_score")
 
         attention_mask = attn_metadata.attn_mask if attn_metadata else None
         output = attention_forward(
