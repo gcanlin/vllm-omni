@@ -333,7 +333,16 @@ _sp_plan = {
 
 **Problem:** `SequenceParallelInput(auto_pad=False)` - auto_pad should be True to enable automatic sequence padding.
 
-**Solution:** In `SequenceParallelInput`, set `auto_pad=True` and add attention mask support:
+**Solution:** In `SequenceParallelInput`, set `auto_pad=True` and add attention mask support.
+
+> **Experimental Feature:** `auto_pad=True` is an experimental feature and may be changed in the future. We plan to improve this solution to involve minimal changes to model files. More details are [here](https://github.com/vllm-project/vllm-omni/issues/1324).
+
+**Constraints of auto_pad:**
+
+| Constraint | Description |
+|------------|-------------|
+| **Attention Backend Compatibility** | The attention backends must support `attention_mask`. Currently only `TORCH_SDPA` and `FLASH_ATTN` (default for diffusion models) are supported. |
+| **Ring Attention Limitation** | Ring attention does not support `attention_mask`. Therefore, when using `auto_pad=True`, the combination of Ulysses + Ring attention is not feasible. |
 
 1. Enable `auto_pad=True` for all sequence-dimension inputs in `_sp_plan`:
 ```python
@@ -375,7 +384,6 @@ While `auto_pad` enables generation for irregular resolutions, be aware of poten
 | Aspect | Impact |
 |--------|--------|
 | **Training Distribution** | Models perform best on aspect ratios seen during training (e.g., 1:1, 16:9, 4:3). Unusual ratios like 700x400 (1.75:1) may produce lower quality results. |
-| **Sequence Length** | Very long sequences (e.g., 70K+ tokens) can cause attention pattern degradation and numerical instability. |
 | **Padding Overhead** | Padded positions consume compute even when masked. For best efficiency, prefer resolutions divisible by `sp_size`. |
 
 **Recommendations for users:**
