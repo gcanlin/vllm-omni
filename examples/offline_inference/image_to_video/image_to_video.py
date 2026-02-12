@@ -81,6 +81,24 @@ def parse_args() -> argparse.Namespace:
         help="Enable layerwise (blockwise) offloading on DiT modules.",
     )
     parser.add_argument(
+        "--ulysses-degree",
+        type=int,
+        default=1,
+        help="Number of GPUs used for ulysses sequence parallelism.",
+    )
+    parser.add_argument(
+        "--ring-degree",
+        type=int,
+        default=1,
+        help="Number of GPUs used for ring sequence parallelism.",
+    )
+    parser.add_argument(
+        "--tensor-parallel-size",
+        type=int,
+        default=1,
+        help="Number of GPUs used for tensor parallelism (TP) inside the DiT.",
+    )
+    parser.add_argument(
         "--cfg-parallel-size",
         type=int,
         default=1,
@@ -91,6 +109,23 @@ def parse_args() -> argparse.Namespace:
         "--enforce-eager",
         action="store_true",
         help="Disable torch.compile and force eager execution.",
+    )
+    parser.add_argument(
+        "--use-fsdp-inference",
+        action="store_true",
+        help="Enable FSDP inference to shard model across GPUs for memory reduction.",
+    )
+    parser.add_argument(
+        "--hsdp-shard-dim",
+        type=int,
+        default=-1,
+        help="HSDP shard dimension. -1 for auto (world_size / replicate_dim).",
+    )
+    parser.add_argument(
+        "--hsdp-replicate-dim",
+        type=int,
+        default=1,
+        help="HSDP replicate dimension. Default 1 for pure sharding.",
     )
     return parser.parse_args()
 
@@ -128,7 +163,10 @@ def main():
     # Check if profiling is requested via environment variable
     profiler_enabled = bool(os.getenv("VLLM_TORCH_PROFILER_DIR"))
     parallel_config = DiffusionParallelConfig(
+        ulysses_degree=args.ulysses_degree,
+        ring_degree=args.ring_degree,
         cfg_parallel_size=args.cfg_parallel_size,
+        tensor_parallel_size=args.tensor_parallel_size,
     )
     omni = Omni(
         model=args.model,
@@ -140,6 +178,9 @@ def main():
         enable_cpu_offload=args.enable_cpu_offload,
         parallel_config=parallel_config,
         enforce_eager=args.enforce_eager,
+        use_fsdp_inference=args.use_fsdp_inference,
+        hsdp_shard_dim=args.hsdp_shard_dim,
+        hsdp_replicate_dim=args.hsdp_replicate_dim,
     )
 
     if profiler_enabled:

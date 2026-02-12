@@ -66,5 +66,9 @@ Key arguments:
 - `--vae-use-tiling`: Enable VAE tiling for memory optimization.
 - `--cfg-parallel-size`: set it to 2 to enable CFG Parallel. See more examples in [`user_guide`](../../../docs/user_guide/diffusion/parallelism_acceleration.md#cfg-parallel).
 - `--enable-cpu-offload`: enable CPU offloading for diffusion models.
+- `--use-fsdp-inference`: enable FSDP inference to shard model across GPUs for memory reduction.
+- `--hsdp-shard-dim`: HSDP shard dimension. -1 for auto (world_size / replicate_dim).
+- `--hsdp-replicate-dim`: HSDP replicate dimension. Default 1 for pure sharding.
+
 
 > ℹ️ If you encounter OOM errors, try using `--vae-use-slicing` and `--vae-use-tiling` to reduce memory usage.
