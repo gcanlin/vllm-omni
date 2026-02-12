@@ -415,16 +415,37 @@ class OmniDiffusionConfig:
 
         if self.num_gpus is None:
             if self.use_fsdp_inference and self.hsdp_shard_dim > 0:
+                # FSDP mode: num_gpus = hsdp_replicate_dim * hsdp_shard_dim
                 self.num_gpus = self.hsdp_replicate_dim * self.hsdp_shard_dim
             elif self.parallel_config is not None:
                 self.num_gpus = self.parallel_config.world_size
             else:
                 self.num_gpus = 1
 
+        # Validate num_gpus against parallel_config
         if self.num_gpus < self.parallel_config.world_size:
             raise ValueError(
                 f"num_gpus ({self.num_gpus}) < parallel_config.world_size ({self.parallel_config.world_size})"
             )
+
+        # FSDP and other parallel config are independent
+        if self.use_fsdp_inference:
+            if self.hsdp_shard_dim == -1:
+                # Default: shard across entire world
+                self.hsdp_shard_dim = self.num_gpus // self.hsdp_replicate_dim
+
+            expected_world = self.hsdp_replicate_dim * self.hsdp_shard_dim
+            if expected_world != self.num_gpus:
+                logger.warning(
+                    "FSDP: hsdp_replicate_dim(%d) * hsdp_shard_dim(%d) = %d != num_gpus(%d), "
+                    "auto-adjusting hsdp_shard_dim to %d",
+                    self.hsdp_replicate_dim,
+                    self.hsdp_shard_dim,
+                    expected_world,
+                    self.num_gpus,
+                    self.num_gpus // self.hsdp_replicate_dim,
+                )
+                self.hsdp_shard_dim = self.num_gpus // self.hsdp_replicate_dim
 
         # Convert string dtype to torch.dtype if needed
         if isinstance(self.dtype, str):

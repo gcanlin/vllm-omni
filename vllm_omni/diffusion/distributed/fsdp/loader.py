@@ -33,7 +33,7 @@ def apply_fsdp_to_model(
 
     Args:
         model: Model instance with weights already loaded
-        fsdp_config: FSDP configuration
+        fsdp_config: FSDP configuration with HSDP mesh dimensions
 
     Returns:
         FSDP-wrapped model ready for inference
@@ -46,6 +46,7 @@ def apply_fsdp_to_model(
 
     hsdp_replicate_dim = fsdp_config.hsdp_replicate_dim
     hsdp_shard_dim = fsdp_config.hsdp_shard_dim
+
     if hsdp_shard_dim == -1:
         hsdp_shard_dim = world_size // hsdp_replicate_dim
 
@@ -70,6 +71,8 @@ def apply_fsdp_to_model(
     )
 
     device_type = current_omni_platform.device_type
+
+    # Default (replicate=1, shard=world_size) = FULL_SHARD
     device_mesh = init_device_mesh(
         device_type,
         mesh_shape=(hsdp_replicate_dim, hsdp_shard_dim),

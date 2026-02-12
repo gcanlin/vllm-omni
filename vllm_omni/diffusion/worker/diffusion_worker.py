@@ -98,29 +98,32 @@ class DiffusionWorker:
             init_distributed_environment(world_size=world_size, rank=rank)
             logger.info(f"Worker {self.rank}: Initialized device and distributed environment.")
 
+            # Initialize model parallel groups
+            parallel_config = self.od_config.parallel_config
+
             if self.od_config.use_fsdp_inference:
-                # For FSDP, use data_parallel_size=world_size to match distributed setup
-                # FSDP manages its own device mesh for model sharding
-                initialize_model_parallel(
-                    data_parallel_size=world_size,
-                    cfg_parallel_size=1,
-                    sequence_parallel_size=1,
-                    ulysses_degree=1,
-                    ring_degree=1,
-                    tensor_parallel_size=1,
-                    pipeline_parallel_size=1,
+                # Log FSDP + parallel configuration
+                logger.info(
+                    "FSDP enabled with parallel config: "
+                    "hsdp_replicate_dim=%d, hsdp_shard_dim=%d, "
+                    "cfg_size=%d, sp_size=%d, ulysses=%d, ring=%d",
+                    self.od_config.hsdp_replicate_dim,
+                    self.od_config.hsdp_shard_dim,
+                    parallel_config.cfg_parallel_size,
+                    parallel_config.sequence_parallel_size,
+                    parallel_config.ulysses_degree,
+                    parallel_config.ring_degree,
                 )
-            else:
-                parallel_config = self.od_config.parallel_config
-                initialize_model_parallel(
-                    data_parallel_size=parallel_config.data_parallel_size,
-                    cfg_parallel_size=parallel_config.cfg_parallel_size,
-                    sequence_parallel_size=parallel_config.sequence_parallel_size,
-                    ulysses_degree=parallel_config.ulysses_degree,
-                    ring_degree=parallel_config.ring_degree,
-                    tensor_parallel_size=parallel_config.tensor_parallel_size,
-                    pipeline_parallel_size=parallel_config.pipeline_parallel_size,
-                )
+
+            initialize_model_parallel(
+                data_parallel_size=parallel_config.data_parallel_size,
+                cfg_parallel_size=parallel_config.cfg_parallel_size,
+                sequence_parallel_size=parallel_config.sequence_parallel_size,
+                ulysses_degree=parallel_config.ulysses_degree,
+                ring_degree=parallel_config.ring_degree,
+                tensor_parallel_size=parallel_config.tensor_parallel_size,
+                pipeline_parallel_size=parallel_config.pipeline_parallel_size,
+            )
             init_workspace_manager(self.device)
 
             # Create model runner and load model
