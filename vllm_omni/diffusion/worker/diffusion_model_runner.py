@@ -156,7 +156,6 @@ class DiffusionModelRunner:
         """Load weights into the pipeline."""
         return self.pipeline.load_weights(weights)
 
-    @torch.inference_mode()
     def execute_model(self, req: OmniDiffusionRequest) -> DiffusionOutput:
         """
         Execute a forward pass for the given requests.
@@ -166,37 +165,44 @@ class DiffusionModelRunner:
 
         Returns:
             DiffusionOutput with generated results.
+
+        Note:
+            We use torch.no_grad() instead of torch.inference_mode() because FSDP2's
+            fully_shard requires access to tensor version counters in pre_forward hooks,
+            which inference tensors do not track. This is a known PyTorch FSDP2 limitation.
         """
         assert self.pipeline is not None, "Model not loaded. Call load_model() first."
         if len(req.prompts) == 0:
             raise ValueError("Cannot execute model with empty request list")
 
-        # The manager handles the check for need_recv_cache internally
-        self.kv_transfer_manager.receive_kv_cache(req, target_device=getattr(self.pipeline, "device", None))
+        # Use torch.no_grad() instead of torch.inference_mode() for FSDP2 compatibility
+        with torch.no_grad():
+            # The manager handles the check for need_recv_cache internally
+            self.kv_transfer_manager.receive_kv_cache(req, target_device=getattr(self.pipeline, "device", None))
 
-        if req.sampling_params.generator is None and req.sampling_params.seed is not None:
-            if req.sampling_params.generator_device is not None:
-                gen_device = req.sampling_params.generator_device
-            elif self.device.type == "cpu":
-                gen_device = "cpu"
-            else:
-                gen_device = self.device
-            req.sampling_params.generator = torch.Generator(device=gen_device).manual_seed(req.sampling_params.seed)
+            if req.sampling_params.generator is None and req.sampling_params.seed is not None:
+                if req.sampling_params.generator_device is not None:
+                    gen_device = req.sampling_params.generator_device
+                elif self.device.type == "cpu":
+                    gen_device = "cpu"
+                else:
+                    gen_device = self.device
+                req.sampling_params.generator = torch.Generator(device=gen_device).manual_seed(req.sampling_params.seed)
 
-        # Refresh cache context if needed
-        if (
-            not getattr(req, "skip_cache_refresh", False)
-            and self.cache_backend is not None
-            and self.cache_backend.is_enabled()
-        ):
-            self.cache_backend.refresh(self.pipeline, req.sampling_params.num_inference_steps)
+            # Refresh cache context if needed
+            if (
+                not getattr(req, "skip_cache_refresh", False)
+                and self.cache_backend is not None
+                and self.cache_backend.is_enabled()
+            ):
+                self.cache_backend.refresh(self.pipeline, req.sampling_params.num_inference_steps)
 
-        with set_forward_context(vllm_config=self.vllm_config, omni_diffusion_config=self.od_config):
-            with record_function("pipeline_forward"):
-                output = self.pipeline.forward(req)
+            with set_forward_context(vllm_config=self.vllm_config, omni_diffusion_config=self.od_config):
+                with record_function("pipeline_forward"):
+                    output = self.pipeline.forward(req)
 
-            # NOTE:
-            if self.od_config.cache_backend == "cache_dit" and self.od_config.enable_cache_dit_summary:
-                cache_summary(self.pipeline, details=True)
+                # NOTE:
+                if self.od_config.cache_backend == "cache_dit" and self.od_config.enable_cache_dit_summary:
+                    cache_summary(self.pipeline, details=True)
 
-        return output
+            return output

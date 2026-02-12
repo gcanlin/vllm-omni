@@ -233,9 +233,9 @@ class DiffusersPipelineLoader:
                 # Quantization does not happen in `load_weights` but after it
                 self.load_weights(model)
 
-                # Process weights after loading for quantization (e.g., FP8 online quantization)
-                # This is needed for vLLM's quantization methods that need to transform weights
-                self._process_weights_after_loading(model, target_device)
+            # Process weights after loading for quantization (e.g., FP8 online quantization)
+            # This is needed for vLLM's quantization methods that need to transform weights
+            self._process_weights_after_loading(model, target_device)
 
             return model.eval()
 
