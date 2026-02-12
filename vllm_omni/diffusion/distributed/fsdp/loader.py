@@ -4,7 +4,6 @@
 from collections.abc import Callable
 from typing import Any
 
-import torch
 import torch.distributed as dist
 from torch import nn
 from torch.distributed import DeviceMesh, init_device_mesh
@@ -51,8 +50,7 @@ def apply_fsdp_to_model(
         hsdp_shard_dim = world_size // hsdp_replicate_dim
 
     assert hsdp_replicate_dim * hsdp_shard_dim == world_size, (
-        f"HSDP dimensions ({hsdp_replicate_dim} × {hsdp_shard_dim}) "
-        f"must equal world_size ({world_size})"
+        f"HSDP dimensions ({hsdp_replicate_dim} × {hsdp_shard_dim}) must equal world_size ({world_size})"
     )
 
     logger.info(
@@ -81,9 +79,7 @@ def apply_fsdp_to_model(
 
     fsdp_shard_conditions = getattr(model, "_fsdp_shard_conditions", None)
     if not fsdp_shard_conditions:
-        raise ValueError(
-            f"Model {type(model).__name__} has no _fsdp_shard_conditions defined"
-        )
+        raise ValueError(f"Model {type(model).__name__} has no _fsdp_shard_conditions defined")
 
     # Apply FSDP sharding, this will automatically handle weight distribution
     shard_model(

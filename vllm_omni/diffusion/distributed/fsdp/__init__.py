@@ -7,8 +7,4 @@ from vllm_omni.diffusion.distributed.fsdp.loader import (
     shard_model,
 )
 
-__all__ = [
-    "FSDPInferenceConfig",
-    "apply_fsdp_to_model",
-    "shard_model"
-]
+__all__ = ["FSDPInferenceConfig", "apply_fsdp_to_model", "shard_model"]
