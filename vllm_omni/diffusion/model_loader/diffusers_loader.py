@@ -308,11 +308,20 @@ class DiffusersPipelineLoader:
         model = initialize_model(od_config)
         self.load_weights(model)
 
+        # Collect all transformers to shard (some models have transformer_2 for MoE)
+        transformers_to_shard = []
         transformer = getattr(model, "transformer", None)
         if transformer is None:
             raise ValueError("Model has no transformer attribute for FSDP")
+        transformers_to_shard.append(("transformer", transformer))
 
-        # Apply FSDP sharding to transformer (redistributes already-loaded weights)
-        apply_fsdp_to_model(transformer, fsdp_config)
+        # Check for transformer_2 (MoE two-stage models like Wan2.2-I2V)
+        transformer_2 = getattr(model, "transformer_2", None)
+        if transformer_2 is not None:
+            transformers_to_shard.append(("transformer_2", transformer_2))
 
+        # Apply FSDP sharding to all transformers
+        for name, trans in transformers_to_shard:
+            logger.debug("Applying FSDP to %s", name)
+            apply_fsdp_to_model(trans, fsdp_config)
         return model
