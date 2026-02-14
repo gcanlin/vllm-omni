@@ -385,3 +385,32 @@ class OmniNPUModelRunner(OmniGPUModelRunner, NPUModelRunner):
             model_output = self._all_gather_hidden_states_and_aux(model_output)
 
         return model_output
+
+    def _talker_mtp_forward(self, decode_req_ids: list[str], inputs_embeds: torch.Tensor) -> None:
+        decode_batch_size = len(decode_req_ids)
+        if decode_batch_size == 0:
+            return
+        _cudagraph_mode, batch_desc, _, _, _ = self._determine_batch_execution_and_padding(
+            num_tokens=decode_batch_size,
+            num_reqs=decode_batch_size,
+            num_scheduled_tokens_np=np.ones(decode_batch_size, dtype=np.int32),
+            max_num_scheduled_tokens=1,
+            use_cascade_attn=False,
+        )
+        num_tokens_padded = batch_desc.num_tokens
+        req_input_ids = self.talker_mtp_input_ids.gpu[:num_tokens_padded]
+        req_embeds = self.talker_mtp_inputs_embeds.gpu[:num_tokens_padded]
+        last_talker_hidden = self.last_talker_hidden.gpu[:num_tokens_padded]
+        text_step = self.text_step.gpu[:num_tokens_padded]
+        with set_ascend_forward_context(
+            None, self.vllm_config, cudagraph_runtime_mode=_cudagraph_mode, batch_descriptor=batch_desc
+        ):
+            req_embeds, code_predictor_codes = self.talker_mtp(req_input_ids, req_embeds, last_talker_hidden, text_step)
+        # update the inputs_embeds and code_predictor_codes
+        code_predictor_codes_cpu = code_predictor_codes.detach().to("cpu").contiguous()
+        for idx, req_id in enumerate(decode_req_ids):
+            req_index = self.input_batch.req_ids.index(req_id)
+            start_offset = int(self.query_start_loc.cpu[req_index])
+            inputs_embeds[start_offset : start_offset + 1] = req_embeds[idx : idx + 1]
+            update_dict = {"code_predictor_codes": code_predictor_codes_cpu[idx : idx + 1]}
+            self._merge_additional_information_update(req_id, update_dict)
