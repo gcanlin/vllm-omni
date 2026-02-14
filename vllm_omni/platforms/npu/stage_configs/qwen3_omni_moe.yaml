@@ -7,7 +7,7 @@
 stage_args:
   - stage_id: 0
     runtime:
-      devices: "0,1,2,3"
+      devices: "0,1"
       max_batch_size: 1
     engine_args:
       model_stage: thinker
@@ -21,7 +21,7 @@ stage_args:
       distributed_executor_backend: "mp"
       enable_prefix_caching: false
       hf_config_name: thinker_config
-      tensor_parallel_size: 4
+      tensor_parallel_size: 2
     final_output: true
     final_output_type: text
     is_comprehension: true
@@ -36,7 +36,7 @@ stage_args:
 
   - stage_id: 1
     runtime:
-       devices: "4"
+       devices: "2"
        max_batch_size: 1
     engine_args:
        model_stage: talker
@@ -66,7 +66,7 @@ stage_args:
 
   - stage_id: 2
     runtime:
-      devices: "0"
+      devices: "3"
       max_batch_size: 1
     engine_args:
       model_stage: code2wav
