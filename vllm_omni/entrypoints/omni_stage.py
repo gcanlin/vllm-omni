@@ -39,7 +39,6 @@ from vllm_omni.distributed.ray_utils.utils import kill_ray_actor, start_ray_acto
 from vllm_omni.engine.arg_utils import AsyncOmniEngineArgs
 from vllm_omni.entrypoints.async_omni_diffusion import AsyncOmniDiffusion
 from vllm_omni.entrypoints.async_omni_llm import AsyncOmniLLM
-from vllm_omni.entrypoints.log_utils import count_tokens_from_outputs
 from vllm_omni.entrypoints.omni_diffusion import OmniDiffusion
 from vllm_omni.entrypoints.omni_llm import OmniLLM
 from vllm_omni.entrypoints.stage_utils import (
@@ -50,7 +49,9 @@ from vllm_omni.entrypoints.stage_utils import (
     maybe_dump_to_shm,
     set_stage_devices,
 )
+from vllm_omni.entrypoints.utils import detect_pid_host
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniPromptType, OmniSamplingParams, OmniTokensPrompt
+from vllm_omni.metrics import count_tokens_from_outputs
 from vllm_omni.outputs import OmniRequestOutput
 
 logger = init_logger(__name__)
@@ -66,12 +67,21 @@ def _sequential_init_lock(engine_args: dict[str, Any], stage_init_timeout: int =
     """
     from vllm_omni.worker.gpu_memory_utils import is_process_scoped_memory_available
 
-    if is_process_scoped_memory_available():
-        logger.debug("NVML process-scoped memory available — concurrent init is safe, skipping locks")
+    nvml_available = is_process_scoped_memory_available()
+    pid_host = detect_pid_host()
+
+    if nvml_available and pid_host:
+        logger.info(
+            "NVML process-scoped memory available and PID host is available — concurrent init is safe, skipping locks"
+        )
         yield
         return
-
-    logger.debug("NVML unavailable — using sequential init locks")
+    else:
+        logger.info(
+            "Using sequential init locks (nvml_available=%s, pid_host=%s)",
+            nvml_available,
+            pid_host,
+        )
 
     from vllm_omni.platforms import current_omni_platform
 
@@ -195,7 +205,7 @@ def _sequential_init_lock(engine_args: dict[str, Any], stage_init_timeout: int =
 
 
 def _resolve_worker_cls(engine_args: dict[str, Any]) -> None:
-    worker_type = engine_args.pop("worker_type", None)
+    worker_type = engine_args.get("worker_type", None)
     if not worker_type:
         return
     if engine_args.get("worker_cls"):
@@ -844,7 +854,7 @@ def _stage_worker(
             try:
                 sent_ts = float(t.get("sent_ts", None)) if isinstance(t, dict) else None
                 if sent_ts is not None:
-                    _in_flight_ms_by_rid[rid] = (_recv_dequeue_ts - sent_ts) * 1000.0
+                    _in_flight_ms_by_rid[rid] = max(0.0, (_recv_dequeue_ts - sent_ts) * 1000.0)
                 else:
                     _in_flight_ms_by_rid[rid] = 0.0
             except Exception:
@@ -1116,6 +1126,9 @@ async def _stage_worker_async(
                 vllm_config=vllm_config,
                 usage_context=usage_context,
                 engine_args=omni_engine_args,
+                disable_log_stats=bool(
+                    engine_args.get("disable_log_stats", True) or getattr(omni_engine_args, "disable_log_stats", True)
+                ),
             )
     omni_stage.set_async_engine(stage_engine)
     if hasattr(omni_stage.async_engine, "log_stats") and omni_stage.async_engine.log_stats:
@@ -1209,7 +1222,7 @@ async def _stage_worker_async(
         try:
             sent_ts = float(task.get("sent_ts", None)) if isinstance(task, dict) else None
             if sent_ts is not None:
-                _in_flight_ms_by_rid[rid] = (_recv_dequeue_ts - sent_ts) * 1000.0
+                _in_flight_ms_by_rid[rid] = max(0.0, (_recv_dequeue_ts - sent_ts) * 1000.0)
             else:
                 _in_flight_ms_by_rid[rid] = 0.0
         except Exception:
@@ -1391,13 +1404,11 @@ def make_request_stats(
     rx_transfer_bytes: int,
     rx_in_flight_time_ms: float,
 ):
-    from vllm_omni.entrypoints.log_utils import (
-        StageRequestMetrics,
-    )
+    from vllm_omni.metrics import StageRequestStats
 
     num_tokens_in = count_prompt_tokens_from_outputs(req_output)
     num_tokens_out = count_tokens_from_outputs(req_output)
-    return StageRequestMetrics(
+    return StageRequestStats(
         num_tokens_in=num_tokens_in,
         num_tokens_out=num_tokens_out,
         stage_gen_time_ms=stage_gen_time_ms,
@@ -1411,9 +1422,9 @@ def make_request_stats(
 
 
 def make_stage_stats(_agg_total_tokens: int, _agg_total_gen_time_ms: float):
-    from vllm_omni.entrypoints.log_utils import StageStats
+    from vllm_omni.metrics import StageStats
 
-    return StageStats(total_token=_agg_total_tokens, total_gen_time=_agg_total_gen_time_ms)
+    return StageStats(total_token=_agg_total_tokens, total_gen_time_ms=_agg_total_gen_time_ms)
 
 
 def output_strip(r_output: RequestOutput | OmniRequestOutput, omni_stage: OmniStage):
