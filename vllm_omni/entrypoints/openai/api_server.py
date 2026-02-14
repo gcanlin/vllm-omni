@@ -20,7 +20,7 @@ from typing import Annotated, Any, cast
 import httpx
 import vllm.envs as envs
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from PIL import Image
 from starlette.datastructures import State
 from starlette.routing import Route
@@ -1499,8 +1499,7 @@ async def start_profile(raw_request: Request):
     except Exception as e:
         logger.exception("Failed to start profiler: %s", e)
         raise HTTPException(
-            status_code=HTTPStatus.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to start profiler: {str(e)}"
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR.value, detail=f"Failed to start profiler: {str(e)}"
         )
 
 
@@ -1515,8 +1514,7 @@ async def stop_profile(raw_request: Request):
     except Exception as e:
         logger.exception("Failed to stop profiler: %s", e)
         raise HTTPException(
-            status_code=HTTPStatus.INTERNAL_SERVER_ERROR.value,
-            detail=f"Failed to stop profiler: {str(e)}"
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR.value, detail=f"Failed to stop profiler: {str(e)}"
         )
 
 
