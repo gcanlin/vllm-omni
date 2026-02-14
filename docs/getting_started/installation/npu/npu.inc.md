@@ -71,7 +71,7 @@ git checkout e2175d9c7e62b437391dfee996b1375674ba7c18
 
 # Install vLLM-Omni from the latest main branch
 cd ../vllm-omni
-git clone -b https://github.com/vllm-project/vllm-omni.git
+git clone https://github.com/vllm-project/vllm-omni.git
 pip install -v -e . --no-build-isolation
 # or VLLM_OMNI_TARGET_DEVICE=npu pip install -v -e .
 export VLLM_WORKER_MULTIPROC_METHOD=spawn

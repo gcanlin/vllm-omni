@@ -28,7 +28,7 @@ logger = init_logger(__name__)
 
 class OmniNPUModelRunner(OmniGPUModelRunner, NPUModelRunner):
     def load_model(self, *args, **kwargs) -> None:
-        super().load_model(*args, **kwargs)
+        NPUModelRunner.load_model(*args, **kwargs)
         # Initialize enable_sp cache to avoid get_current_vllm_config() error
         # in _pad_for_sequence_parallelism during execute_model.
         # This is a workaround for vllm-ascend not passing vllm_config to enable_sp().
