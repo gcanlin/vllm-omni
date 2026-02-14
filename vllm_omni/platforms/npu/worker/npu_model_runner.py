@@ -28,7 +28,7 @@ logger = init_logger(__name__)
 
 class OmniNPUModelRunner(OmniGPUModelRunner, NPUModelRunner):
     def load_model(self, *args, **kwargs) -> None:
-        NPUModelRunner.load_model(*args, **kwargs)
+        NPUModelRunner.load_model(self, *args, **kwargs)
         # Initialize enable_sp cache to avoid get_current_vllm_config() error
         # in _pad_for_sequence_parallelism during execute_model.
         # This is a workaround for vllm-ascend not passing vllm_config to enable_sp().
@@ -403,7 +403,7 @@ class OmniNPUModelRunner(OmniGPUModelRunner, NPUModelRunner):
         last_talker_hidden = self.last_talker_hidden.gpu[:num_tokens_padded]
         text_step = self.text_step.gpu[:num_tokens_padded]
         with set_ascend_forward_context(
-            None, self.vllm_config, cudagraph_runtime_mode=_cudagraph_mode, batch_descriptor=batch_desc
+            None, self.vllm_config, aclgraph_runtime_mode=_cudagraph_mode, batch_descriptor=batch_desc
         ):
             req_embeds, code_predictor_codes = self.talker_mtp(req_input_ids, req_embeds, last_talker_hidden, text_step)
         # update the inputs_embeds and code_predictor_codes
