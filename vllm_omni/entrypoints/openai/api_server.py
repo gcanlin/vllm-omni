@@ -1491,19 +1491,33 @@ def apply_stage_default_sampling_params(
 @router.post("/start_profile")
 async def start_profile(raw_request: Request):
     """Start profiling for the engine."""
-    logger.info("Starting profiler...")
-    await raw_request.app.state.engine_client.start_profile()
-    logger.info("Profiler started.")
-    return Response(status_code=200)
+    try:
+        logger.info("Starting profiler...")
+        result = await raw_request.app.state.engine_client.start_profile()
+        logger.info("Profiler started.")
+        return JSONResponse(content=result)
+    except Exception as e:
+        logger.exception("Failed to start profiler: %s", e)
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR.value,
+            detail=f"Failed to start profiler: {str(e)}"
+        )
 
 
 @router.post("/stop_profile")
 async def stop_profile(raw_request: Request):
     """Stop profiling for the engine."""
-    logger.info("Stopping profiler...")
-    await raw_request.app.state.engine_client.stop_profile()
-    logger.info("Profiler stopped.")
-    return Response(status_code=200)
+    try:
+        logger.info("Stopping profiler...")
+        result = await raw_request.app.state.engine_client.stop_profile()
+        logger.info("Profiler stopped.")
+        return JSONResponse(content=result)
+    except Exception as e:
+        logger.exception("Failed to stop profiler: %s", e)
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR.value,
+            detail=f"Failed to stop profiler: {str(e)}"
+        )
 
 
 async def _run_video_generation(
