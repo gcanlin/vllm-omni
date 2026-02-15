@@ -106,11 +106,13 @@ class TestDiffusionParallelConfigHSDP:
 
     def test_from_dict_with_hsdp(self):
         """Test creating config from dict with HSDP settings."""
-        config = DiffusionParallelConfig.from_dict({
-            "ulysses_degree": 4,
-            "use_hsdp": True,
-            "hsdp_replicate_size": 2,
-        })
+        config = DiffusionParallelConfig.from_dict(
+            {
+                "ulysses_degree": 4,
+                "use_hsdp": True,
+                "hsdp_replicate_size": 2,
+            }
+        )
         assert config.use_hsdp is True
         assert config.hsdp_replicate_size == 2
         assert config.hsdp_shard_size == 2  # auto: 4 // 2
