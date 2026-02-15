@@ -111,21 +111,27 @@ def parse_args() -> argparse.Namespace:
         help="Disable torch.compile and force eager execution.",
     )
     parser.add_argument(
-        "--use-fsdp-inference",
+        "--use-hsdp",
         action="store_true",
-        help="Enable FSDP inference to shard model across GPUs for memory reduction.",
+        help=("Enable Hybrid Sharded Data Parallel to shard model weights across GPUs. "),
     )
     parser.add_argument(
-        "--hsdp-shard-dim",
+        "--hsdp-shard-size",
         type=int,
         default=-1,
-        help="HSDP shard dimension. -1 for auto (world_size / replicate_dim).",
+        help=(
+            "Number of GPUs to shard model weights across within each replica group. "
+            "-1 (default) auto-calculates as world_size / replicate_size. "
+        ),
     )
     parser.add_argument(
-        "--hsdp-replicate-dim",
+        "--hsdp-replicate-size",
         type=int,
         default=1,
-        help="HSDP replicate dimension. Default 1 for pure sharding.",
+        help=(
+            "Number of replica groups for HSDP. Each replica holds a full sharded copy. "
+            "Default 1 means pure sharding (no replication). "
+        ),
     )
     return parser.parse_args()
 
@@ -167,6 +173,9 @@ def main():
         ring_degree=args.ring_degree,
         cfg_parallel_size=args.cfg_parallel_size,
         tensor_parallel_size=args.tensor_parallel_size,
+        use_hsdp=args.use_hsdp,
+        hsdp_shard_size=args.hsdp_shard_size,
+        hsdp_replicate_size=args.hsdp_replicate_size,
     )
     omni = Omni(
         model=args.model,
@@ -178,9 +187,6 @@ def main():
         enable_cpu_offload=args.enable_cpu_offload,
         parallel_config=parallel_config,
         enforce_eager=args.enforce_eager,
-        use_fsdp_inference=args.use_fsdp_inference,
-        hsdp_shard_dim=args.hsdp_shard_dim,
-        hsdp_replicate_dim=args.hsdp_replicate_dim,
     )
 
     if profiler_enabled:
