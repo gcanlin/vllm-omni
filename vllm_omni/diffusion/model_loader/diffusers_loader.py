@@ -307,6 +307,8 @@ class DiffusersPipelineLoader:
         # Initialize model and load weights normally
         # The model's load_weights handles weight mapping (QKV fusion, etc.)
         model = initialize_model(od_config)
+        # Ensure model is on a well-defined device (CPU) before loading weights and applying FSDP
+        model = model.to(torch.device("cpu"))
         self.load_weights(model)
 
         # Collect all transformers to shard (some models have transformer_2 for MoE)

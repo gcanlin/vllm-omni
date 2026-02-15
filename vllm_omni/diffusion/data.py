@@ -107,6 +107,8 @@ class DiffusionParallelConfig:
 
         # Auto-calculate hsdp_shard_size if not specified
         if self.use_hsdp and self.hsdp_shard_size == -1:
+            if self.hsdp_replicate_size <= 0:
+                raise ValueError("hsdp_replicate_size must be > 0")
             self.hsdp_shard_size = self.world_size // self.hsdp_replicate_size
 
     @classmethod
@@ -455,10 +457,11 @@ class OmniDiffusionConfig:
             # If it's neither dict nor DiffusionParallelConfig, use default config
             self.parallel_config = DiffusionParallelConfig()
 
-        if self.num_gpus is None:
+        if self.parallel_config is not None:
             self.num_gpus = self.parallel_config.world_size
+        else:
+            self.num_gpus = 1
 
-        # Validate num_gpus against parallel_config
         if self.num_gpus < self.parallel_config.world_size:
             raise ValueError(
                 f"num_gpus ({self.num_gpus}) < parallel_config.world_size ({self.parallel_config.world_size})"
