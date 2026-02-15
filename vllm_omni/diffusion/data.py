@@ -457,10 +457,11 @@ class OmniDiffusionConfig:
             # If it's neither dict nor DiffusionParallelConfig, use default config
             self.parallel_config = DiffusionParallelConfig()
 
-        if self.parallel_config is not None:
-            self.num_gpus = self.parallel_config.world_size
-        else:
-            self.num_gpus = 1
+        if self.num_gpus is None:
+            if self.parallel_config is not None:
+                self.num_gpus = self.parallel_config.world_size
+            else:
+                self.num_gpus = 1
 
         if self.num_gpus < self.parallel_config.world_size:
             raise ValueError(
