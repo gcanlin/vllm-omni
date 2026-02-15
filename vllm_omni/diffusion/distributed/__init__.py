@@ -2,9 +2,9 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Distributed utilities for vLLM-Omni diffusion models."""
 
-from vllm_omni.diffusion.distributed.fsdp import (
-    FSDPInferenceConfig,
-    apply_fsdp_to_model,
+from vllm_omni.diffusion.distributed.hsdp import (
+    HSDPInferenceConfig,
+    apply_hsdp_to_model,
 )
 from vllm_omni.diffusion.distributed.sp_plan import (
     SequenceParallelConfig,
@@ -39,6 +39,6 @@ __all__ = [
     "sp_shard_with_padding",
     "ShardingValidator",
     "get_sharding_validator",
-    "FSDPInferenceConfig",
-    "apply_fsdp_to_model",
+    "HSDPInferenceConfig",
+    "apply_hsdp_to_model",
 ]

@@ -52,17 +52,17 @@ class DiffusionParallelConfig:
     vae_patch_parallel_size: int = 1
     """Number of ranks used for VAE patch/tile parallelism (decode/encode)."""
 
-    fsdp_enabled: bool = False
-    """Enable FSDP (Fully Sharded Data Parallel) for model weight sharding."""
+    use_hsdp: bool = False
+    """Enable Hybrid Sharded Data Parallel (HSDP) for model weight sharding."""
 
-    fsdp_shard_dim: int = -1
-    """Number of GPUs to shard weights across. -1 means shard across entire world_size."""
+    hsdp_shard_size: int = -1
+    """Number of GPUs to shard weights across within each replica group. -1 means auto-calculate."""
 
-    fsdp_replicate_dim: int = 1
-    """Number of replicas for HSDP. Each replica has a full copy of sharded weights."""
+    hsdp_replicate_size: int = 1
+    """Number of replica groups for HSDP. Each replica holds a full sharded copy."""
 
-    fsdp_cpu_offload: bool = False
-    """Offload FSDP parameters to CPU when not in use."""
+    hsdp_cpu_offload: bool = False
+    """Offload HSDP parameters to CPU when not in use."""
 
     @model_validator(mode="after")
     def _validate_parallel_config(self) -> Self:
@@ -81,13 +81,13 @@ class DiffusionParallelConfig:
             f" but got {self.sequence_parallel_size} != {self.ulysses_degree} * {self.ring_degree}"
         )
 
-        # Validate FSDP configuration
-        if self.fsdp_enabled:
-            assert self.fsdp_replicate_dim > 0, "FSDP replicate dim must be > 0"
-            if self.fsdp_shard_dim > 0:
-                expected_world = self.fsdp_replicate_dim * self.fsdp_shard_dim
+        # Validate HSDP configuration
+        if self.use_hsdp:
+            assert self.hsdp_replicate_size > 0, "HSDP replicate size must be > 0"
+            if self.hsdp_shard_size > 0:
+                expected_world = self.hsdp_replicate_size * self.hsdp_shard_size
                 assert expected_world == self.world_size, (
-                    f"FSDP dimensions ({self.fsdp_replicate_dim} × {self.fsdp_shard_dim}) "
+                    f"HSDP dimensions ({self.hsdp_replicate_size} × {self.hsdp_shard_size}) "
                     f"must equal world_size ({self.world_size})"
                 )
         return self
@@ -105,9 +105,9 @@ class DiffusionParallelConfig:
             * self.cfg_parallel_size
         )
 
-        # Auto-calculate fsdp_shard_dim if not specified
-        if self.fsdp_enabled and self.fsdp_shard_dim == -1:
-            self.fsdp_shard_dim = self.world_size // self.fsdp_replicate_dim
+        # Auto-calculate hsdp_shard_size if not specified
+        if self.use_hsdp and self.hsdp_shard_size == -1:
+            self.hsdp_shard_size = self.world_size // self.hsdp_replicate_size
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "DiffusionParallelConfig":

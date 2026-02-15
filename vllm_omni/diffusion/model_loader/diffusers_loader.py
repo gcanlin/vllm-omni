@@ -26,7 +26,7 @@ from vllm.utils.import_utils import resolve_obj_by_qualname
 from vllm.utils.torch_utils import set_default_torch_dtype
 
 from vllm_omni.diffusion.data import OmniDiffusionConfig
-from vllm_omni.diffusion.distributed.fsdp import FSDPInferenceConfig
+from vllm_omni.diffusion.distributed.hsdp import HSDPInferenceConfig
 from vllm_omni.diffusion.registry import initialize_model
 
 logger = init_logger(__name__)
@@ -220,8 +220,8 @@ class DiffusersPipelineLoader:
         """Load a model with the given configurations."""
         target_device = torch.device(load_device)
         with set_default_torch_dtype(od_config.dtype):
-            if od_config.parallel_config.fsdp_enabled:
-                model = self._load_model_with_fsdp(od_config)
+            if od_config.parallel_config.use_hsdp:
+                model = self._load_model_with_hsdp(od_config)
             else:
                 with target_device:
                     if load_format == "default":
@@ -283,23 +283,23 @@ class DiffusersPipelineLoader:
         #             f"checkpoint: {weights_not_loaded}"
         #         )
 
-    def _load_model_with_fsdp(self, od_config: OmniDiffusionConfig) -> nn.Module:
-        """Load model with FSDP sharding for inference.
+    def _load_model_with_hsdp(self, od_config: OmniDiffusionConfig) -> nn.Module:
+        """Load model with HSDP sharding for inference.
 
         The pipeline contains multiple components (text_encoder, VAE, transformer).
-        Only the transformer is sharded with FSDP. Other components are loaded normally.
+        Only the transformer is sharded with HSDP. Other components are loaded normally.
 
         Approach: Load weights first using model's load_weights (handles QKV fusion etc.),
-        then apply FSDP sharding to redistribute weights across GPUs.
+        then apply HSDP sharding to redistribute weights across GPUs.
         """
-        from vllm_omni.diffusion.distributed.fsdp import apply_fsdp_to_model
+        from vllm_omni.diffusion.distributed.hsdp import apply_hsdp_to_model
 
         parallel_config = od_config.parallel_config
-        fsdp_config = FSDPInferenceConfig(
+        hsdp_config = HSDPInferenceConfig(
             enabled=True,
-            fsdp_replicate_dim=parallel_config.fsdp_replicate_dim,
-            fsdp_shard_dim=parallel_config.fsdp_shard_dim,
-            cpu_offload=parallel_config.fsdp_cpu_offload,
+            hsdp_replicate_size=parallel_config.hsdp_replicate_size,
+            hsdp_shard_size=parallel_config.hsdp_shard_size,
+            cpu_offload=parallel_config.hsdp_cpu_offload,
             pin_cpu_memory=od_config.pin_cpu_memory,
             param_dtype=od_config.dtype,
         )
@@ -313,7 +313,7 @@ class DiffusersPipelineLoader:
         transformers_to_shard = []
         transformer = getattr(model, "transformer", None)
         if transformer is None:
-            raise ValueError("Model has no transformer attribute for FSDP")
+            raise ValueError("Model has no transformer attribute for HSDP")
         transformers_to_shard.append(("transformer", transformer))
 
         # Check for transformer_2 (MoE two-stage models like Wan2.2-I2V)
@@ -321,8 +321,8 @@ class DiffusersPipelineLoader:
         if transformer_2 is not None:
             transformers_to_shard.append(("transformer_2", transformer_2))
 
-        # Apply FSDP sharding to all transformers
+        # Apply HSDP sharding to all transformers
         for name, trans in transformers_to_shard:
-            logger.debug("Applying FSDP to %s", name)
-            apply_fsdp_to_model(trans, fsdp_config)
+            logger.debug("Applying HSDP to %s", name)
+            apply_hsdp_to_model(trans, hsdp_config)
         return model

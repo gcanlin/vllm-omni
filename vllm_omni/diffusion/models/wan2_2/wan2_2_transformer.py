@@ -718,10 +718,10 @@ class WanTransformer3DModel(nn.Module):
 
     @staticmethod
     def _is_transformer_block(name: str, module) -> bool:
-        """Match transformer blocks for FSDP sharding (e.g., blocks.0, blocks.1)."""
+        """Match transformer blocks for HSDP sharding (e.g., blocks.0, blocks.1)."""
         return "blocks" in name and name.split(".")[-1].isdigit()
 
-    _fsdp_shard_conditions = [_is_transformer_block]
+    _hsdp_shard_conditions = [_is_transformer_block]
 
     # Sequence Parallelism for Wan (following diffusers' _cp_plan pattern)
     #

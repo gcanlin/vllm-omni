@@ -167,15 +167,15 @@ class DiffusionModelRunner:
             DiffusionOutput with generated results.
 
         Note:
-            We use torch.no_grad() instead of torch.inference_mode() because FSDP2's
+            We use torch.no_grad() instead of torch.inference_mode() because HSDP2's
             fully_shard requires access to tensor version counters in pre_forward hooks,
-            which inference tensors do not track. This is a known PyTorch FSDP2 limitation.
+            which inference tensors do not track. This is a known PyTorch HSDP2 limitation.
         """
         assert self.pipeline is not None, "Model not loaded. Call load_model() first."
         if len(req.prompts) == 0:
             raise ValueError("Cannot execute model with empty request list")
 
-        # Use torch.no_grad() instead of torch.inference_mode() for FSDP2 compatibility
+        # Use torch.no_grad() instead of torch.inference_mode() for HSDP2 compatibility
         with torch.no_grad():
             # The manager handles the check for need_recv_cache internally
             self.kv_transfer_manager.receive_kv_cache(req, target_device=getattr(self.pipeline, "device", None))
