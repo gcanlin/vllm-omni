@@ -2,8 +2,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 from collections.abc import Callable
-from typing import Any
 from dataclasses import dataclass
+from typing import Any
 
 import torch
 import torch.distributed as dist
@@ -19,6 +19,7 @@ from vllm.logger import init_logger
 from vllm_omni.platforms import current_omni_platform
 
 logger = init_logger(__name__)
+
 
 @dataclass
 class FSDPInferenceConfig:
