@@ -716,9 +716,12 @@ class WanTransformer3DModel(nn.Module):
         "to_qkv": ["to_q", "to_k", "to_v"],
     }
 
-    from vllm_omni.diffusion.models.wan2_2.fsdp_shard_conditions import WAN_FSDP_SHARD_CONDITIONS
+    @staticmethod
+    def _is_transformer_block(name: str, module) -> bool:
+        """Match transformer blocks for FSDP sharding (e.g., blocks.0, blocks.1)."""
+        return "blocks" in name and name.split(".")[-1].isdigit()
 
-    _fsdp_shard_conditions = WAN_FSDP_SHARD_CONDITIONS
+    _fsdp_shard_conditions = [_is_transformer_block]
 
     # Sequence Parallelism for Wan (following diffusers' _cp_plan pattern)
     #

@@ -52,6 +52,18 @@ class DiffusionParallelConfig:
     vae_patch_parallel_size: int = 1
     """Number of ranks used for VAE patch/tile parallelism (decode/encode)."""
 
+    fsdp_enabled: bool = False
+    """Enable FSDP (Fully Sharded Data Parallel) for model weight sharding."""
+
+    fsdp_shard_dim: int = -1
+    """Number of GPUs to shard weights across. -1 means shard across entire world_size."""
+
+    fsdp_replicate_dim: int = 1
+    """Number of replicas for HSDP. Each replica has a full copy of sharded weights."""
+
+    fsdp_cpu_offload: bool = False
+    """Offload FSDP parameters to CPU when not in use."""
+
     @model_validator(mode="after")
     def _validate_parallel_config(self) -> Self:
         """Validates the config relationships among the parallel strategies."""
@@ -68,6 +80,16 @@ class DiffusionParallelConfig:
             "Sequence parallel size must be equal to the product of ulysses degree and ring degree,"
             f" but got {self.sequence_parallel_size} != {self.ulysses_degree} * {self.ring_degree}"
         )
+
+        # Validate FSDP configuration
+        if self.fsdp_enabled:
+            assert self.fsdp_replicate_dim > 0, "FSDP replicate dim must be > 0"
+            if self.fsdp_shard_dim > 0:
+                expected_world = self.fsdp_replicate_dim * self.fsdp_shard_dim
+                assert expected_world == self.world_size, (
+                    f"FSDP dimensions ({self.fsdp_replicate_dim} × {self.fsdp_shard_dim}) "
+                    f"must equal world_size ({self.world_size})"
+                )
         return self
 
     def __post_init__(self) -> None:
@@ -82,6 +104,10 @@ class DiffusionParallelConfig:
             * self.ring_degree
             * self.cfg_parallel_size
         )
+
+        # Auto-calculate fsdp_shard_dim if not specified
+        if self.fsdp_enabled and self.fsdp_shard_dim == -1:
+            self.fsdp_shard_dim = self.world_size // self.fsdp_replicate_dim
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "DiffusionParallelConfig":
@@ -280,8 +306,6 @@ class OmniDiffusionConfig:
 
     num_gpus: int | None = None
 
-    hsdp_replicate_dim: int = 1
-    hsdp_shard_dim: int = -1
     dist_timeout: int | None = None  # timeout for torch.distributed
 
     # pipeline_config: PipelineConfig = field(default_factory=PipelineConfig, repr=False)
@@ -301,7 +325,6 @@ class OmniDiffusionConfig:
     # Layer-wise offloading (block-level offloading) parameters
     enable_layerwise_offload: bool = False
 
-    use_fsdp_inference: bool = False
     pin_cpu_memory: bool = True  # Use pinned memory for faster transfers when offloading
 
     # VAE memory optimization parameters
@@ -433,38 +456,13 @@ class OmniDiffusionConfig:
             self.parallel_config = DiffusionParallelConfig()
 
         if self.num_gpus is None:
-            if self.use_fsdp_inference and self.hsdp_shard_dim > 0:
-                # FSDP mode: num_gpus = hsdp_replicate_dim * hsdp_shard_dim
-                self.num_gpus = self.hsdp_replicate_dim * self.hsdp_shard_dim
-            elif self.parallel_config is not None:
-                self.num_gpus = self.parallel_config.world_size
-            else:
-                self.num_gpus = 1
+            self.num_gpus = self.parallel_config.world_size
 
         # Validate num_gpus against parallel_config
         if self.num_gpus < self.parallel_config.world_size:
             raise ValueError(
                 f"num_gpus ({self.num_gpus}) < parallel_config.world_size ({self.parallel_config.world_size})"
             )
-
-        # FSDP and other parallel config are independent
-        if self.use_fsdp_inference:
-            if self.hsdp_shard_dim == -1:
-                # Default: shard across entire world
-                self.hsdp_shard_dim = self.num_gpus // self.hsdp_replicate_dim
-
-            expected_world = self.hsdp_replicate_dim * self.hsdp_shard_dim
-            if expected_world != self.num_gpus:
-                logger.warning(
-                    "FSDP: hsdp_replicate_dim(%d) * hsdp_shard_dim(%d) = %d != num_gpus(%d), "
-                    "auto-adjusting hsdp_shard_dim to %d",
-                    self.hsdp_replicate_dim,
-                    self.hsdp_shard_dim,
-                    expected_world,
-                    self.num_gpus,
-                    self.num_gpus // self.hsdp_replicate_dim,
-                )
-                self.hsdp_shard_dim = self.num_gpus // self.hsdp_replicate_dim
 
         # Convert string dtype to torch.dtype if needed
         if isinstance(self.dtype, str):

@@ -177,11 +177,9 @@ class OmniBase:
             kwargs["dtype"] = str(kwargs["dtype"])
         cache_backend = kwargs.get("cache_backend", "none")
         cache_config = self._normalize_cache_config(cache_backend, kwargs.get("cache_config", None))
-        # Calculate devices based on parallel config or FSDP config
+        # Calculate devices based on parallel config
         num_devices = 1
-        if kwargs.get("use_fsdp_inference") and kwargs.get("hsdp_shard_dim", -1) > 0:
-            num_devices = kwargs.get("hsdp_replicate_dim", 1) * kwargs["hsdp_shard_dim"]
-        elif "parallel_config" in kwargs:
+        if "parallel_config" in kwargs:
             num_devices = kwargs["parallel_config"].world_size
         devices = ",".join(str(i) for i in range(num_devices))
         default_stage_cfg = [

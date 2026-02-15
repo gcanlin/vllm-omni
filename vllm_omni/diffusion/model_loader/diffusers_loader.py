@@ -220,7 +220,7 @@ class DiffusersPipelineLoader:
         """Load a model with the given configurations."""
         target_device = torch.device(load_device)
         with set_default_torch_dtype(od_config.dtype):
-            if od_config.use_fsdp_inference:
+            if od_config.parallel_config.fsdp_enabled:
                 model = self._load_model_with_fsdp(od_config)
             else:
                 with target_device:
@@ -292,13 +292,14 @@ class DiffusersPipelineLoader:
         Approach: Load weights first using model's load_weights (handles QKV fusion etc.),
         then apply FSDP sharding to redistribute weights across GPUs.
         """
-        from vllm_omni.diffusion.distributed.fsdp.loader import apply_fsdp_to_model
+        from vllm_omni.diffusion.distributed.fsdp import apply_fsdp_to_model
 
+        parallel_config = od_config.parallel_config
         fsdp_config = FSDPInferenceConfig(
             enabled=True,
-            hsdp_replicate_dim=od_config.hsdp_replicate_dim,
-            hsdp_shard_dim=od_config.hsdp_shard_dim,
-            cpu_offload=od_config.enable_cpu_offload,
+            fsdp_replicate_dim=parallel_config.fsdp_replicate_dim,
+            fsdp_shard_dim=parallel_config.fsdp_shard_dim,
+            cpu_offload=parallel_config.fsdp_cpu_offload,
             pin_cpu_memory=od_config.pin_cpu_memory,
             param_dtype=od_config.dtype,
         )

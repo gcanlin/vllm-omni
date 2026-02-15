@@ -3,7 +3,9 @@
 
 from collections.abc import Callable
 from typing import Any
+from dataclasses import dataclass
 
+import torch
 import torch.distributed as dist
 from torch import nn
 from torch.distributed import DeviceMesh, init_device_mesh
@@ -14,10 +16,26 @@ from torch.distributed.fsdp import (
 )
 from vllm.logger import init_logger
 
-from vllm_omni.diffusion.distributed.fsdp.config import FSDPInferenceConfig
 from vllm_omni.platforms import current_omni_platform
 
 logger = init_logger(__name__)
+
+@dataclass
+class FSDPInferenceConfig:
+    """Configuration for FSDP inference.
+
+    This is a runtime config created from DiffusionParallelConfig's FSDP settings.
+    """
+
+    enabled: bool = False
+    fsdp_replicate_dim: int = 1
+    fsdp_shard_dim: int = -1  # -1 = auto (shard across entire world)
+    cpu_offload: bool = False
+    pin_cpu_memory: bool = True
+    param_dtype: torch.dtype = torch.bfloat16
+    reduce_dtype: torch.dtype = torch.float32
+    output_dtype: torch.dtype | None = None
+    reshard_after_forward: bool = True
 
 
 def apply_fsdp_to_model(
@@ -43,20 +61,20 @@ def apply_fsdp_to_model(
     world_size = dist.get_world_size()
     rank = dist.get_rank()
 
-    hsdp_replicate_dim = fsdp_config.hsdp_replicate_dim
-    hsdp_shard_dim = fsdp_config.hsdp_shard_dim
+    fsdp_replicate_dim = fsdp_config.fsdp_replicate_dim
+    fsdp_shard_dim = fsdp_config.fsdp_shard_dim
 
-    if hsdp_shard_dim == -1:
-        hsdp_shard_dim = world_size // hsdp_replicate_dim
+    if fsdp_shard_dim == -1:
+        fsdp_shard_dim = world_size // fsdp_replicate_dim
 
-    assert hsdp_replicate_dim * hsdp_shard_dim == world_size, (
-        f"HSDP dimensions ({hsdp_replicate_dim} × {hsdp_shard_dim}) must equal world_size ({world_size})"
+    assert fsdp_replicate_dim * fsdp_shard_dim == world_size, (
+        f"FSDP dimensions ({fsdp_replicate_dim} × {fsdp_shard_dim}) must equal world_size ({world_size})"
     )
 
     logger.info(
         "FSDP Inference: replicate_dim=%d, shard_dim=%d, world_size=%d, rank=%d",
-        hsdp_replicate_dim,
-        hsdp_shard_dim,
+        fsdp_replicate_dim,
+        fsdp_shard_dim,
         world_size,
         rank,
     )
@@ -73,7 +91,7 @@ def apply_fsdp_to_model(
     # Default (replicate=1, shard=world_size) = FULL_SHARD
     device_mesh = init_device_mesh(
         device_type,
-        mesh_shape=(hsdp_replicate_dim, hsdp_shard_dim),
+        mesh_shape=(fsdp_replicate_dim, fsdp_shard_dim),
         mesh_dim_names=("replicate", "shard"),
     )
 

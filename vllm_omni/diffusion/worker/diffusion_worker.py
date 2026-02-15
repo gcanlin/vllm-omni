@@ -116,20 +116,6 @@ class DiffusionWorker:
             # Initialize model parallel groups
             parallel_config = self.od_config.parallel_config
 
-            if self.od_config.use_fsdp_inference:
-                # Log FSDP + parallel configuration
-                logger.info(
-                    "FSDP enabled with parallel config: "
-                    "hsdp_replicate_dim=%d, hsdp_shard_dim=%d, "
-                    "cfg_size=%d, sp_size=%d, ulysses=%d, ring=%d",
-                    self.od_config.hsdp_replicate_dim,
-                    self.od_config.hsdp_shard_dim,
-                    parallel_config.cfg_parallel_size,
-                    parallel_config.sequence_parallel_size,
-                    parallel_config.ulysses_degree,
-                    parallel_config.ring_degree,
-                )
-
             initialize_model_parallel(
                 data_parallel_size=parallel_config.data_parallel_size,
                 cfg_parallel_size=parallel_config.cfg_parallel_size,

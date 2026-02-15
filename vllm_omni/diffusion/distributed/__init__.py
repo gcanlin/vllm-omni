@@ -18,6 +18,10 @@ from vllm_omni.diffusion.distributed.sp_sharding import (
     sp_shard,
     sp_shard_with_padding,
 )
+from vllm_omni.diffusion.distributed.fsdp import (
+    FSDPInferenceConfig,
+    apply_fsdp_to_model,
+)
 
 __all__ = [
     # Config
@@ -35,4 +39,6 @@ __all__ = [
     "sp_shard_with_padding",
     "ShardingValidator",
     "get_sharding_validator",
+    "FSDPInferenceConfig",
+    "apply_fsdp_to_model",
 ]
