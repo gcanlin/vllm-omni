@@ -22,6 +22,7 @@ import vllm.envs as envs
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from PIL import Image
+from pydantic import BaseModel, Field
 from starlette.datastructures import State
 from starlette.routing import Route
 from vllm import SamplingParams
@@ -105,6 +106,15 @@ from vllm_omni.lora.utils import stable_lora_int_id
 
 logger = init_logger(__name__)
 router = APIRouter()
+
+
+class ProfileRequest(BaseModel):
+    """Request model for profiling endpoints."""
+
+    stages: list[int] | None = Field(
+        default=None,
+        description="List of stage IDs to profile. If None, profiles all stages.",
+    )
 
 
 def _remove_route_from_router(
@@ -1489,11 +1499,26 @@ def apply_stage_default_sampling_params(
 
 
 @router.post("/start_profile")
-async def start_profile(raw_request: Request):
-    """Start profiling for the engine."""
+async def start_profile(raw_request: Request, request: ProfileRequest | None = None):
+    """Start profiling for the engine.
+
+    Args:
+        request: Optional request body with stages to profile.
+            - stages: List of stage IDs to profile. If None, profiles all stages.
+
+    Example:
+        POST /start_profile
+        {"stages": [0, 1]}  # Profile only stages 0 and 1
+    """
     try:
-        logger.info("Starting profiler...")
-        result = await raw_request.app.state.engine_client.start_profile()
+        stages = request.stages if request else None
+        logger.info("Starting profiler for stages: %s", stages if stages else "all")
+        engine_client = raw_request.app.state.engine_client
+        # Only pass stages if specified (for backward compatibility with non-Omni engines)
+        if stages is not None:
+            result = await engine_client.start_profile(stages=stages)
+        else:
+            result = await engine_client.start_profile()
         logger.info("Profiler started.")
         return JSONResponse(content=result)
     except Exception as e:
@@ -1504,11 +1529,26 @@ async def start_profile(raw_request: Request):
 
 
 @router.post("/stop_profile")
-async def stop_profile(raw_request: Request):
-    """Stop profiling for the engine."""
+async def stop_profile(raw_request: Request, request: ProfileRequest | None = None):
+    """Stop profiling for the engine.
+
+    Args:
+        request: Optional request body with stages to stop profiling.
+            - stages: List of stage IDs to stop profiling. If None, stops all stages.
+
+    Example:
+        POST /stop_profile
+        {"stages": [0, 1]}  # Stop profiling only stages 0 and 1
+    """
     try:
-        logger.info("Stopping profiler...")
-        result = await raw_request.app.state.engine_client.stop_profile()
+        stages = request.stages if request else None
+        logger.info("Stopping profiler for stages: %s", stages if stages else "all")
+        engine_client = raw_request.app.state.engine_client
+        # Only pass stages if specified (for backward compatibility with non-Omni engines)
+        if stages is not None:
+            result = await engine_client.stop_profile(stages=stages)
+        else:
+            result = await engine_client.stop_profile()
         logger.info("Profiler stopped.")
         return JSONResponse(content=result)
     except Exception as e:
