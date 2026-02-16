@@ -143,6 +143,10 @@ class AsyncOmni(OmniBase):
                 ulysses_degree=ulysses_degree,
                 ring_degree=ring_degree,
                 cfg_parallel_size=cfg_parallel_size,
+                use_hsdp=kwargs.get("use_hsdp", False),
+                hsdp_shard_size=kwargs.get("hsdp_shard_size", -1),
+                hsdp_replicate_size=kwargs.get("hsdp_replicate_size", 1),
+                hsdp_cpu_offload=kwargs.get("hsdp_cpu_offload", False),
             )
         default_stage_cfg = [
             {
