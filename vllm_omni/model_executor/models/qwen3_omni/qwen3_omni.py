@@ -270,27 +270,6 @@ class Qwen3OmniMoeForConditionalGeneration(
         # ========== Stage 1: Thinker ==========
         if self.model_stage == "thinker":
             thinker_dev = self._module_device(self.thinker)
-            if current_omni_platform.is_npu():
-                # Normalize to batched inputs if needed
-                _added_batch_dim = False
-                if input_ids is not None and input_ids.ndim == 1:
-                    input_ids = input_ids.unsqueeze(0)
-                    _added_batch_dim = True
-                if positions is not None and positions.ndim == 1:
-                    positions = positions.unsqueeze(0)
-                    _added_batch_dim = True
-                if inputs_embeds is not None and inputs_embeds.ndim == 2:
-                    inputs_embeds = inputs_embeds.unsqueeze(0)
-                    _added_batch_dim = True
-
-                # Handle None input_ids
-                if input_ids is None:
-                    input_ids = torch.zeros(
-                        inputs_embeds.shape[1],
-                        dtype=torch.long,
-                        device=thinker_dev,
-                    ).unsqueeze(0)
-                    _added_batch_dim = True
 
             # Move to thinker device
             if input_ids is not None and input_ids.device != thinker_dev:
@@ -309,22 +288,13 @@ class Qwen3OmniMoeForConditionalGeneration(
                     "capture_layer_indices": [0, int(accept_layer)],
                     "return_hidden_states": True,
                 }
-            if current_omni_platform.is_npu():
-                # TODO: remove this hack when NPU supports batched inputs properly
-                thinker_input_ids = input_ids[0] if input_ids is not None and _added_batch_dim else input_ids
-                thinker_inputs_embeds = (
-                    inputs_embeds[0] if inputs_embeds is not None and _added_batch_dim else inputs_embeds
-                )
-            else:
-                thinker_input_ids = input_ids
-                thinker_inputs_embeds = inputs_embeds
 
             # Run thinker
             text_hidden_states, captured_layer_dict = self.thinker(
-                input_ids=thinker_input_ids,
+                input_ids=input_ids,
                 positions=positions,
                 intermediate_tensors=intermediate_tensors,
-                inputs_embeds=thinker_inputs_embeds,
+                inputs_embeds=inputs_embeds,
                 **capture_kwargs,
                 **kwargs,
             )
