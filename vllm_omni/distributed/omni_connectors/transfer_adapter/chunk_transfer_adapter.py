@@ -179,7 +179,6 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             else:
                 if payload_data.get("finished"):
                     self.finished_requests.add(req_id)
-                    req.status = RequestStatus.FINISHED_STOPPED
 
                 req.prompt_token_ids = payload_data.get("code_predictor_codes", [])
                 req.num_computed_tokens = 0

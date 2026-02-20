@@ -360,8 +360,16 @@ class OmniGenerationScheduler(VLLMScheduler):
             routed_experts = None
 
             # Diffusion request: completes in one step; mark finished and free resources
+            # Check if request is done:
+            # 1. Already FINISHED_STOPPED, OR
+            # 2. All tokens processed AND (no adapter OR received final chunk)
+            request_received_final_chunk = (
+                self.chunk_transfer_adapter is not None and
+                request.request_id in self.chunk_transfer_adapter.finished_requests
+            )
             if request.status == RequestStatus.FINISHED_STOPPED or (
-                self.chunk_transfer_adapter is None and request.num_computed_tokens >= request.num_prompt_tokens
+                request.num_computed_tokens >= request.num_prompt_tokens and
+                (self.chunk_transfer_adapter is None or request_received_final_chunk)
             ):
                 request.status = RequestStatus.FINISHED_STOPPED
                 # Optional: set a stop_reason for front-end clarity
