@@ -307,6 +307,11 @@ class DiffusersPipelineLoader:
         # Initialize model and load weights normally
         # The model's load_weights handles weight mapping (QKV fusion, etc.)
         model = initialize_model(od_config)
+
+        hsdp_shard_conditions = getattr(model, "_hsdp_shard_conditions", None)
+        if not hsdp_shard_conditions or len(hsdp_shard_conditions) == 0:
+            raise ValueError(f"Model {type(model).__name__} has no _hsdp_shard_conditions defined")
+
         self.load_weights(model)
 
         # Collect all transformers to shard (some models have transformer_2 for MoE)
