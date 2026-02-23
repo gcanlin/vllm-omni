@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from vllm_omni.diffusion.data import DiffusionParallelConfig
 from vllm_omni.diffusion.distributed.hsdp import HSDPInferenceConfig
 
-pytestmark = [pytest.mark.diffusion, pytest.mark.parallel]
+pytestmark = [pytest.mark.diffusion, pytest.mark.parallel, pytest.mark.cpu]
 
 
 class TestHSDPInferenceConfig:
@@ -92,6 +92,15 @@ class TestDiffusionParallelConfigHSDP:
                 use_hsdp=True,
                 hsdp_shard_size=3,  # 1 * 3 != 4
                 hsdp_replicate_size=1,
+            )
+
+    def test_hsdp_replicate_size_exceeds_world_size(self):
+        """Test that replicate_size > world_size raises an error."""
+        with pytest.raises(ValidationError, match="replicate_size.*must evenly divide world_size"):
+            DiffusionParallelConfig(
+                ulysses_degree=4,  # world_size=4
+                use_hsdp=True,
+                hsdp_replicate_size=8,  # 8 > 4, invalid
             )
 
     def test_hsdp_does_not_affect_world_size(self):
