@@ -199,7 +199,7 @@ class Qwen3OmniMoeCode2Wav(nn.Module):
             start_index = end_index
 
         if seq_token_counts is not None:
-            code_seq_lens = [n // self.config.num_quantizers for n in seq_token_counts]
+            code_seq_lens = [seq_len // self.config.num_quantizers for seq_len in seq_token_counts]
         else:
             # Fallback: assume all batch elements share the same sequence length.
             code_seq_lens = [codes.shape[-1]] * codes.shape[0]
