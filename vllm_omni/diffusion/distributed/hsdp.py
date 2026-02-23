@@ -96,6 +96,8 @@ def apply_hsdp_to_model(
         mesh_dim_names=("replicate", "shard"),
     )
 
+    hsdp_shard_conditions = getattr(model, "_hsdp_shard_conditions", None)
+
     # Apply HSDP sharding, this will automatically handle weight distribution
     shard_model(
         model,
