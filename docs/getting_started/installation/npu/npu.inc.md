@@ -52,7 +52,7 @@ We are keeping [issue #997](https://github.com/vllm-project/vllm-omni/issues/997
 
 # --8<-- [end:installation-release]
 
-# --8<-- [end:installation-main]
+# --8<-- [start:installation-main]
 
 You can also build vLLM-Omni from the latest main branch if you want to use the latest features or bug fixes. (But sometimes it will break for a while. You can check [issue #997](https://github.com/vllm-project/vllm-omni/issues/997) for the status of the latest commit of vLLM-Omni main branch on NPU.)
 
