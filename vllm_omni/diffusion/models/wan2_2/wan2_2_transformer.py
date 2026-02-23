@@ -719,7 +719,7 @@ class WanTransformer3DModel(nn.Module):
     @staticmethod
     def _is_transformer_block(name: str, module) -> bool:
         """Match transformer blocks for HSDP sharding (e.g., blocks.0, blocks.1)."""
-        return name.startswith("blocks.") and name.split(".")[-1].isdigit()
+        return "blocks" in name and name.split(".")[-1].isdigit()
 
     _hsdp_shard_conditions = [_is_transformer_block]
 

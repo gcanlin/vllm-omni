@@ -124,7 +124,7 @@ class TestHSDPShardConditions:
     @staticmethod
     def _is_transformer_block(name: str, module: nn.Module) -> bool:
         """Example shard condition matching transformer blocks."""
-        return name.startswith("blocks.") and name.split(".")[-1].isdigit()
+        return "blocks" in name and name.split(".")[-1].isdigit()
 
     def test_condition_matches_blocks(self):
         """Test that condition matches transformer block patterns."""
