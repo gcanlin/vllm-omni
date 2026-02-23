@@ -237,7 +237,7 @@ class DiffusersPipelineLoader:
             # This is needed for vLLM's quantization methods that need to transform weights
             self._process_weights_after_loading(model, target_device)
 
-            return model.eval()
+        return model.eval()
 
     def _process_weights_after_loading(self, model: nn.Module, target_device: torch.device) -> None:
         """Process weights after loading for quantization methods.
