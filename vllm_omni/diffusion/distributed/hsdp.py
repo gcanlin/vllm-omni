@@ -68,6 +68,10 @@ def apply_hsdp_to_model(
     if hsdp_shard_size == -1:
         hsdp_shard_size = world_size // hsdp_replicate_size
 
+    assert hsdp_replicate_size * hsdp_shard_size == world_size, (
+        f"HSDP dimensions ({hsdp_replicate_size} × {hsdp_shard_size}) must equal world_size ({world_size})"
+    )
+
     logger.info(
         "HSDP Inference: replicate_size=%d, shard_size=%d, world_size=%d, rank=%d",
         hsdp_replicate_size,
