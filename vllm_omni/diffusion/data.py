@@ -109,6 +109,11 @@ class DiffusionParallelConfig:
         if self.use_hsdp and self.hsdp_shard_size == -1:
             if self.hsdp_replicate_size <= 0:
                 raise ValueError("hsdp_replicate_size must be > 0")
+            if self.world_size % self.hsdp_replicate_size != 0:
+                raise ValueError(
+                    f"Invalid HSDP configuration: replicate_size ({self.hsdp_replicate_size}) "
+                    f"must evenly divide world_size ({self.world_size}) when shard_size is -1."
+                )
             self.hsdp_shard_size = self.world_size // self.hsdp_replicate_size
 
     @classmethod

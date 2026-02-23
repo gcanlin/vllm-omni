@@ -304,8 +304,11 @@ class DiffusersPipelineLoader:
             param_dtype=od_config.dtype,
         )
 
-        # Initialize model and load weights normally
-        # The model's load_weights handles weight mapping (QKV fusion, etc.)
+        # Initialize model WITHOUT device context (weights start on CPU).
+        # Unlike the non-HSDP path which uses `with target_device:` to create weights
+        # directly on GPU, HSDP needs weights on CPU first so they can be redistributed
+        # across GPUs by apply_hsdp_to_model. The model's load_weights handles weight
+        # mapping (QKV fusion, etc.).
         model = initialize_model(od_config)
 
         hsdp_shard_conditions = getattr(model, "_hsdp_shard_conditions", None)
