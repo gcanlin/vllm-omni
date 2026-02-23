@@ -1514,11 +1514,7 @@ async def start_profile(raw_request: Request, request: ProfileRequest | None = N
         stages = request.stages if request else None
         logger.info("Starting profiler for stages: %s", stages if stages else "all")
         engine_client = raw_request.app.state.engine_client
-        # Only pass stages if specified (for backward compatibility with non-Omni engines)
-        if stages is not None:
-            result = await engine_client.start_profile(stages=stages)
-        else:
-            result = await engine_client.start_profile()
+        result = await engine_client.start_profile(stages=stages)
         logger.info("Profiler started.")
         return JSONResponse(content=result)
     except Exception as e:
@@ -1544,11 +1540,7 @@ async def stop_profile(raw_request: Request, request: ProfileRequest | None = No
         stages = request.stages if request else None
         logger.info("Stopping profiler for stages: %s", stages if stages else "all")
         engine_client = raw_request.app.state.engine_client
-        # Only pass stages if specified (for backward compatibility with non-Omni engines)
-        if stages is not None:
-            result = await engine_client.stop_profile(stages=stages)
-        else:
-            result = await engine_client.stop_profile()
+        result = await engine_client.stop_profile(stages=stages)
         logger.info("Profiler stopped.")
         return JSONResponse(content=result)
     except Exception as e:
