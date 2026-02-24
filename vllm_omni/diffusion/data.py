@@ -61,9 +61,6 @@ class DiffusionParallelConfig:
     hsdp_replicate_size: int = 1
     """Number of replica groups for HSDP. Each replica holds a full sharded copy."""
 
-    hsdp_cpu_offload: bool = False
-    """Offload HSDP parameters to CPU when not in use."""
-
     @model_validator(mode="after")
     def _validate_parallel_config(self) -> Self:
         """Validates the config relationships among the parallel strategies."""
@@ -84,19 +81,15 @@ class DiffusionParallelConfig:
         # Validate HSDP configuration
         if self.use_hsdp:
             assert self.hsdp_replicate_size > 0, "HSDP replicate size must be > 0"
-            if self.hsdp_shard_size > 0:
-                expected_world = self.hsdp_replicate_size * self.hsdp_shard_size
-                assert expected_world == self.world_size, (
-                    f"HSDP dimensions ({self.hsdp_replicate_size} × {self.hsdp_shard_size}) "
-                    f"must equal world_size ({self.world_size})"
-                )
+            assert self.hsdp_shard_size > 0, "HSDP shard size must be > 0 (should be set in __post_init__)"
         return self
 
     def __post_init__(self) -> None:
         if self.sequence_parallel_size is None:
             self.sequence_parallel_size = self.ulysses_degree * self.ring_degree
 
-        self.world_size = (
+        # Calculate world_size from other parallelism dimensions
+        other_parallel_world_size = (
             self.pipeline_parallel_size
             * self.data_parallel_size
             * self.tensor_parallel_size
@@ -105,16 +98,50 @@ class DiffusionParallelConfig:
             * self.cfg_parallel_size
         )
 
-        # Auto-calculate hsdp_shard_size if not specified
-        if self.use_hsdp and self.hsdp_shard_size == -1:
-            if self.hsdp_replicate_size <= 0:
-                raise ValueError("hsdp_replicate_size must be > 0")
-            if self.world_size % self.hsdp_replicate_size != 0:
+        # Handle HSDP configuration
+        # HSDP can work in two modes:
+        # 1. Standalone: when other parallelism is all 1, HSDP determines world_size
+        # 2. Combined: HSDP overlays on top of other parallelism
+        if self.use_hsdp:
+            if self.tensor_parallel_size > 1:
                 raise ValueError(
-                    f"Invalid HSDP configuration: replicate_size ({self.hsdp_replicate_size}) "
-                    f"must evenly divide world_size ({self.world_size}) when shard_size is -1."
+                    "HSDP (use_hsdp=True) cannot be used with Tensor Parallelism "
+                    f"(tensor_parallel_size={self.tensor_parallel_size}). "
+                    "Set tensor_parallel_size=1 when using HSDP."
                 )
-            self.hsdp_shard_size = self.world_size // self.hsdp_replicate_size
+            if self.hsdp_shard_size == -1:
+                # Auto-calculate: use other_parallel_world_size as shard_size
+                if self.hsdp_replicate_size <= 0:
+                    raise ValueError("hsdp_replicate_size must be > 0")
+                if other_parallel_world_size == 1:
+                    raise ValueError(
+                        "Cannot auto-calculate hsdp_shard_size when other parallelism is all 1. "
+                        "Please specify hsdp_shard_size explicitly for standalone HSDP."
+                    )
+                if other_parallel_world_size % self.hsdp_replicate_size != 0:
+                    raise ValueError(
+                        f"Invalid HSDP configuration: replicate_size ({self.hsdp_replicate_size}) "
+                        f"must evenly divide world_size ({other_parallel_world_size}) when shard_size is -1."
+                    )
+                self.hsdp_shard_size = other_parallel_world_size // self.hsdp_replicate_size
+                self.world_size = other_parallel_world_size
+            else:
+                # Explicit shard_size: HSDP can work standalone or combined
+                hsdp_world_size = self.hsdp_replicate_size * self.hsdp_shard_size
+                if other_parallel_world_size == 1:
+                    # Standalone HSDP: world_size is determined by HSDP
+                    self.world_size = hsdp_world_size
+                else:
+                    # Combined: HSDP must match other parallelism world_size
+                    if hsdp_world_size != other_parallel_world_size:
+                        raise ValueError(
+                            f"HSDP dimensions "
+                            f"({self.hsdp_replicate_size} × {self.hsdp_shard_size} = {hsdp_world_size}) "
+                            f"must equal world_size from other parallelism ({other_parallel_world_size})"
+                        )
+                    self.world_size = other_parallel_world_size
+        else:
+            self.world_size = other_parallel_world_size
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "DiffusionParallelConfig":

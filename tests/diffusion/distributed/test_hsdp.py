@@ -7,7 +7,6 @@ These tests verify HSDP configuration logic without requiring a distributed envi
 
 import pytest
 import torch.nn as nn
-from pydantic import ValidationError
 
 from vllm_omni.diffusion.data import DiffusionParallelConfig
 from vllm_omni.diffusion.distributed.hsdp import HSDPInferenceConfig
@@ -24,7 +23,6 @@ class TestHSDPInferenceConfig:
         assert config.enabled is False
         assert config.hsdp_replicate_size == 1
         assert config.hsdp_shard_size == -1
-        assert config.cpu_offload is False
 
     def test_custom_values(self):
         """Test custom configuration values."""
@@ -32,12 +30,10 @@ class TestHSDPInferenceConfig:
             enabled=True,
             hsdp_replicate_size=2,
             hsdp_shard_size=4,
-            cpu_offload=True,
         )
         assert config.enabled is True
         assert config.hsdp_replicate_size == 2
         assert config.hsdp_shard_size == 4
-        assert config.cpu_offload is True
 
 
 class TestDiffusionParallelConfigHSDP:
@@ -62,8 +58,43 @@ class TestDiffusionParallelConfigHSDP:
         assert config.hsdp_shard_size == 4
         assert config.hsdp_replicate_size == 1
 
+    def test_hsdp_auto_shard_size_fails_standalone(self):
+        """Test that auto-calculate fails when other parallelism is all 1."""
+        # When all other parallelism is 1, cannot auto-calculate
+        # User must specify hsdp_shard_size explicitly
+        with pytest.raises(ValueError, match="Cannot auto-calculate hsdp_shard_size"):
+            DiffusionParallelConfig(
+                use_hsdp=True,
+                # All other parallelism defaults to 1
+            )
+
+    def test_hsdp_standalone_mode(self):
+        """Test standalone HSDP (HSDP without other parallelism)."""
+        # Standalone HSDP: all other parallelism=1, explicit shard_size
+        config = DiffusionParallelConfig(
+            use_hsdp=True,
+            hsdp_shard_size=4,  # Explicit shard size
+            hsdp_replicate_size=1,
+        )
+        # world_size should be determined by HSDP
+        assert config.world_size == 4
+        assert config.hsdp_shard_size == 4
+        assert config.hsdp_replicate_size == 1
+
+    def test_hsdp_standalone_with_replicate(self):
+        """Test standalone HSDP with replication."""
+        config = DiffusionParallelConfig(
+            use_hsdp=True,
+            hsdp_shard_size=4,
+            hsdp_replicate_size=2,
+        )
+        # world_size = shard_size * replicate_size
+        assert config.world_size == 8
+        assert config.hsdp_shard_size == 4
+        assert config.hsdp_replicate_size == 2
+
     def test_hsdp_with_replicate(self):
-        """Test HSDP with replication (hybrid mode)."""
+        """Test HSDP with replication (hybrid mode) combined with other parallelism."""
         # world_size=8, replicate=2 -> shard_size should be 4
         config = DiffusionParallelConfig(
             ulysses_degree=8,
@@ -85,8 +116,8 @@ class TestDiffusionParallelConfigHSDP:
         assert config.hsdp_shard_size == 4
 
     def test_hsdp_explicit_shard_size_invalid(self):
-        """Test that invalid HSDP dimensions raise an error."""
-        with pytest.raises(ValidationError, match="HSDP dimensions"):
+        """Test that invalid HSDP dimensions raise an error when combined with other parallelism."""
+        with pytest.raises(ValueError, match="HSDP dimensions"):
             DiffusionParallelConfig(
                 ulysses_degree=4,  # world_size=4
                 use_hsdp=True,
@@ -96,22 +127,41 @@ class TestDiffusionParallelConfigHSDP:
 
     def test_hsdp_replicate_size_exceeds_world_size(self):
         """Test that replicate_size > world_size raises an error."""
-        with pytest.raises(ValidationError, match="replicate_size.*must evenly divide world_size"):
+        with pytest.raises(ValueError, match="replicate_size.*must evenly divide world_size"):
             DiffusionParallelConfig(
                 ulysses_degree=4,  # world_size=4
                 use_hsdp=True,
                 hsdp_replicate_size=8,  # 8 > 4, invalid
             )
 
-    def test_hsdp_does_not_affect_world_size(self):
-        """HSDP settings should NOT affect world_size calculation."""
+    def test_hsdp_combined_world_size(self):
+        """Test that combined HSDP matches other parallelism world_size."""
         config_no_hsdp = DiffusionParallelConfig(ulysses_degree=4)
         config_with_hsdp = DiffusionParallelConfig(
             ulysses_degree=4,
             use_hsdp=True,
             hsdp_shard_size=4,
         )
+        # When combined with other parallelism, world_size should match
         assert config_no_hsdp.world_size == config_with_hsdp.world_size == 4
+
+    def test_hsdp_standalone_world_size(self):
+        """Test that standalone HSDP determines world_size."""
+        config_hsdp = DiffusionParallelConfig(
+            use_hsdp=True,
+            hsdp_shard_size=8,
+        )
+        # Standalone HSDP: world_size is determined by HSDP
+        assert config_hsdp.world_size == 8
+
+    def test_hsdp_cannot_use_with_tp(self):
+        """Test that HSDP and Tensor Parallelism cannot be used together."""
+        with pytest.raises(ValueError, match="cannot be used with Tensor Parallelism"):
+            DiffusionParallelConfig(
+                tensor_parallel_size=2,
+                use_hsdp=True,
+                hsdp_shard_size=4,
+            )
 
     def test_from_dict_with_hsdp(self):
         """Test creating config from dict with HSDP settings."""

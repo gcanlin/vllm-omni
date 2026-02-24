@@ -306,8 +306,6 @@ class DiffusersPipelineLoader:
             enabled=True,
             hsdp_replicate_size=parallel_config.hsdp_replicate_size,
             hsdp_shard_size=parallel_config.hsdp_shard_size,
-            cpu_offload=parallel_config.hsdp_cpu_offload,
-            pin_cpu_memory=od_config.pin_cpu_memory,
             param_dtype=od_config.dtype,
         )
 
