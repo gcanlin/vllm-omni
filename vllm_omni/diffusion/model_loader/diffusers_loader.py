@@ -221,7 +221,9 @@ class DiffusersPipelineLoader:
         target_device = torch.device(load_device)
         with set_default_torch_dtype(od_config.dtype):
             if od_config.parallel_config.use_hsdp:
-                model = self._load_model_with_hsdp(od_config)
+                model = self._load_model_with_hsdp(
+                    od_config, load_format=load_format, custom_pipeline_name=custom_pipeline_name
+                )
             else:
                 with target_device:
                     if load_format == "default":
@@ -283,7 +285,12 @@ class DiffusersPipelineLoader:
         #             f"checkpoint: {weights_not_loaded}"
         #         )
 
-    def _load_model_with_hsdp(self, od_config: OmniDiffusionConfig) -> nn.Module:
+    def _load_model_with_hsdp(
+        self,
+        od_config: OmniDiffusionConfig,
+        load_format: str = "default",
+        custom_pipeline_name: str | None = None,
+    ) -> nn.Module:
         """Load model with HSDP sharding for inference.
 
         The pipeline contains multiple components (text_encoder, VAE, transformer).
@@ -309,7 +316,11 @@ class DiffusersPipelineLoader:
         # directly on GPU, HSDP needs weights on CPU first so they can be redistributed
         # across GPUs by apply_hsdp_to_model. The model's load_weights handles weight
         # mapping (QKV fusion, etc.).
-        model = initialize_model(od_config)
+        if load_format == "default":
+            model = initialize_model(od_config)
+        elif load_format == "custom_pipeline":
+            model_cls = resolve_obj_by_qualname(custom_pipeline_name)
+            model = model_cls(od_config=od_config)
         self.load_weights(model)
 
         # Collect all transformers to shard (some models have transformer_2 for MoE)
