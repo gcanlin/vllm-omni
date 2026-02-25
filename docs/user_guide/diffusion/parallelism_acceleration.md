@@ -359,7 +359,7 @@ HSDP is configured via `DiffusionParallelConfig`:
 HSDP can work in two modes:
 
 - **Standalone Mode**: HSDP alone without other parallelism. Must specify `hsdp_shard_size` explicitly.
-- **Combined Mode**: HSDP overlays on top of other parallelism (e.g., Sequence Parallel). HSDP dimensions must match world_size.
+- **Combined Mode**: HSDP overlays on top of other parallelism (Ulysses Sequence Parallel, CFG Parallel). HSDP dimensions must match world_size.
 
 #### Offline Inference
 

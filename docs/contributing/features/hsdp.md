@@ -145,12 +145,3 @@ Complete examples in the codebase:
 | **HSDP Tests** | `tests/diffusion/distributed/test_hsdp.py` | Unit tests |
 
 ---
-
-## Summary
-
-Adding HSDP support to a transformer:
-
-1. ✅ **Identify modules to shard** - Which modules have the largest weights?
-2. ✅ **Define `_hsdp_shard_conditions`** - Add condition functions to your model class
-3. ✅ **Verify module names** - Ensure conditions match the correct modules
-4. ✅ **Test** - Verify with `use_hsdp=True`, check memory and output quality
