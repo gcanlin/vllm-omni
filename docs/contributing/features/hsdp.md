@@ -30,15 +30,6 @@ This enables inference of large models (e.g., Wan2.2 14B) on GPUs with limited m
 - HSDP cannot be used with Tensor Parallelism
 - For standalone HSDP (no other parallelism), `hsdp_shard_size` must be specified explicitly
 
-### How HSDP Differs from Tensor Parallelism
-
-| Aspect | Tensor Parallelism | HSDP |
-|--------|-------------------|------|
-| **Approach** | Splits computation | Shards weights |
-| **Code Changes** | Replace `nn.Linear` with parallel layers | Add `_hsdp_shard_conditions` |
-| **Communication** | All-reduce during forward | All-gather before forward |
-| **Best For** | Compute-bound workloads | Memory-bound workloads |
-
 ### Architecture
 
 HSDP implementation relies on:
