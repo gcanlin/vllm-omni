@@ -120,9 +120,7 @@ def _should_enable_profiler_endpoints(args: Namespace) -> bool:
 
     # TODO: remove this env after refactoring torch profiler to CLI args
     env_value = os.environ.get("VLLM_TORCH_PROFILER_DIR")
-    if env_value is not None:
-        return True
-    return False
+    return env_value is not None
 
 
 class ProfileRequest(BaseModel):
