@@ -107,6 +107,9 @@ class OmniGenerationScheduler(VLLMScheduler):
             num_scheduled_tokens[request.request_id] = num_new_tokens
             cached_prompt_token_ids[request.request_id] = request.prompt_token_ids
             token_budget -= num_new_tokens
+            # Set num_cached_tokens to match base scheduler behavior for metrics
+            if request.num_cached_tokens < 0:
+                request.num_cached_tokens = num_computed_tokens
             scheduled_running_reqs.append(request)
             req_index += 1
 
@@ -168,6 +171,10 @@ class OmniGenerationScheduler(VLLMScheduler):
             req_to_new_blocks[request.request_id] = new_blocks
             num_scheduled_tokens[request.request_id] = num_new_tokens
             token_budget -= num_new_tokens
+            # Set num_cached_tokens to match base scheduler behavior for metrics
+            # New requests have 0 computed tokens at this point
+            if request.num_cached_tokens < 0:
+                request.num_cached_tokens = 0
             scheduled_new_reqs.append(request)
 
         # Return skipped waiting requests
