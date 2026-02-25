@@ -222,6 +222,9 @@ class NPUGenerationModelRunner(OmniNPUModelRunner):
                 ec_connector_output,
             ) = self._preprocess(scheduler_output, num_tokens_padded, intermediate_tensors)
 
+            # [Omni] Pass token counts per request for code2wav output slicing
+            model_kwargs["seq_token_counts"] = tokens
+
             # update global cos, sin
             update_cos_sin(positions)
 
