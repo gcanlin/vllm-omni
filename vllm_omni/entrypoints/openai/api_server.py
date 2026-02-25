@@ -256,10 +256,7 @@ async def omni_run_server_worker(listen_address, sock, args, client_config=None,
 
         # Conditionally register profiler endpoints based on config or env var
         if _should_enable_profiler_endpoints(args):
-            logger.warning(
-                "Profiler endpoints are enabled. "
-                "This should ONLY be used for local development!"
-            )
+            logger.warning("Profiler endpoints are enabled. This should ONLY be used for local development!")
             app.include_router(profiler_router)
 
         vllm_config = await engine_client.get_vllm_config()
@@ -1521,6 +1518,7 @@ def apply_stage_default_sampling_params(
             for param_name, param_value in stage_defaults.items():
                 if hasattr(sampling_params, param_name):
                     setattr(sampling_params, param_name, param_value)
+
 
 @profiler_router.post("/start_profile")
 async def start_profile(raw_request: Request, request: ProfileRequest | None = None):
