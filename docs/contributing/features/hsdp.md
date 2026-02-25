@@ -96,28 +96,6 @@ class MyModel(nn.Module):
     _hsdp_shard_conditions = [_is_transformer_block, _is_moe_expert]
 ```
 
-### Step 3: Verify Module Names
-
-Before implementing, verify your module names match your conditions:
-
-```python
-model = YourModel(...)
-for name, module in model.named_modules():
-    print(f"{name}: {type(module).__name__}")
-```
-
-Example output:
-```
-blocks: ModuleList
-blocks.0: TransformerBlock
-blocks.0.attn: Attention
-blocks.0.mlp: MLP
-blocks.1: TransformerBlock
-...
-```
-
-Your condition should match `blocks.0`, `blocks.1`, etc., but NOT `blocks.0.attn`.
-
 ---
 
 ## Testing
