@@ -346,13 +346,24 @@ HSDP is configured via `DiffusionParallelConfig`:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `use_hsdp` | bool | False | Enable HSDP |
-| `hsdp_shard_size` | int | -1 | Number of GPUs to shard weights across. -1 = auto (world_size / replicate_size) |
+| `hsdp_shard_size` | int | -1 | Number of GPUs to shard weights across. -1 = auto (requires other parallelism > 1) |
 | `hsdp_replicate_size` | int | 1 | Number of replica groups. Each group holds a full sharded copy |
-| `hsdp_cpu_offload` | bool | False | Offload parameters to CPU when not in use |
 
-Constraint: `hsdp_replicate_size × hsdp_shard_size == world_size`
+**Constraints:**
+
+- `hsdp_replicate_size × hsdp_shard_size == world_size`
+- HSDP cannot be used with Tensor Parallelism (`tensor_parallel_size` must be 1)
+
+#### Operating Modes
+
+HSDP can work in two modes:
+
+- **Standalone Mode**: HSDP alone without other parallelism. Must specify `hsdp_shard_size` explicitly.
+- **Combined Mode**: HSDP overlays on top of other parallelism (e.g., Sequence Parallel). HSDP dimensions must match world_size.
 
 #### Offline Inference
+
+**Standalone HSDP** (shard across 4 GPUs, no other parallelism):
 
 ```python
 from vllm_omni import Omni
@@ -363,8 +374,7 @@ omni = Omni(
     model="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
     parallel_config=DiffusionParallelConfig(
         use_hsdp=True,
-        hsdp_replicate_size=1,
-        hsdp_shard_size=8,  # Shard across 8 GPUs
+        hsdp_shard_size=4,  # Shard across 4 GPUs
     ),
 )
 
@@ -374,13 +384,30 @@ outputs = omni.generate(
 )
 ```
 
+**Combined HSDP + Sequence Parallel**:
+
+```python
+omni = Omni(
+    model="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+    parallel_config=DiffusionParallelConfig(
+        ulysses_degree=4,  # Sequence parallel
+        use_hsdp=True,     # HSDP overlays on SP
+    ),
+)
+```
+
 #### Online Serving
 
-You can enable HSDP in online serving for diffusion models via `--hsdp`:
+**Standalone HSDP** (shard model across 4 GPUs):
 
 ```bash
-# Shard Wan2.2 across all GPUs
-vllm serve Wan-AI/Wan2.2-T2V-A14B-Diffusers --omni --port 8091 --use-hsdp
+vllm serve Wan-AI/Wan2.2-T2V-A14B-Diffusers --omni --port 8091 --use-hsdp --hsdp-shard-size 4
+```
+
+**Combined with Sequence Parallel**:
+
+```bash
+vllm serve Wan-AI/Wan2.2-T2V-A14B-Diffusers --omni --port 8091 --use-hsdp --usp 4
 ```
 
 #### Adding HSDP Support to New Models

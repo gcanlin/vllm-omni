@@ -22,9 +22,13 @@ HSDP (Hybrid Sharded Data Parallel) is a memory optimization technique that **sh
 
 - Shards weights across GPUs to reduce per-GPU memory usage
 - Gathers weights on-demand during forward passes
-- Optionally offloads weights to CPU when not in use
+- Can work standalone or combined with other parallelism (e.g., Sequence Parallel)
 
 This enables inference of large models (e.g., Wan2.2 14B) on GPUs with limited memory.
+
+**Important constraints:**
+- HSDP cannot be used with Tensor Parallelism
+- For standalone HSDP (no other parallelism), `hsdp_shard_size` must be specified explicitly
 
 ### How HSDP Differs from Tensor Parallelism
 
