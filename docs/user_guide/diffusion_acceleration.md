@@ -290,16 +290,6 @@ outputs = omni.generate(
 )
 ```
 
-To enable CPU offloading with HSDP for further memory reduction:
-
-```python
-parallel_config=DiffusionParallelConfig(
-    use_hsdp=True,
-    hsdp_shard_size=8,
-    hsdp_cpu_offload=True,  # Offload parameters to CPU when not in use
-)
-```
-
 ### Using CFG-Parallel
 
 Run image-to-image:
