@@ -5,17 +5,18 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .config import DiffusionProfilerConfig
 from .torch_profiler import TorchProfiler
 
 if TYPE_CHECKING:
+    from vllm.config import ProfilerConfig
+
     from .base import ProfilerBase
 
 # Default profiler – can be changed later via config
 CurrentProfiler: type[ProfilerBase] = TorchProfiler
 
 
-def get_profiler_class(config: DiffusionProfilerConfig | None) -> type[ProfilerBase] | None:
+def get_profiler_class(config: ProfilerConfig | None) -> type[ProfilerBase] | None:
     """Get the appropriate profiler class based on configuration.
 
     Args:
@@ -37,7 +38,7 @@ def get_profiler_class(config: DiffusionProfilerConfig | None) -> type[ProfilerB
         raise ValueError(f"Unknown profiler type: {config.profiler}")
 
 
-def configure_profiler(config: DiffusionProfilerConfig | None) -> None:
+def configure_profiler(config: ProfilerConfig | None) -> None:
     """Configure the profiler with the given configuration.
 
     This should be called during worker initialization to set up the profiler
@@ -55,7 +56,6 @@ def configure_profiler(config: DiffusionProfilerConfig | None) -> None:
 
 __all__ = [
     "CurrentProfiler",
-    "DiffusionProfilerConfig",
     "TorchProfiler",
     "configure_profiler",
     "get_profiler_class",

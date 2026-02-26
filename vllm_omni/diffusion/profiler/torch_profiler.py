@@ -15,7 +15,7 @@ from vllm.logger import init_logger
 from .base import ProfilerBase
 
 if TYPE_CHECKING:
-    from .config import DiffusionProfilerConfig
+    from vllm.config import ProfilerConfig
 
 logger = init_logger(__name__)
 
@@ -31,10 +31,10 @@ class TorchProfiler(ProfilerBase):
 
     _profiler: profile | None = None
     _trace_template: str = ""
-    _config: DiffusionProfilerConfig | None = None
+    _config: ProfilerConfig | None = None
 
     @classmethod
-    def set_config(cls, config: DiffusionProfilerConfig) -> None:
+    def set_config(cls, config: ProfilerConfig) -> None:
         """Set the profiler configuration."""
         cls._config = config
 
@@ -65,13 +65,10 @@ class TorchProfiler(ProfilerBase):
         # Get config values (use defaults if no config set)
         config = cls._config
         use_gzip = config.torch_profiler_use_gzip if config else True
-        record_shapes = config.torch_profiler_record_shapes if config else True
-        profile_memory = config.torch_profiler_with_memory if config else True
+        record_shapes = config.torch_profiler_record_shapes if config else False
+        profile_memory = config.torch_profiler_with_memory if config else False
         with_stack = config.torch_profiler_with_stack if config else True
-        with_flops = config.torch_profiler_with_flops if config else True
-        wait_steps = config.torch_profiler_wait_steps if config else 0
-        warmup_steps = config.torch_profiler_warmup_steps if config else 0
-        active_steps = config.torch_profiler_active_steps if config else 100000
+        with_flops = config.torch_profiler_with_flops if config else False
 
         # 3. Define the on_trace_ready handler
         def trace_handler(p):
@@ -94,13 +91,13 @@ class TorchProfiler(ProfilerBase):
             except Exception as e:
                 logger.warning(f"[Rank {rank}] Failed to export trace: {e}")
 
-        # 4. Initialize profiler with configurable schedule
+        # 4. Initialize profiler with a large active window
         cls._profiler = profile(
             activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
             schedule=torch.profiler.schedule(
-                wait=wait_steps,
-                warmup=warmup_steps,
-                active=active_steps,
+                wait=0,
+                warmup=0,
+                active=100000,
             ),
             on_trace_ready=trace_handler,
             record_shapes=record_shapes,

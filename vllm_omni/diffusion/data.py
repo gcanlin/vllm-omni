@@ -23,7 +23,7 @@ from vllm_omni.diffusion.quantization import (
 from vllm_omni.diffusion.utils.network_utils import is_port_available
 
 if TYPE_CHECKING:
-    from vllm_omni.diffusion.profiler.config import DiffusionProfilerConfig
+    from vllm.config import ProfilerConfig
 
 logger = init_logger(__name__)
 
@@ -384,7 +384,7 @@ class OmniDiffusionConfig:
     # Omni configuration (injected from stage config)
     omni_kv_config: dict[str, Any] = field(default_factory=dict)
 
-    profiler_config: DiffusionProfilerConfig | dict[str, Any] | None = None
+    profiler_config: ProfilerConfig | dict[str, Any] | None = None
     # Quantization settings
     # Supported methods: "fp8" (FP8 W8A8 on Ada/Hopper, weight-only on older GPUs)
     quantization: str | None = None
@@ -477,9 +477,9 @@ class OmniDiffusionConfig:
             self.cache_config = DiffusionCacheConfig()
 
         if isinstance(self.profiler_config, dict):
-            from vllm_omni.diffusion.profiler.config import DiffusionProfilerConfig
+            from vllm.config import ProfilerConfig
 
-            self.profiler_config = DiffusionProfilerConfig(**self.profiler_config)
+            self.profiler_config = ProfilerConfig(**self.profiler_config)
         # Convert quantization config
         if self.quantization is not None or self.quantization_config is not None:
             # Handle dict or DictConfig (from OmegaConf) - use Mapping for broader compatibility
