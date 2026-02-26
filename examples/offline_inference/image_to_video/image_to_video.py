@@ -115,7 +115,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Directory to save torch profiler traces. Enables profiling when set.",
     )
-    parser.add_argument("--use-hsdp",
+    parser.add_argument(
+        "--use-hsdp",
         action="store_true",
         help=("Enable Hybrid Sharded Data Parallel to shard model weights across GPUs. "),
     )
