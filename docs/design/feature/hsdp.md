@@ -1,4 +1,4 @@
-# Support HSDP
+# HSDP
 
 This section describes how to add HSDP (Hybrid Sharded Data Parallel) support to a diffusion transformer model. We use the Wan2.2 transformer as the reference implementation.
 
@@ -10,7 +10,6 @@ This section describes how to add HSDP (Hybrid Sharded Data Parallel) support to
 - [Step-by-Step Implementation](#step-by-step-implementation)
 - [Testing](#testing)
 - [Reference Implementations](#reference-implementations)
-- [Summary](#summary)
 
 ---
 
