@@ -1,4 +1,4 @@
-# Adding a Diffusion Model to vLLM-Omni
+# Adding a Diffusion Model
 
 This guide walks you through adding a new diffusion model to vLLM-Omni. We use **Qwen-Image** as the primary example, with references to other models (LongCat, Flux, Wan2.2) to illustrate different patterns.
 
@@ -680,7 +680,7 @@ vLLM-Omni automatically compiles blocks in `_repeated_blocks` when `torch.compil
 
 ### Tensor Parallelism
 
-See detailed guide: [How to add Tensor Parallel support](../features/tensor_parallel.md)
+See detailed guide: [How to add Tensor Parallel support](../../design/feature/tensor_parallel.md)
 
 **Quick setup:**
 
@@ -694,7 +694,7 @@ omni = Omni(model="your-model", tensor_parallel_size=2)
 
 ### CFG Parallelism
 
-See detailed guide: [How to add CFG-Parallel support](../features/cfg_parallel.md)
+See detailed guide: [How to add CFG-Parallel support](../../design/feature/cfg_parallel.md)
 
 **Quick setup:**
 
@@ -708,7 +708,7 @@ omni = Omni(model="your-model", cfg_parallel_size=2)
 
 ### Sequence Parallelism
 
-See detailed guide: [How to add Sequence Parallel support](../features/sequence_parallel.md)
+See detailed guide: [How to add Sequence Parallel support](../../design/feature/sequence_parallel.md)
 
 **Quick setup:**
 
@@ -724,7 +724,7 @@ omni = Omni(model="your-model", ulysses_degree=2, ring_degree=2)
 
 #### TeaCache
 
-See detailed guide: [How to add TeaCache support](../features/teacache.md)
+See detailed guide: [How to add TeaCache support](../../design/feature/teacache.md)
 
 **Quick setup:**
 
@@ -744,7 +744,7 @@ omni = Omni(model="your-model",
 
 #### Cache-DiT
 
-See detailed guide: [How to add Cache-DiT support](../features/cache_dit.md)
+See detailed guide: [How to add Cache-DiT support](../../design/feature/cache_dit.md)
 
 **Quick setup:**
 
@@ -762,6 +762,37 @@ omni = Omni(model="your-model",
     }
 )
 ```
+
+### CPU Offload
+
+See detailed guide: [CPU Offloading for Diffusion Models](../../user_guide/diffusion/cpu_offload_diffusion.md)
+
+vLLM-Omni provides two offloading strategies to reduce GPU memory usage:
+
+1. **Model-level offload**: Mutual exclusion between DiT and encoders (only one on GPU at a time)
+2. **Layerwise (Blockwise) offload**: Keeps only a single transformer block on GPU at a time with compute-memory overlap
+
+**Usage:** Enable offload when initializing:
+```python
+# Model-level offload
+omni = Omni(model="your-model", enable_cpu_offload=True)
+
+# Layerwise offload
+omni = Omni(model="your-model", enable_layerwise_offload=True)
+```
+
+**To support layerwise offloading:** Define the blocks attribute name in your transformer:
+
+```python
+class WanTransformer3DModel(nn.Module):
+    _layerwise_offload_blocks_attr = "blocks"  # Attribute name containing transformer blocks
+
+    def __init__(self):
+        self.blocks = nn.ModuleList([...])  # Transformer blocks
+```
+
+**Note:** Layerwise offloading is primarily recommended for large **video generation models** where the compute cost per block is high enough to effectively overlap with memory prefetch operations.
+
 
 ---
 
