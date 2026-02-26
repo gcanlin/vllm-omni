@@ -896,25 +896,22 @@ class WanTransformer3DModel(nn.Module):
 
         # Check for SP auto_pad: create attention mask dynamically if padding was applied
         hidden_states_mask = None  # default
-        try:
-            config = get_forward_context().omni_diffusion_config
-            parallel_config = config.parallel_config
-            if parallel_config is not None and parallel_config.sequence_parallel_size > 1:
-                ctx = get_forward_context()
-                if ctx.sp_original_seq_len is not None and ctx.sp_padding_size > 0:
-                    # Create mask for the full (padded) sequence
-                    # valid positions = True, padding positions = False
-                    batch_size = hidden_states.shape[0]
-                    padded_seq_len = ctx.sp_original_seq_len + ctx.sp_padding_size
-                    hidden_states_mask = torch.ones(
-                        batch_size,
-                        padded_seq_len,
-                        dtype=torch.bool,
-                        device=hidden_states.device,
-                    )
-                    hidden_states_mask[:, ctx.sp_original_seq_len :] = False
-        except Exception:
-            pass  # If forward_context not available, skip mask creation
+        config = get_forward_context().omni_diffusion_config
+        parallel_config = config.parallel_config
+        if parallel_config is not None and parallel_config.sequence_parallel_size > 1:
+            ctx = get_forward_context()
+            if ctx.sp_original_seq_len is not None and ctx.sp_padding_size > 0:
+                # Create mask for the full (padded) sequence
+                # valid positions = True, padding positions = False
+                batch_size = hidden_states.shape[0]
+                padded_seq_len = ctx.sp_original_seq_len + ctx.sp_padding_size
+                hidden_states_mask = torch.ones(
+                    batch_size,
+                    padded_seq_len,
+                    dtype=torch.bool,
+                    device=hidden_states.device,
+                )
+                hidden_states_mask[:, ctx.sp_original_seq_len :] = False
 
         # if mask is all true, set it to None
         if hidden_states_mask is not None and hidden_states_mask.all():
