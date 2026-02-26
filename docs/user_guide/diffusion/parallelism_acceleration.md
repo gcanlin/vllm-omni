@@ -412,4 +412,4 @@ vllm serve Wan-AI/Wan2.2-T2V-A14B-Diffusers --omni --port 8091 --use-hsdp --usp 
 
 #### Adding HSDP Support to New Models
 
-For detailed instructions on adding HSDP support to new models, see the [HSDP Contributing Guide](../../contributing/features/hsdp.md).
+For detailed instructions on adding HSDP support to new models, see the [HSDP Contributing Guide](../../design/feature/hsdp.md).
