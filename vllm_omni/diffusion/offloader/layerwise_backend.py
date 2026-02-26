@@ -143,7 +143,7 @@ class LayerwiseOffloadHook(ModelHook):
         evt = current_omni_platform.Event()
         gpu_weights: dict[torch.dtype, torch.Tensor] = {}
 
-        with torch.stream(self.copy_stream):
+        with current_omni_platform.stream(self.copy_stream):
             for dtype, cpu_weight in self.dtype_cpu_flattened_weights.items():
                 gpu_weight = torch.empty(cpu_weight.shape, dtype=dtype, device=self.device)
                 gpu_weight.copy_(cpu_weight, non_blocking=non_blocking)
