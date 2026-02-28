@@ -740,10 +740,12 @@ def initialize_model_parallel(
         data_parallel_size * cfg_parallel_size * sequence_parallel_size * pipeline_parallel_size * tensor_parallel_size
     )
 
-    # For standalone HSDP: when all other parallelism dimensions are 1,
-    # but fully_shard_degree > 1, use fully_shard_degree as dit_parallel_size
+    # Check for standalone HSDP: all non-HSDP parallelism dimensions are 1
+    is_standalone_hsdp = dit_parallel_size == 1 and fully_shard_degree > 1
+
+    # For standalone HSDP: use fully_shard_degree as dit_parallel_size
     # This ensures orthogonal rank generation works correctly for HSDP workers
-    if dit_parallel_size == 1 and fully_shard_degree > 1:
+    if is_standalone_hsdp:
         dit_parallel_size = fully_shard_degree
 
     if world_size < dit_parallel_size:
@@ -759,7 +761,7 @@ def initialize_model_parallel(
 
     # For standalone HSDP, use fully_shard_degree as data_parallel_size
     # so that RankGenerator.world_size matches the actual number of workers
-    effective_dp_size = fully_shard_degree if (dit_parallel_size == fully_shard_degree and data_parallel_size == 1) else data_parallel_size
+    effective_dp_size = fully_shard_degree if is_standalone_hsdp else data_parallel_size
 
     rank_generator: RankGenerator = RankGenerator(
         tensor_parallel_size,
