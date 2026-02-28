@@ -87,6 +87,16 @@ pull_request_rules:
       add:
         - frontend
 
+- name: label-diffusion
+  description: Automatically apply diffusion label
+  conditions:
+    - label != stale
+    - files~=^vllm_omni/diffusion/
+  actions:
+    label:
+      add:
+        - diffusion
+
 - name: label-new-model
   description: Automatically apply new-model label
   conditions:
@@ -137,6 +147,7 @@ pull_request_rules:
     - label != stale
     - or:
       - files~=^vllm_omni/platforms/xpu/
+      - title~=(?i)Intel
       - title~=(?i)XPU
   actions:
     label:
@@ -144,7 +155,7 @@ pull_request_rules:
         - xpu
     assign:
       users:
-        - "faaany"
+        - "yma11"
 
 - name: label-modelrunner
   description: Automatically apply modelrunner label
@@ -160,15 +171,14 @@ pull_request_rules:
         - ModelRunner
     assign:
       users:
-        - "gcanlin"
-        - "faaany"
+        - "gcanlin" # To check whether need to sync to NPU
 
-- name: auto-rebase if approved, ready, and 40 commits behind main
+- name: auto-rebase if approved, ready, and 30 commits behind main
   conditions:
     - base = main
     - label=ready
     - "#approved-reviews-by >= 1"
-    - "#commits-behind >= 40"
+    - "#commits-behind >= 30"
     - -closed
     - -draft
     - -conflict
