@@ -669,6 +669,7 @@ def initialize_model_parallel(
     tensor_parallel_size: int = 1,
     pipeline_parallel_size: int = 1,
     fully_shard_degree: int = 1,
+    hsdp_replicate_size: int = 1,
     backend: str | None = None,
 ) -> None:
     if backend is None:
@@ -743,10 +744,10 @@ def initialize_model_parallel(
     # Check for standalone HSDP: all non-HSDP parallelism dimensions are 1
     is_standalone_hsdp = dit_parallel_size == 1 and fully_shard_degree > 1
 
-    # For standalone HSDP: use fully_shard_degree as dit_parallel_size
-    # This ensures orthogonal rank generation works correctly for HSDP workers
+    # For standalone HSDP: use (fully_shard_degree * hsdp_replicate_size) as dit_parallel_size
+    # This ensures orthogonal rank generation works correctly for all HSDP workers
     if is_standalone_hsdp:
-        dit_parallel_size = fully_shard_degree
+        dit_parallel_size = fully_shard_degree * hsdp_replicate_size
 
     if world_size < dit_parallel_size:
         raise RuntimeError(
@@ -759,9 +760,9 @@ def initialize_model_parallel(
             f"data_parallel_size ({data_parallel_size})"
         )
 
-    # For standalone HSDP, use fully_shard_degree as data_parallel_size
+    # For standalone HSDP, use (fully_shard_degree * hsdp_replicate_size) as data_parallel_size
     # so that RankGenerator.world_size matches the actual number of workers
-    effective_dp_size = fully_shard_degree if is_standalone_hsdp else data_parallel_size
+    effective_dp_size = (fully_shard_degree * hsdp_replicate_size) if is_standalone_hsdp else data_parallel_size
 
     rank_generator: RankGenerator = RankGenerator(
         tensor_parallel_size,
