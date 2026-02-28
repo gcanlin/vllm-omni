@@ -179,7 +179,6 @@ class RankGenerator:
         fs: int = 1,
         order: str = "tp-sp-pp-cfg-dp",
         rank_offset: int = 0,
-        actual_world_size: int | None = None,
     ) -> None:
         self.tp = tp
         self.sp = sp
@@ -189,9 +188,6 @@ class RankGenerator:
         self.fs = fs
         self.rank_offset = rank_offset
         self.world_size = tp * sp * pp * cfg * dp
-        # actual_world_size is used for FS groups when standalone HSDP is enabled
-        # (fs > 1 but other parallelism dimensions are all 1)
-        self.actual_world_size = actual_world_size if actual_world_size is not None else self.world_size
 
         self.name_to_size = {
             "tp": self.tp,
@@ -247,29 +243,12 @@ class RankGenerator:
         if independent_ranks and token == "fs":
             # FS groups divide world into groups of size fs
             # e.g., world_size=8, fs=4 -> [[0,1,2,3], [4,5,6,7]]
-            # Use actual_world_size for standalone HSDP where fs > computed world_size
-            effective_world_size = self.actual_world_size
             ranks = []
-            num_groups = effective_world_size // self.fs
+            num_groups = self.world_size // self.fs
             for i in range(num_groups):
                 group = list(range(i * self.fs + self.rank_offset, (i + 1) * self.fs + self.rank_offset))
                 ranks.append(group)
             return ranks
-
-        # For standalone HSDP where actual_world_size > computed world_size,
-        # generate single-worker groups for each rank since all parallelism
-        # dimensions are 1 (no actual parallelism except HSDP sharding)
-        if self.actual_world_size > self.world_size:
-            # Get the size for this token (e.g., dp_size, sp_size, etc.)
-            token_parts = token.split("-")
-            group_size = 1
-            for t in token_parts:
-                group_size *= self.name_to_size.get(t, 1)
-
-            if group_size == 1:
-                # Each worker is its own group (no parallelism for this dimension)
-                ranks = [[i + self.rank_offset] for i in range(self.actual_world_size)]
-                return ranks
 
         mask = self.get_mask(self.order, token)
         ranks = generate_masked_orthogonal_rank_groups(self.world_size, self.ordered_size, mask)
@@ -761,6 +740,12 @@ def initialize_model_parallel(
         data_parallel_size * cfg_parallel_size * sequence_parallel_size * pipeline_parallel_size * tensor_parallel_size
     )
 
+    # For standalone HSDP: when all other parallelism dimensions are 1,
+    # but fully_shard_degree > 1, use fully_shard_degree as dit_parallel_size
+    # This ensures orthogonal rank generation works correctly for HSDP workers
+    if dit_parallel_size == 1 and fully_shard_degree > 1:
+        dit_parallel_size = fully_shard_degree
+
     if world_size < dit_parallel_size:
         raise RuntimeError(
             f"world_size ({world_size}) is less than "
@@ -772,15 +757,18 @@ def initialize_model_parallel(
             f"data_parallel_size ({data_parallel_size})"
         )
 
+    # For standalone HSDP, use fully_shard_degree as data_parallel_size
+    # so that RankGenerator.world_size matches the actual number of workers
+    effective_dp_size = fully_shard_degree if (dit_parallel_size == fully_shard_degree and data_parallel_size == 1) else data_parallel_size
+
     rank_generator: RankGenerator = RankGenerator(
         tensor_parallel_size,
         sequence_parallel_size,
         pipeline_parallel_size,
         cfg_parallel_size,
-        data_parallel_size,
+        effective_dp_size,
         fs=fully_shard_degree,
         order="tp-sp-pp-cfg-dp",
-        actual_world_size=world_size,
     )
     sp_group_ranks = rank_generator.get_ranks("sp")
     global _DP
@@ -817,7 +805,7 @@ def initialize_model_parallel(
         sp_ulysses_degree=ulysses_degree,
         sp_ring_degree=ring_degree,
         rank=get_world_group().rank_in_group,
-        world_size=world_size,
+        world_size=dit_parallel_size,
         sp_group_ranks=sp_group_ranks,
     )
     _SP = init_model_parallel_group(
@@ -846,7 +834,7 @@ def initialize_model_parallel(
         parallel_mode="fully_shard",
     )
 
-    init_dit_group(world_size, backend)
+    init_dit_group(dit_parallel_size, backend)
 
 
 def destroy_model_parallel():
