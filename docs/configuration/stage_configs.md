@@ -40,7 +40,7 @@ stage_args:
     engine_args: # Engine arguments for a certain engine
       model_stage: thinker
       model_arch: Qwen2_5OmniForConditionalGeneration # The model implementation registered in model_executor/models/registry.py
-      worker_cls: vllm_omni.worker.gpu_ar_worker.GPUARWorker # The specific worker used
+      worker_type: ar # The specific worker used
       scheduler_cls: vllm_omni.core.sched.omni_ar_scheduler.OmniARScheduler # The specific scehduler used
       gpu_memory_utilization: 0.8 # The gpu memory allocation for the stage within a single chip
       enforce_eager: true  # Now we only support eager mode
@@ -66,7 +66,7 @@ stage_args:
     engine_args:
       model_stage: talker
       model_arch: Qwen2_5OmniForConditionalGeneration
-      worker_cls: vllm_omni.worker.gpu_ar_worker.GPUARWorker
+      worker_type: ar
       scheduler_cls: vllm_omni.core.sched.omni_ar_scheduler.OmniARScheduler
       gpu_memory_utilization: 0.8
       enforce_eager: true
@@ -92,7 +92,7 @@ stage_args:
     engine_args:
       model_stage: code2wav
       model_arch: Qwen2_5OmniForConditionalGeneration
-      worker_cls: vllm_omni.worker.gpu_generation_worker.GPUGenerationWorker
+      worker_type: generation
       scheduler_cls: vllm_omni.core.sched.omni_generation_scheduler.OmniGenerationScheduler
       gpu_memory_utilization: 0.15
       enforce_eager: true
@@ -273,3 +273,15 @@ Default: `True`
 Penalty applied to tokens that have already appeared in the generated sequence. Values greater than 1.0 discourage repetition, while values less than 1.0 encourage it. A value of 1.0 applies no penalty.
 
 Default: `1.1`
+
+### `tts_args` (TTS stages only)
+
+Configuration for Text-to-Speech specific parameters. This section is only applicable to TTS model stages (e.g., `qwen3_tts`).
+
+#### `tts_args.max_instructions_length`
+
+Maximum character length for voice style/emotion instructions. Instructions exceeding this limit will be rejected with a validation error.
+
+Default: `500`
+
+This value can be overridden at runtime using the `--tts-max-instructions-length` CLI parameter when starting the server.
