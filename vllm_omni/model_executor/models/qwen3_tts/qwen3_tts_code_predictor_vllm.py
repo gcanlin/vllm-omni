@@ -153,12 +153,12 @@ class _LocalPredictorKVCache:
         # FIXME(gcanlin): Refactor build_attn_metadata to avoid special-casing NPU backends here.
         if current_omni_platform.is_npu():
             # NPU requires AscendCommonAttentionMetadata with extra attributes
-            from vllm_ascend.worker.v2 import attn_utils
+            from vllm_ascend.worker.v2 import attn_utils as attn_utils_npu
 
             max_query_len = int(query_lens_i32[:num_reqs].max().item())
             # NPU version expects slot_mappings as a stacked tensor, not a list
             slot_mappings_tensor = slot_mapping_gpu.unsqueeze(0)
-            attn_metadata = attn_utils.build_attn_metadata(
+            attn_metadata = attn_utils_npu.build_attn_metadata(
                 attn_metadata_builders=self.attn_metadata_builders,
                 num_reqs=num_reqs,
                 num_tokens=num_tokens,
