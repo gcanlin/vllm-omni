@@ -201,12 +201,15 @@ class TestStandaloneHSDPDetection:
         This mirrors the logic in initialize_model_parallel().
         """
         dit_parallel_size = (
-            data_parallel_size * cfg_parallel_size * sequence_parallel_size
-            * pipeline_parallel_size * tensor_parallel_size
+            data_parallel_size
+            * cfg_parallel_size
+            * sequence_parallel_size
+            * pipeline_parallel_size
+            * tensor_parallel_size
         )
 
         # Check for standalone HSDP: all non-HSDP parallelism dimensions are 1
-        is_standalone_hsdp = (dit_parallel_size == 1 and fully_shard_degree > 1)
+        is_standalone_hsdp = dit_parallel_size == 1 and fully_shard_degree > 1
 
         # For standalone HSDP: use (fully_shard_degree * hsdp_replicate_size)
         if is_standalone_hsdp:
@@ -214,11 +217,7 @@ class TestStandaloneHSDPDetection:
         else:
             effective_dit_parallel_size = dit_parallel_size
 
-        effective_dp_size = (
-            (fully_shard_degree * hsdp_replicate_size)
-            if is_standalone_hsdp
-            else data_parallel_size
-        )
+        effective_dp_size = (fully_shard_degree * hsdp_replicate_size) if is_standalone_hsdp else data_parallel_size
 
         return {
             "original_dit_parallel_size": dit_parallel_size,
