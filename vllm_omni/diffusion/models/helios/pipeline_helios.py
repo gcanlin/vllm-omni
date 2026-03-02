@@ -136,8 +136,9 @@ def get_helios_pre_process_func(
 
 
 class HeliosPipeline(nn.Module, CFGParallelMixin):
-    """Helios text-to-video pipeline for vllm-omni.
+    """Helios text-to-video / image-to-video / video-to-video pipeline for vllm-omni.
 
+    Supports T2V, I2V (with image input), and V2V (with video input).
     Implements chunked video generation with multi-term memory history context.
     """
 
@@ -251,10 +252,21 @@ class HeliosPipeline(nn.Module, CFGParallelMixin):
         history_sizes: list | None = None,
         num_latent_frames_per_chunk: int = 9,
         keep_first_frame: bool = True,
+        # I2V
+        image: torch.Tensor | None = None,
+        add_noise_to_image_latents: bool = True,
+        image_noise_sigma_min: float = 0.111,
+        image_noise_sigma_max: float = 0.135,
+        # V2V
+        video: torch.Tensor | None = None,
+        add_noise_to_video_latents: bool = True,
+        video_noise_sigma_min: float = 0.111,
+        video_noise_sigma_max: float = 0.135,
         # Stage 2 (pyramid multi-stage denoising)
         is_enable_stage2: bool = False,
         pyramid_num_stages: int = 3,
         pyramid_num_inference_steps_list: list | None = None,
+        is_skip_first_chunk: bool = False,
         # DMD
         is_amplify_first_chunk: bool = False,
         # CFG Zero Star
@@ -279,12 +291,26 @@ class HeliosPipeline(nn.Module, CFGParallelMixin):
         use_cfg_zero_star = extra.get("use_cfg_zero_star", use_cfg_zero_star)
         use_zero_init = extra.get("use_zero_init", use_zero_init)
         zero_steps = extra.get("zero_steps", zero_steps)
+        is_skip_first_chunk = extra.get("is_skip_first_chunk", is_skip_first_chunk)
+
+        image = extra.get("image", image)
+        video = extra.get("video", video)
+        add_noise_to_image_latents = extra.get("add_noise_to_image_latents", add_noise_to_image_latents)
+        image_noise_sigma_min = extra.get("image_noise_sigma_min", image_noise_sigma_min)
+        image_noise_sigma_max = extra.get("image_noise_sigma_max", image_noise_sigma_max)
+        add_noise_to_video_latents = extra.get("add_noise_to_video_latents", add_noise_to_video_latents)
+        video_noise_sigma_min = extra.get("video_noise_sigma_min", video_noise_sigma_min)
+        video_noise_sigma_max = extra.get("video_noise_sigma_max", video_noise_sigma_max)
+
+        if image is not None and video is not None:
+            raise ValueError("image and video cannot be provided simultaneously")
 
         if len(req.prompts) > 1:
             raise ValueError("This model only supports a single prompt, not a batched request.")
         if len(req.prompts) == 1:
             prompt = req.prompts[0] if isinstance(req.prompts[0], str) else req.prompts[0].get("prompt")
             negative_prompt = None if isinstance(req.prompts[0], str) else req.prompts[0].get("negative_prompt")
+
         if prompt is None and prompt_embeds is None:
             raise ValueError("Prompt or prompt_embeds is required for Helios generation.")
 
@@ -339,13 +365,88 @@ class HeliosPipeline(nn.Module, CFGParallelMixin):
             self.vae.device, self.vae.dtype
         )
 
+        # Prepare I2V image latents
+        fake_image_latents = None
+        image_latents = None
+        if image is not None:
+            image_latents, fake_image_latents = self.prepare_image_latents(
+                image,
+                latents_mean=latents_mean,
+                latents_std=latents_std,
+                num_latent_frames_per_chunk=num_latent_frames_per_chunk,
+                dtype=torch.float32,
+                device=device,
+                generator=generator,
+            )
+
+        if image_latents is not None and add_noise_to_image_latents:
+            image_noise_sigma = (
+                torch.rand(1, device=device, generator=generator) * (image_noise_sigma_max - image_noise_sigma_min)
+                + image_noise_sigma_min
+            )
+            image_latents = (
+                image_noise_sigma * randn_tensor(image_latents.shape, generator=generator, device=device)
+                + (1 - image_noise_sigma) * image_latents
+            )
+            fake_image_noise_sigma = (
+                torch.rand(1, device=device, generator=generator) * (video_noise_sigma_max - video_noise_sigma_min)
+                + video_noise_sigma_min
+            )
+            fake_image_latents = (
+                fake_image_noise_sigma * randn_tensor(fake_image_latents.shape, generator=generator, device=device)
+                + (1 - fake_image_noise_sigma) * fake_image_latents
+            )
+
+        # Prepare V2V video latents
+        video_latents = None
+        if video is not None:
+            image_latents, video_latents = self.prepare_video_latents(
+                video,
+                latents_mean=latents_mean,
+                latents_std=latents_std,
+                num_latent_frames_per_chunk=num_latent_frames_per_chunk,
+                dtype=torch.float32,
+                device=device,
+                generator=generator,
+            )
+
+        if video_latents is not None and add_noise_to_video_latents:
+            image_noise_sigma = (
+                torch.rand(1, device=device, generator=generator) * (image_noise_sigma_max - image_noise_sigma_min)
+                + image_noise_sigma_min
+            )
+            image_latents = (
+                image_noise_sigma * randn_tensor(image_latents.shape, generator=generator, device=device)
+                + (1 - image_noise_sigma) * image_latents
+            )
+
+            noisy_latents_chunks = []
+            num_latent_chunks = video_latents.shape[2] // num_latent_frames_per_chunk
+            for i in range(num_latent_chunks):
+                chunk_start = i * num_latent_frames_per_chunk
+                chunk_end = chunk_start + num_latent_frames_per_chunk
+                latent_chunk = video_latents[:, :, chunk_start:chunk_end, :, :]
+                chunk_frames = latent_chunk.shape[2]
+                frame_sigmas = (
+                    torch.rand(chunk_frames, device=device, generator=generator)
+                    * (video_noise_sigma_max - video_noise_sigma_min)
+                    + video_noise_sigma_min
+                )
+                frame_sigmas = frame_sigmas.view(1, 1, chunk_frames, 1, 1)
+                noisy_chunk = (
+                    frame_sigmas * randn_tensor(latent_chunk.shape, generator=generator, device=device)
+                    + (1 - frame_sigmas) * latent_chunk
+                )
+                noisy_latents_chunks.append(noisy_chunk)
+            video_latents = torch.cat(noisy_latents_chunks, dim=2)
+
         # Prepare latent variables
         num_channels_latents = self.transformer.config.in_channels
         window_num_frames = (num_latent_frames_per_chunk - 1) * self.vae_scale_factor_temporal + 1
         num_latent_chunk = max(1, (num_frames + window_num_frames - 1) // window_num_frames)
+        num_history_latent_frames = sum(history_sizes)
         history_video = None
         total_generated_latent_frames = 0
-        image_latents = None
 
         if not keep_first_frame:
             history_sizes[-1] = history_sizes[-1] + 1
@@ -353,12 +454,26 @@ class HeliosPipeline(nn.Module, CFGParallelMixin):
         history_latents = torch.zeros(
             batch_size,
             num_channels_latents,
-            sum(history_sizes),
+            num_history_latent_frames,
             height // self.vae_scale_factor_spatial,
             width // self.vae_scale_factor_spatial,
             device=device,
             dtype=torch.float32,
         )
+
+        if fake_image_latents is not None:
+            history_latents = torch.cat([history_latents[:, :, :-1, :, :], fake_image_latents], dim=2)
+            total_generated_latent_frames += 1
+
+        if video_latents is not None:
+            history_frames = history_latents.shape[2]
+            video_frames = video_latents.shape[2]
+            if video_frames < history_frames:
+                keep_frames = history_frames - video_frames
+                history_latents = torch.cat([history_latents[:, :, :keep_frames, :, :], video_latents], dim=2)
+            else:
+                history_latents = video_latents
+            total_generated_latent_frames += video_latents.shape[2]
 
         # Prepare frame indices
         if keep_first_frame:
@@ -393,10 +508,11 @@ class HeliosPipeline(nn.Module, CFGParallelMixin):
         # Chunked denoising loop
         for k in range(num_latent_chunk):
             is_first_chunk = k == 0
+            is_second_chunk = k == 1
 
             if keep_first_frame:
                 latents_history_long, latents_history_mid, latents_history_1x = history_latents[
-                    :, :, -sum(history_sizes) :
+                    :, :, -num_history_latent_frames:
                 ].split(history_sizes, dim=2)
                 if image_latents is None and is_first_chunk:
                     latents_prefix = torch.zeros(
@@ -415,7 +531,7 @@ class HeliosPipeline(nn.Module, CFGParallelMixin):
                 latents_history_short = torch.cat([latents_prefix, latents_history_1x], dim=2)
             else:
                 latents_history_long, latents_history_mid, latents_history_short = history_latents[
-                    :, :, -sum(history_sizes) :
+                    :, :, -num_history_latent_frames:
                 ].split(history_sizes, dim=2)
 
             # Prepare noise for this chunk
@@ -487,7 +603,9 @@ class HeliosPipeline(nn.Module, CFGParallelMixin):
                     device=device,
                 )
 
-            if keep_first_frame and is_first_chunk and image_latents is None:
+            if keep_first_frame and (
+                (is_first_chunk and image_latents is None) or (is_skip_first_chunk and is_second_chunk)
+            ):
                 image_latents = latents[:, :, 0:1, :, :]
 
             total_generated_latent_frames += latents.shape[2]
@@ -864,6 +982,80 @@ class HeliosPipeline(nn.Module, CFGParallelMixin):
             raise ValueError(f"Generator list length {len(generator)} does not match batch size {batch_size}.")
         latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
         return latents
+
+    def prepare_image_latents(
+        self,
+        image: torch.Tensor,
+        latents_mean: torch.Tensor,
+        latents_std: torch.Tensor,
+        num_latent_frames_per_chunk: int,
+        dtype: torch.dtype | None = None,
+        device: torch.device | None = None,
+        generator: torch.Generator | list[torch.Generator] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Encode a single image into VAE latent space for I2V generation.
+
+        Returns (image_latents, fake_image_latents) where fake_image_latents
+        is the last-frame latent of a repeated-frame video, used to seed the
+        history buffer for the first denoising chunk.
+        """
+        device = device or self.device
+        image = image.unsqueeze(2).to(device=device, dtype=self.vae.dtype)
+        latents = self.vae.encode(image).latent_dist.sample(generator=generator)
+        latents = (latents - latents_mean) * latents_std
+
+        min_frames = (num_latent_frames_per_chunk - 1) * self.vae_scale_factor_temporal + 1
+        fake_video = image.repeat(1, 1, min_frames, 1, 1)
+        fake_latents_full = self.vae.encode(fake_video).latent_dist.sample(generator=generator)
+        fake_latents_full = (fake_latents_full - latents_mean) * latents_std
+        fake_latents = fake_latents_full[:, :, -1:, :, :]
+
+        return latents.to(device=device, dtype=dtype), fake_latents.to(device=device, dtype=dtype)
+
+    def prepare_video_latents(
+        self,
+        video: torch.Tensor,
+        latents_mean: torch.Tensor,
+        latents_std: torch.Tensor,
+        num_latent_frames_per_chunk: int,
+        dtype: torch.dtype | None = None,
+        device: torch.device | None = None,
+        generator: torch.Generator | list[torch.Generator] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Encode a video into VAE latent space for V2V generation.
+
+        Returns (first_frame_latent, video_latents) where first_frame_latent
+        is used as the image prefix, and video_latents fills the history buffer.
+        """
+        device = device or self.device
+        video = video.to(device=device, dtype=self.vae.dtype)
+
+        num_frames = video.shape[2]
+        min_frames = (num_latent_frames_per_chunk - 1) * self.vae_scale_factor_temporal + 1
+        num_chunks = num_frames // min_frames
+        if num_chunks == 0:
+            raise ValueError(
+                f"Video must have at least {min_frames} frames (got {num_frames}). "
+                f"Required: (num_latent_frames_per_chunk - 1) * {self.vae_scale_factor_temporal} + 1"
+            )
+        total_valid_frames = num_chunks * min_frames
+        start_frame = num_frames - total_valid_frames
+
+        first_frame = video[:, :, 0:1, :, :]
+        first_frame_latent = self.vae.encode(first_frame).latent_dist.sample(generator=generator)
+        first_frame_latent = (first_frame_latent - latents_mean) * latents_std
+
+        latents_chunks = []
+        for i in range(num_chunks):
+            chunk_start = start_frame + i * min_frames
+            chunk_end = chunk_start + min_frames
+            video_chunk = video[:, :, chunk_start:chunk_end, :, :]
+            chunk_latents = self.vae.encode(video_chunk).latent_dist.sample(generator=generator)
+            chunk_latents = (chunk_latents - latents_mean) * latents_std
+            latents_chunks.append(chunk_latents)
+        video_latents = torch.cat(latents_chunks, dim=2)
+
+        return first_frame_latent.to(device=device, dtype=dtype), video_latents.to(device=device, dtype=dtype)
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         loader = AutoWeightsLoader(self)
