@@ -65,6 +65,7 @@ class CodePredictorAttention(nn.Module):
             bias=qkv_bias,
             quant_config=quant_config,
             prefix=f"{prefix}.qkv_proj",
+            disable_tp=True,
         )
         self.o_proj = RowParallelLinear(
             self.total_num_heads * self.head_dim,
@@ -72,6 +73,7 @@ class CodePredictorAttention(nn.Module):
             bias=False,
             quant_config=quant_config,
             prefix=f"{prefix}.o_proj",
+            disable_tp=True,
         )
 
         self.rotary_emb = get_rope(
