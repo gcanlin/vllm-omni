@@ -383,6 +383,10 @@ class OmniDiffusionConfig:
     # Compilation
     enforce_eager: bool = False
 
+    # Parallel weight loading (for faster diffusion model startup)
+    enable_multithread_weight_load: bool = True
+    num_weight_load_threads: int = 4
+
     # Enable sleep mode
     enable_sleep_mode: bool = False
 
@@ -447,6 +451,10 @@ class OmniDiffusionConfig:
     omni_kv_config: dict[str, Any] = field(default_factory=dict)
 
     profiler_config: ProfilerConfig | dict[str, Any] | None = None
+    
+    # Model-specific function for collecting CFG KV caches (set at runtime)
+    cfg_kv_collect_func: Any | None = None
+
     # Quantization settings
     # Supported methods: "fp8" (FP8 W8A8 on Ada/Hopper, weight-only on older GPUs)
     quantization: str | None = None
