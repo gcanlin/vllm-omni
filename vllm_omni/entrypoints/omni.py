@@ -219,6 +219,11 @@ class OmniBase:
         # TODO: hack, convert dtype to string to avoid non-premitive omegaconf create error.
         if "dtype" in kwargs:
             kwargs["dtype"] = str(kwargs["dtype"])
+        # Convert ProfilerConfig dataclass to dict for OmegaConf compatibility
+        if "profiler_config" in kwargs and hasattr(kwargs["profiler_config"], "__dataclass_fields__"):
+            from dataclasses import asdict
+
+            kwargs["profiler_config"] = asdict(kwargs["profiler_config"])
         cache_backend = kwargs.get("cache_backend", "none")
         cache_config = self._normalize_cache_config(cache_backend, kwargs.get("cache_config", None))
         # TODO: hack, calculate devices based on parallel config.
@@ -293,6 +298,15 @@ class OmniBase:
                         or cfg.engine_args.quantization_config is None
                     ):
                         cfg.engine_args.quantization_config = quantization_config
+                profiler_config = kwargs.get("profiler_config")
+                if profiler_config is not None:
+                    if not hasattr(cfg.engine_args, "profiler_config") or cfg.engine_args.profiler_config is None:
+                        # Convert ProfilerConfig dataclass to dict for OmegaConf compatibility
+                        if hasattr(profiler_config, "__dataclass_fields__"):
+                            from dataclasses import asdict
+
+                            profiler_config = asdict(profiler_config)
+                        cfg.engine_args.profiler_config = profiler_config
             except Exception as e:
                 logger.warning("Failed to inject LoRA config for stage: %s", e)
 
