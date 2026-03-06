@@ -102,6 +102,16 @@ class OmniPlatform(Platform):
     def supports_cpu_offload(cls) -> bool:
         return True
 
+    @classmethod
+    def get_profiler_cls(cls) -> str:
+        """Get the profiler class for this platform.
+
+        Returns:
+            Fully qualified class path of the profiler.
+            Default returns the base OmniTorchProfilerWrapper.
+        """
+        return "vllm_omni.profiler.omni_torch_profiler.OmniTorchProfilerWrapper"
+
 
 class UnspecifiedOmniPlatform(OmniPlatform):
     _omni_enum = OmniPlatformEnum.UNSPECIFIED
