@@ -111,11 +111,12 @@ class DiffusionParallelConfig:
         # 1. Standalone: when other parallelism is all 1, HSDP determines world_size
         # 2. Combined: HSDP overlays on top of other parallelism
         if self.use_hsdp:
-            if self.tensor_parallel_size > 1:
+            if self.tensor_parallel_size > 1 or self.data_parallel_size > 1:
                 raise ValueError(
-                    "HSDP (use_hsdp=True) cannot be used with Tensor Parallelism "
-                    f"(tensor_parallel_size={self.tensor_parallel_size}). "
-                    "Set tensor_parallel_size=1 when using HSDP."
+                    "HSDP (use_hsdp=True) cannot be used with TP or PP "
+                    f"(tensor_parallel_size={self.tensor_parallel_size}, "
+                    f"data_parallel_size={self.data_parallel_size}). "
+                    "Set tensor_parallel_size=1 and data_parallel_size=1 when using HSDP."
                 )
             if self.hsdp_shard_size == -1:
                 # Auto-calculate: use other_parallel_world_size as shard_size
@@ -148,15 +149,6 @@ class DiffusionParallelConfig:
                             f"must equal world_size from other parallelism ({other_parallel_world_size})"
                         )
                     self.world_size = other_parallel_world_size
-
-            # Validate that data_parallel_size and hsdp_replicate_size are mutually exclusive
-            # Users should use either data_parallel_size OR hsdp_replicate_size, not both
-            if self.data_parallel_size > 1 and self.hsdp_replicate_size > 1:
-                raise ValueError(
-                    f"data_parallel_size ({self.data_parallel_size}) and hsdp_replicate_size "
-                    f"({self.hsdp_replicate_size}) cannot both be greater than 1. "
-                    f"Use hsdp_replicate_size for HSDP replication instead of data_parallel_size."
-                )
         else:
             self.world_size = other_parallel_world_size
 
