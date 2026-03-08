@@ -113,7 +113,7 @@ class DiffusionParallelConfig:
         if self.use_hsdp:
             if self.tensor_parallel_size > 1 or self.data_parallel_size > 1:
                 raise ValueError(
-                    "HSDP (use_hsdp=True) cannot be used with TP or PP "
+                    "HSDP (use_hsdp=True) cannot be used with TP or DP "
                     f"(tensor_parallel_size={self.tensor_parallel_size}, "
                     f"data_parallel_size={self.data_parallel_size}). "
                     "Set tensor_parallel_size=1 and data_parallel_size=1 when using HSDP."

@@ -156,9 +156,18 @@ class TestDiffusionParallelConfigHSDP:
 
     def test_hsdp_cannot_use_with_tp(self):
         """Test that HSDP and Tensor Parallelism cannot be used together."""
-        with pytest.raises(ValueError, match="cannot be used with Tensor Parallelism"):
+        with pytest.raises(ValueError, match="cannot be used with TP or DP"):
             DiffusionParallelConfig(
                 tensor_parallel_size=2,
+                use_hsdp=True,
+                hsdp_shard_size=4,
+            )
+
+    def test_hsdp_cannot_use_with_dp(self):
+        """Test that HSDP and Data Parallelism cannot be used together."""
+        with pytest.raises(ValueError, match="cannot be used with TP or DP"):
+            DiffusionParallelConfig(
+                data_parallel_size=2,
                 use_hsdp=True,
                 hsdp_shard_size=4,
             )
@@ -275,17 +284,6 @@ class TestStandaloneHSDPDetection:
         assert result["original_dit_parallel_size"] == 2
         assert result["is_standalone_hsdp"] is False
         assert result["effective_dp_size"] == 1
-
-    def test_combined_hsdp_dp_not_standalone(self):
-        """Test HSDP combined with DP is NOT detected as standalone."""
-        result = self.compute_standalone_hsdp_params(
-            data_parallel_size=2,
-            fully_shard_degree=4,
-            hsdp_replicate_size=1,
-        )
-        assert result["original_dit_parallel_size"] == 2
-        assert result["is_standalone_hsdp"] is False
-        assert result["effective_dp_size"] == 2  # uses original dp_size
 
     def test_combined_hsdp_pp_not_standalone(self):
         """Test HSDP combined with PP is NOT detected as standalone."""
