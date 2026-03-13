@@ -5,9 +5,14 @@ This section contains design documents and architecture specifications for vLLM-
 ## Architecture Documents
 
 - [Architecture Overview](architecture_overview.md)
-- [vLLM-Omni Software Design Document](vllm_omni_design.md)
-- [Multi-Request Streaming](mrs_design.md)
 
-## API Design Documentation
+## Feature Design Documents
 
-- [vLLM-Omni API Design Documentation](api_design_doc.md)
+- [Disaggregated Inference](feature/disaggregated_inference.md)
+- [Ray-based Execution](feature/ray_based_execution.md)
+
+## Module Design Documents
+
+- [AR Module](module/ar_module.md)
+- [DIT Module](module/dit_module.md)
+- [Entrypoint Module](module/entrypoint_module.md)

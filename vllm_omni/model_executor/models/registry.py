@@ -10,12 +10,12 @@ _OMNI_MODELS = {
         "qwen2_5_omni",
         "qwen2_5_omni_thinker",
         "Qwen2_5OmniThinkerForConditionalGeneration",
-    ),  # noqa: E501
+    ),
     "Qwen2_5OmniTalkerModel": (
         "qwen2_5_omni",
         "qwen2_5_omni_talker",
         "Qwen2_5OmniTalkerForConditionalGeneration",
-    ),  # noqa: E501
+    ),
     "Qwen2_5OmniToken2WavModel": (
         "qwen2_5_omni",
         "qwen2_5_omni_token2wav",
@@ -48,7 +48,45 @@ _OMNI_MODELS = {
         "qwen3_omni_code2wav",
         "Qwen3OmniMoeCode2Wav",
     ),
+    "Qwen3TTSForConditionalGeneration": (
+        "qwen3_tts",
+        "qwen3_tts_talker",
+        "Qwen3TTSTalkerForConditionalGeneration",
+    ),
+    "Qwen3TTSTalkerForConditionalGeneration": (
+        "qwen3_tts",
+        "qwen3_tts_talker",
+        "Qwen3TTSTalkerForConditionalGeneration",
+    ),
+    "Qwen3TTSCode2Wav": (
+        "qwen3_tts",
+        "qwen3_tts_code2wav",
+        "Qwen3TTSCode2Wav",
+    ),
+    ## mimo_audio
+    "MiMoAudioModel": (
+        "mimo_audio",
+        "mimo_audio",
+        "MiMoAudioForConditionalGeneration",
+    ),
+    "MiMoAudioLLMModel": (
+        "mimo_audio",
+        "mimo_audio_llm",
+        "MiMoAudioLLMForConditionalGeneration",
+    ),
+    "MiMoAudioToken2WavModel": (
+        "mimo_audio",
+        "mimo_audio_code2wav",
+        "MiMoAudioToken2WavForConditionalGenerationVLLM",
+    ),
+    ## glm_image
+    "GlmImageForConditionalGeneration": (
+        "glm_image",
+        "glm_image_ar",
+        "GlmImageForConditionalGeneration",
+    ),
 }
+
 
 _VLLM_OMNI_MODELS = {
     **_VLLM_MODELS,

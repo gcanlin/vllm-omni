@@ -153,11 +153,16 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
+# Claude
+CLAUDE.md
+.claude/
+
+# Codex
+AGENTS.md
+.codex/
+
 # cursor
 .cursor/
-
-# docker
-docker/
 
 # scripts
 /scripts/
@@ -182,6 +187,7 @@ checkpoints/
 
 # Cache directories
 cache/
+!vllm_omni/diffusion/cache/
 .cache/
 diffusion_cache/
 kv_cache/
@@ -216,6 +222,7 @@ data/
 datasets/
 *.csv
 *.json
+!apps/ComfyUI-vLLM-Omni/example_workflows/*.json
 *.jsonl
 *.parquet
 
@@ -223,6 +230,7 @@ datasets/
 outputs/
 results/
 generated/
+output_*/
 
 # Configuration overrides
 configs/local.yaml
@@ -232,3 +240,10 @@ configs/development.yaml
 # Docker
 .dockerignore
 Dockerfile.dev
+discussion
+tmp_test
+
+# Auto-generated version file (created by setuptools_scm during build)
+vllm_omni/_version.py
+# output files
+*.wav

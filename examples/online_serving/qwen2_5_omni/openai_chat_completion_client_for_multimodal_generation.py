@@ -1,19 +1,10 @@
 import base64
+import os
 
 import requests
 from openai import OpenAI
 from vllm.assets.audio import AudioAsset
-from vllm.utils import FlexibleArgumentParser
-
-# Modify OpenAI's API key and API base to use vLLM's API server.
-openai_api_key = "EMPTY"
-openai_api_base = "http://localhost:8091/v1"
-
-client = OpenAI(
-    # defaults to os.environ.get("OPENAI_API_KEY")
-    api_key=openai_api_key,
-    base_url=openai_api_base,
-)
+from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 SEED = 42
 
@@ -26,6 +17,129 @@ def encode_base64_content_from_url(content_url: str) -> str:
         result = base64.b64encode(response.content).decode("utf-8")
 
     return result
+
+
+def encode_base64_content_from_file(file_path: str) -> str:
+    """Encode a local file to base64 format."""
+    with open(file_path, "rb") as f:
+        content = f.read()
+        result = base64.b64encode(content).decode("utf-8")
+    return result
+
+
+def get_video_url_from_path(video_path: str | None) -> str:
+    """Convert a video path (local file or URL) to a video URL format for the API.
+
+    If video_path is None or empty, returns the default URL.
+    If video_path is a local file path, encodes it to base64 data URL.
+    If video_path is a URL, returns it as-is.
+    """
+    if not video_path:
+        # Default video URL
+        return "https://huggingface.co/datasets/raushan-testing-hf/videos-test/resolve/main/sample_demo_1.mp4"
+
+    # Check if it's a URL (starts with http:// or https://)
+    if video_path.startswith(("http://", "https://")):
+        return video_path
+
+    # Otherwise, treat it as a local file path
+    if not os.path.exists(video_path):
+        raise FileNotFoundError(f"Video file not found: {video_path}")
+
+    # Detect video MIME type from file extension
+    video_path_lower = video_path.lower()
+    if video_path_lower.endswith(".mp4"):
+        mime_type = "video/mp4"
+    elif video_path_lower.endswith(".webm"):
+        mime_type = "video/webm"
+    elif video_path_lower.endswith(".mov"):
+        mime_type = "video/quicktime"
+    elif video_path_lower.endswith(".avi"):
+        mime_type = "video/x-msvideo"
+    elif video_path_lower.endswith(".mkv"):
+        mime_type = "video/x-matroska"
+    else:
+        # Default to mp4 if extension is unknown
+        mime_type = "video/mp4"
+
+    video_base64 = encode_base64_content_from_file(video_path)
+    return f"data:{mime_type};base64,{video_base64}"
+
+
+def get_image_url_from_path(image_path: str | None) -> str:
+    """Convert an image path (local file or URL) to an image URL format for the API.
+
+    If image_path is None or empty, returns the default URL.
+    If image_path is a local file path, encodes it to base64 data URL.
+    If image_path is a URL, returns it as-is.
+    """
+    if not image_path:
+        # Default image URL
+        return "https://vllm-public-assets.s3.us-west-2.amazonaws.com/vision_model_images/cherry_blossom.jpg"
+
+    # Check if it's a URL (starts with http:// or https://)
+    if image_path.startswith(("http://", "https://")):
+        return image_path
+
+    # Otherwise, treat it as a local file path
+    if not os.path.exists(image_path):
+        raise FileNotFoundError(f"Image file not found: {image_path}")
+
+    # Detect image MIME type from file extension
+    image_path_lower = image_path.lower()
+    if image_path_lower.endswith((".jpg", ".jpeg")):
+        mime_type = "image/jpeg"
+    elif image_path_lower.endswith(".png"):
+        mime_type = "image/png"
+    elif image_path_lower.endswith(".gif"):
+        mime_type = "image/gif"
+    elif image_path_lower.endswith(".webp"):
+        mime_type = "image/webp"
+    else:
+        # Default to jpeg if extension is unknown
+        mime_type = "image/jpeg"
+
+    image_base64 = encode_base64_content_from_file(image_path)
+    return f"data:{mime_type};base64,{image_base64}"
+
+
+def get_audio_url_from_path(audio_path: str | None) -> str:
+    """Convert an audio path (local file or URL) to an audio URL format for the API.
+
+    If audio_path is None or empty, returns the default URL.
+    If audio_path is a local file path, encodes it to base64 data URL.
+    If audio_path is a URL, returns it as-is.
+    """
+    if not audio_path:
+        # Default audio URL
+        return AudioAsset("mary_had_lamb").url
+
+    # Check if it's a URL (starts with http:// or https://)
+    if audio_path.startswith(("http://", "https://")):
+        return audio_path
+
+    # Otherwise, treat it as a local file path
+    if not os.path.exists(audio_path):
+        raise FileNotFoundError(f"Audio file not found: {audio_path}")
+
+    # Detect audio MIME type from file extension
+    audio_path_lower = audio_path.lower()
+    if audio_path_lower.endswith((".mp3", ".mpeg")):
+        mime_type = "audio/mpeg"
+    elif audio_path_lower.endswith(".wav"):
+        mime_type = "audio/wav"
+    elif audio_path_lower.endswith(".ogg"):
+        mime_type = "audio/ogg"
+    elif audio_path_lower.endswith(".flac"):
+        mime_type = "audio/flac"
+    elif audio_path_lower.endswith(".m4a"):
+        mime_type = "audio/mp4"
+    else:
+        # Default to wav if extension is unknown
+        mime_type = "audio/wav"
+
+    audio_base64 = encode_base64_content_from_file(audio_path)
+    return f"data:{mime_type};base64,{audio_base64}"
 
 
 def get_system_prompt():
@@ -44,8 +158,10 @@ def get_system_prompt():
     }
 
 
-def get_text_query():
-    question = "Explain the system architecture for a scalable audio generation pipeline. Answer in 15 words."
+def get_text_query(custom_prompt: str | None = None):
+    question = (
+        custom_prompt or "Explain the system architecture for a scalable audio generation pipeline. Answer in 15 words."
+    )
     prompt = {
         "role": "user",
         "content": [
@@ -58,26 +174,32 @@ def get_text_query():
     return prompt
 
 
-def get_mixed_modalities_query():
-    question = "What is recited in the audio? What is the content of this image? Why is this video funny?"
+def get_mixed_modalities_query(
+    video_path: str | None = None,
+    image_path: str | None = None,
+    audio_path: str | None = None,
+    custom_prompt: str | None = None,
+):
+    question = (
+        custom_prompt or "What is recited in the audio? What is the content of this image? Why is this video funny?"
+    )
+    video_url = get_video_url_from_path(video_path)
+    image_url = get_image_url_from_path(image_path)
+    audio_url = get_audio_url_from_path(audio_path)
     prompt = {
         "role": "user",
         "content": [
             {
                 "type": "audio_url",
-                "audio_url": {"url": AudioAsset("mary_had_lamb").url},
+                "audio_url": {"url": audio_url},
             },
             {
                 "type": "image_url",
-                "image_url": {
-                    "url": "https://vllm-public-assets.s3.us-west-2.amazonaws.com/vision_model_images/cherry_blossom.jpg"
-                },
+                "image_url": {"url": image_url},
             },
             {
                 "type": "video_url",
-                "video_url": {
-                    "url": "https://huggingface.co/datasets/raushan-testing-hf/videos-test/resolve/main/sample_demo_1.mp4"
-                },
+                "video_url": {"url": video_url},
             },
             {
                 "type": "text",
@@ -89,8 +211,9 @@ def get_mixed_modalities_query():
     return prompt
 
 
-def get_use_audio_in_video_query():
-    question = "Describe the content of the video, then convert what the baby say into text."
+def get_use_audio_in_video_query(video_path: str | None = None, custom_prompt: str | None = None):
+    question = custom_prompt or "Describe the content of the video, then convert what the baby say into text."
+    video_url = get_video_url_from_path(video_path)
 
     prompt = {
         "role": "user",
@@ -98,7 +221,7 @@ def get_use_audio_in_video_query():
             {
                 "type": "video_url",
                 "video_url": {
-                    "url": "https://huggingface.co/datasets/raushan-testing-hf/videos-test/resolve/main/sample_demo_1.mp4",
+                    "url": video_url,
                     "num_frames": 16,
                 },
             },
@@ -112,14 +235,15 @@ def get_use_audio_in_video_query():
     return prompt
 
 
-def get_multi_audios_query():
-    question = "Are these two audio clips the same?"
+def get_multi_audios_query(audio_path: str | None = None, custom_prompt: str | None = None):
+    question = custom_prompt or "Are these two audio clips the same?"
+    audio_url = get_audio_url_from_path(audio_path)
     prompt = {
         "role": "user",
         "content": [
             {
                 "type": "audio_url",
-                "audio_url": {"url": AudioAsset("mary_had_lamb").url},
+                "audio_url": {"url": audio_url},
             },
             {
                 "type": "audio_url",
@@ -142,7 +266,7 @@ query_map = {
 }
 
 
-def run_multimodal_generation(args) -> None:
+def run_multimodal_generation(args, client: OpenAI) -> None:
     model_name = "Qwen/Qwen2.5-Omni-7B"
     thinker_sampling_params = {
         "temperature": 0.0,  # Deterministic - no randomness
@@ -179,7 +303,27 @@ def run_multimodal_generation(args) -> None:
         code2wav_sampling_params,
     ]
 
-    prompt = query_map[args.query_type]()
+    # Get paths and custom prompt from args
+    video_path = getattr(args, "video_path", None)
+    image_path = getattr(args, "image_path", None)
+    audio_path = getattr(args, "audio_path", None)
+    custom_prompt = getattr(args, "prompt", None)
+
+    # Get the query function and call it with appropriate parameters
+    query_func = query_map[args.query_type]
+    if args.query_type == "mixed_modalities":
+        prompt = query_func(
+            video_path=video_path, image_path=image_path, audio_path=audio_path, custom_prompt=custom_prompt
+        )
+    elif args.query_type == "use_audio_in_video":
+        prompt = query_func(video_path=video_path, custom_prompt=custom_prompt)
+    elif args.query_type == "multi_audios":
+        prompt = query_func(audio_path=audio_path, custom_prompt=custom_prompt)
+    elif args.query_type == "text":
+        prompt = query_func(custom_prompt=custom_prompt)
+    else:
+        prompt = query_func()
+
     extra_body = {
         "sampling_params_list": sampling_params_list  # Optional, it has a default setting in stage_configs of the corresponding model.
     }
@@ -187,26 +331,56 @@ def run_multimodal_generation(args) -> None:
     if args.query_type == "use_audio_in_video":
         extra_body["mm_processor_kwargs"] = {"use_audio_in_video": True}
 
+    if args.modalities is not None:
+        output_modalities = args.modalities.split(",")
+    else:
+        output_modalities = None
+
     chat_completion = client.chat.completions.create(
         messages=[
             get_system_prompt(),
             prompt,
         ],
         model=model_name,
+        modalities=output_modalities,
         extra_body=extra_body,
+        stream=args.stream,
     )
 
     count = 0
-    for choice in chat_completion.choices:
-        if choice.message.audio:
-            audio_data = base64.b64decode(choice.message.audio.data)
-            audio_file_path = f"audio_{count}.wav"
-            with open(audio_file_path, "wb") as f:
-                f.write(audio_data)
-            print(f"Audio saved to {audio_file_path}")
-            count += 1
-        elif choice.message.content:
-            print("Chat completion output from text:", choice.message.content)
+    if not args.stream:
+        for choice in chat_completion.choices:
+            if choice.message.audio:
+                audio_data = base64.b64decode(choice.message.audio.data)
+                audio_file_path = f"audio_{count}.wav"
+                with open(audio_file_path, "wb") as f:
+                    f.write(audio_data)
+                print(f"Audio saved to {audio_file_path}")
+                count += 1
+            elif choice.message.content:
+                print("Chat completion output from text:", choice.message.content)
+    else:
+        printed_content = False
+        for chunk in chat_completion:
+            for choice in chunk.choices:
+                if hasattr(choice, "delta"):
+                    content = getattr(choice.delta, "content", None)
+                else:
+                    content = None
+
+                if getattr(chunk, "modality", None) == "audio" and content:
+                    audio_data = base64.b64decode(content)
+                    audio_file_path = f"audio_{count}.wav"
+                    with open(audio_file_path, "wb") as f:
+                        f.write(audio_data)
+                    print(f"\nAudio saved to {audio_file_path}")
+                    count += 1
+
+                elif getattr(chunk, "modality", None) == "text":
+                    if not printed_content:
+                        printed_content = True
+                        print("\ncontent:", end="", flush=True)
+                    print(content, end="", flush=True)
 
 
 def parse_args():
@@ -219,10 +393,67 @@ def parse_args():
         choices=query_map.keys(),
         help="Query type.",
     )
-
+    parser.add_argument(
+        "--video-path",
+        "-v",
+        type=str,
+        default=None,
+        help="Path to local video file or URL. If not provided and query-type uses video, uses default video URL.",
+    )
+    parser.add_argument(
+        "--image-path",
+        "-i",
+        type=str,
+        default=None,
+        help="Path to local image file or URL. If not provided and query-type uses image, uses default image URL.",
+    )
+    parser.add_argument(
+        "--audio-path",
+        "-a",
+        type=str,
+        default=None,
+        help="Path to local audio file or URL. If not provided and query-type uses audio, uses default audio URL.",
+    )
+    parser.add_argument(
+        "--prompt",
+        "-p",
+        type=str,
+        default=None,
+        help="Custom text prompt/question to use instead of the default prompt for the selected query type.",
+    )
+    parser.add_argument(
+        "--modalities",
+        type=str,
+        default=None,
+        help="Output modalities to use for the prompts.",
+    )
+    parser.add_argument(
+        "--stream",
+        action="store_true",
+        help="Stream the response.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8091,
+        help="Port of the vLLM Omni API server.",
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default="localhost",
+        help="Host/IP of the vLLM Omni API server.",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    run_multimodal_generation(args)
+    host = args.host
+    port = args.port
+    openai_api_base = f"http://{host}:{port}/v1"
+    client = OpenAI(
+        api_key="EMPTY",
+        base_url=openai_api_base,
+    )
+    run_multimodal_generation(args, client)

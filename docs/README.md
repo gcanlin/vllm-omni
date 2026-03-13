@@ -8,8 +8,8 @@ hide:
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" src="./source/logos/vllm-omni-logo-text-dark.png">
-    <img alt="vllm-omni" src="./source/logos/vllm-omni-logo-text-dark.png" width=55%>
+    <source media="(prefers-color-scheme: dark)" src="./source/logos/vllm-omni-logo.png">
+    <img alt="vllm-omni" src="./source/logos/vllm-omni-logo.png" width=55%>
   </picture>
 </p>
 <h3 align="center">
@@ -34,7 +34,8 @@ Easy, fast, and cheap omni-modality model serving for everyone
 
 <p align="center">
   <picture>
-    <img alt="vllm-omni" src="./source/architecture/omni-modality model architecture.png" width=55%>
+    <source media="(prefers-color-scheme: dark)" src="./source/architecture/omni-modality-model-architecture.png">
+    <img alt="vllm-omni-arch" src="./source/architecture/omni-modality-model-architecture.png" width=55%>
   </picture>
 </p>
 
@@ -58,4 +59,6 @@ vLLM-Omni seamlessly supports most popular open-source models on HuggingFace, in
 - Multi-modality generation models (e.g. Qwen-Image)
 
 For more information, checkout the following:
-- [Placeholder for vllm-omni blogpost]()
+
+- [vllm-omni architecture design and recent roadmaps](https://docs.google.com/presentation/d/1qv4qMW1rKAqDREMXiUDLIgqqHQe7TDPj/edit?usp=sharing&ouid=110473603432222024453&rtpof=true&sd=true)
+- [vllm-omni announcement blogpost](https://blog.vllm.ai/2025/11/30/vllm-omni.html)

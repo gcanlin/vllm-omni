@@ -6,10 +6,12 @@ import json
 import logging
 import math
 import os
-from typing import Any, Optional, Union
+from collections.abc import Iterable
+from typing import Any
 
 import numpy as np
 import torch
+import torch.distributed
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.autoencoders.autoencoder_kl_qwenimage import (
     AutoencoderKLQwenImage,
@@ -20,14 +22,20 @@ from diffusers.schedulers.scheduling_flow_match_euler_discrete import (
 from diffusers.utils.torch_utils import randn_tensor
 from torch import nn
 from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2Tokenizer
-from vllm.model_executor.model_loader.utils import set_default_torch_dtype
+from vllm.model_executor.models.utils import AutoWeightsLoader
 
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.utils import get_local_device
+from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
+from vllm_omni.diffusion.models.qwen_image.cfg_parallel import (
+    QwenImageCFGParallelMixin,
+)
 from vllm_omni.diffusion.models.qwen_image.qwen_image_transformer import (
     QwenImageTransformer2DModel,
 )
+from vllm_omni.diffusion.quantization import get_vllm_quant_config_for_layers
 from vllm_omni.diffusion.request import OmniDiffusionRequest
+from vllm_omni.diffusion.utils.tf_utils import get_transformer_config_kwargs
 from vllm_omni.model_executor.model_loader.weight_utils import (
     download_weights_from_hf_specific,
 )
@@ -73,10 +81,10 @@ def calculate_shift(
 
 def retrieve_timesteps(
     scheduler,
-    num_inference_steps: Optional[int] = None,
-    device: Optional[Union[str, torch.device]] = None,
-    timesteps: Optional[list[int]] = None,
-    sigmas: Optional[list[float]] = None,
+    num_inference_steps: int | None = None,
+    device: str | torch.device | None = None,
+    timesteps: list[int] | None = None,
+    sigmas: list[float] | None = None,
     **kwargs,
 ) -> tuple[torch.Tensor, int]:
     r"""
@@ -184,7 +192,7 @@ def get_timestep_embedding(
 
 def apply_rotary_emb_qwen(
     x: torch.Tensor,
-    freqs_cis: Union[torch.Tensor, tuple[torch.Tensor]],
+    freqs_cis: torch.Tensor | tuple[torch.Tensor],
     use_real: bool = True,
     use_real_unbind_dim: int = -1,
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -230,43 +238,47 @@ def apply_rotary_emb_qwen(
         return x_out.type_as(x)
 
 
-class QwenImagePipeline(
-    nn.Module,
-):
+class QwenImagePipeline(nn.Module, QwenImageCFGParallelMixin):
     def __init__(
         self,
         *,
-        od_config: OmniDiffusionConfig = None,
+        od_config: OmniDiffusionConfig,
         prefix: str = "",
     ):
         super().__init__()
         self.od_config = od_config
+        self.parallel_config = od_config.parallel_config
+        self.weights_sources = [
+            DiffusersPipelineLoader.ComponentSource(
+                model_or_path=od_config.model,
+                subfolder="transformer",
+                revision=None,
+                prefix="transformer.",
+                fall_back_to_pt=True,
+            )
+        ]
+
         self.device = get_local_device()
         model = od_config.model
-
         # Check if model is a local path
         local_files_only = os.path.exists(model)
 
         self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
             model, subfolder="scheduler", local_files_only=local_files_only
         )
-        logger.info("Loaded Qwen-Image scheduler successfully")
+        self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+            model, subfolder="text_encoder", local_files_only=local_files_only
+        )
+        self.vae = AutoencoderKLQwenImage.from_pretrained(model, subfolder="vae", local_files_only=local_files_only).to(
+            self.device
+        )
+        transformer_kwargs = get_transformer_config_kwargs(od_config.tf_model_config, QwenImageTransformer2DModel)
+        quant_config = get_vllm_quant_config_for_layers(od_config.quantization_config)
+        self.transformer = QwenImageTransformer2DModel(
+            od_config=od_config, quant_config=quant_config, **transformer_kwargs
+        )
 
-        with set_default_torch_dtype(torch.bfloat16):
-            self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                model, subfolder="text_encoder", local_files_only=local_files_only
-            )
-            logger.info("Loaded Qwen-Image text encoder successfully")
-            self.vae = AutoencoderKLQwenImage.from_pretrained(
-                model, subfolder="vae", local_files_only=local_files_only
-            ).to(self.device)
-            logger.info("Loaded Qwen-Image VAE successfully")
-            self.transformer = QwenImageTransformer2DModel()
-            logger.info("Initialized Qwen-Image transformer successfully.")
-            self.tokenizer = Qwen2Tokenizer.from_pretrained(
-                model, subfolder="tokenizer", local_files_only=local_files_only
-            )
-            logger.info("Loaded Qwen-Image tokenizer successfully.")
+        self.tokenizer = Qwen2Tokenizer.from_pretrained(model, subfolder="tokenizer", local_files_only=local_files_only)
 
         self.stage = None
 
@@ -298,7 +310,7 @@ class QwenImagePipeline(
         if height % (self.vae_scale_factor * 2) != 0 or width % (self.vae_scale_factor * 2) != 0:
             logger.warning(
                 f"`height` and `width` have to be divisible by {self.vae_scale_factor * 2} "
-                "but are {height} and {width}. Dimensions will be resized accordingly"
+                f"but are {height} and {width}. Dimensions will be resized accordingly"
             )
 
         # if callback_on_step_end_tensor_inputs is not None and not all(
@@ -353,8 +365,8 @@ class QwenImagePipeline(
 
     def _get_qwen_prompt_embeds(
         self,
-        prompt: Union[str, list[str]] = None,
-        dtype: Optional[torch.dtype] = None,
+        prompt: str | list[str] = None,
+        dtype: torch.dtype | None = None,
     ):
         dtype = dtype or self.text_encoder.dtype
 
@@ -394,10 +406,10 @@ class QwenImagePipeline(
 
     def encode_prompt(
         self,
-        prompt: Union[str, list[str]],
+        prompt: str | list[str],
         num_images_per_prompt: int = 1,
-        prompt_embeds: Optional[torch.Tensor] = None,
-        prompt_embeds_mask: Optional[torch.Tensor] = None,
+        prompt_embeds: torch.Tensor | None = None,
+        prompt_embeds_mask: torch.Tensor | None = None,
         max_sequence_length: int = 1024,
     ):
         r"""
@@ -524,95 +536,51 @@ class QwenImagePipeline(
     def interrupt(self):
         return self._interrupt
 
-    def diffuse(
-        self,
-        prompt_embeds,
-        prompt_embeds_mask,
-        negative_prompt_embeds,
-        negative_prompt_embeds_mask,
-        latents,
-        img_shapes,
-        txt_seq_lens,
-        negative_txt_seq_lens,
-        timesteps,
-        do_true_cfg,
-        guidance,
-        true_cfg_scale,
-    ):
-        self.scheduler.set_begin_index(0)
-        for i, t in enumerate(timesteps):
-            if self.interrupt:
-                continue
-            self._current_timestep = t
-            # broadcast to batch dimension and place on same device/dtype as latents
-            timestep = t.expand(latents.shape[0]).to(device=latents.device, dtype=latents.dtype)
-            noise_pred = self.transformer(
-                hidden_states=latents,
-                timestep=timestep / 1000,
-                guidance=guidance,
-                encoder_hidden_states_mask=prompt_embeds_mask,
-                encoder_hidden_states=prompt_embeds,
-                img_shapes=img_shapes,
-                txt_seq_lens=txt_seq_lens,
-                attention_kwargs=self.attention_kwargs,
-                return_dict=False,
-            )[0]
-            if do_true_cfg:
-                neg_noise_pred = self.transformer(
-                    hidden_states=latents,
-                    timestep=timestep / 1000,
-                    guidance=guidance,
-                    encoder_hidden_states_mask=negative_prompt_embeds_mask,
-                    encoder_hidden_states=negative_prompt_embeds,
-                    img_shapes=img_shapes,
-                    txt_seq_lens=negative_txt_seq_lens,
-                    attention_kwargs=self.attention_kwargs,
-                    return_dict=False,
-                )[0]
-                comb_pred = neg_noise_pred + true_cfg_scale * (noise_pred - neg_noise_pred)
-                cond_norm = torch.norm(noise_pred, dim=-1, keepdim=True)
-                noise_norm = torch.norm(comb_pred, dim=-1, keepdim=True)
-                noise_pred = comb_pred * (cond_norm / noise_norm)
-            # compute the previous noisy sample x_t -> x_t-1
-            latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
-        return latents
-
     def forward(
         self,
         req: OmniDiffusionRequest,
-        prompt: Union[str, list[str]] = "",
-        negative_prompt: Union[str, list[str]] = "",
+        prompt: str | list[str] | None = None,
+        negative_prompt: str | list[str] | None = None,
         true_cfg_scale: float = 4.0,
         height: int | None = None,
         width: int | None = None,
         num_inference_steps: int = 50,
-        sigmas: Optional[list[float]] = None,
+        sigmas: list[float] | None = None,
         guidance_scale: float = 1.0,
         num_images_per_prompt: int = 1,
-        generator: Optional[Union[torch.Generator, list[torch.Generator]]] = None,
-        latents: Optional[torch.Tensor] = None,
-        prompt_embeds: Optional[torch.Tensor] = None,
-        prompt_embeds_mask: Optional[torch.Tensor] = None,
-        negative_prompt_embeds: Optional[torch.Tensor] = None,
-        negative_prompt_embeds_mask: Optional[torch.Tensor] = None,
-        output_type: Optional[str] = "pil",
-        attention_kwargs: Optional[dict[str, Any]] = None,
+        generator: torch.Generator | list[torch.Generator] | None = None,
+        latents: torch.Tensor | None = None,
+        prompt_embeds: torch.Tensor | None = None,
+        prompt_embeds_mask: torch.Tensor | None = None,
+        negative_prompt_embeds: torch.Tensor | None = None,
+        negative_prompt_embeds_mask: torch.Tensor | None = None,
+        output_type: str | None = "pil",
+        attention_kwargs: dict[str, Any] | None = None,
         callback_on_step_end_tensor_inputs: list[str] = ["latents"],
         max_sequence_length: int = 512,
     ) -> DiffusionOutput:
-        # # TODO: only support single prompt now
-        # if req.prompt is not None:
-        #     prompt = req.prompt[0] if isinstance(req.prompt, list) else req.prompt
-        prompt = req.prompt if req.prompt is not None else prompt
-        negative_prompt = req.negative_prompt if req.negative_prompt is not None else negative_prompt
-        height = req.height or self.default_sample_size * self.vae_scale_factor
-        width = req.width or self.default_sample_size * self.vae_scale_factor
-        num_inference_steps = req.num_inference_steps or num_inference_steps
-        generator = req.generator or generator
-        true_cfg_scale = req.true_cfg_scale or true_cfg_scale
-        req_num_outputs = getattr(req, "num_outputs_per_prompt", None)
-        if req_num_outputs and req_num_outputs > 0:
-            num_images_per_prompt = req_num_outputs
+        # TODO: In online mode, sometimes it receives [{"negative_prompt": None}, {...}], so cannot use .get("...", "")
+        # TODO: May be some data formatting operations on the API side. Hack for now.
+        prompt = [p if isinstance(p, str) else (p.get("prompt") or "") for p in req.prompts] or prompt
+        if all(isinstance(p, str) or p.get("negative_prompt") is None for p in req.prompts):
+            negative_prompt = None
+        elif req.prompts:
+            negative_prompt = ["" if isinstance(p, str) else (p.get("negative_prompt") or "") for p in req.prompts]
+
+        height = req.sampling_params.height or self.default_sample_size * self.vae_scale_factor
+        width = req.sampling_params.width or self.default_sample_size * self.vae_scale_factor
+        num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
+        sigmas = req.sampling_params.sigmas or sigmas
+        max_sequence_length = req.sampling_params.max_sequence_length or max_sequence_length
+        generator = req.sampling_params.generator or generator
+        true_cfg_scale = req.sampling_params.true_cfg_scale or true_cfg_scale
+        if req.sampling_params.guidance_scale_provided:
+            guidance_scale = req.sampling_params.guidance_scale
+        num_images_per_prompt = (
+            req.sampling_params.num_outputs_per_prompt
+            if req.sampling_params.num_outputs_per_prompt > 0
+            else num_images_per_prompt
+        )
         # 1. check inputs
         # 2. encode prompts
         # 3. prepare latents and timesteps
@@ -649,6 +617,8 @@ class QwenImagePipeline(
         )
 
         do_true_cfg = true_cfg_scale > 1 and has_neg_prompt
+        self.check_cfg_parallel_validity(true_cfg_scale, has_neg_prompt)
+
         prompt_embeds, prompt_embeds_mask = self.encode_prompt(
             prompt=prompt,
             prompt_embeds=prompt_embeds,
@@ -719,6 +689,12 @@ class QwenImagePipeline(
             do_true_cfg,
             guidance,
             true_cfg_scale,
+            image_latents=None,
+            cfg_normalize=True,
+            additional_transformer_kwargs={
+                "return_dict": False,
+                "attention_kwargs": self.attention_kwargs,
+            },
         )
 
         self._current_timestep = None
@@ -741,52 +717,6 @@ class QwenImagePipeline(
 
         return DiffusionOutput(output=image)
 
-    def load_weights(self):
-        self.load_transformer()
-
-    # TODO: find a better way to load
-    def load_transformer(self):
-        import glob
-        import os
-
-        # Define the weight iterator
-        def weight_iterator(transformer_path):
-            if not os.path.exists(transformer_path):
-                logger.warning(f"Path {transformer_path} does not exist.")
-                return
-
-            # Look for safetensors first
-            safetensors_files = glob.glob(os.path.join(transformer_path, "*.safetensors"))
-            if safetensors_files:
-                try:
-                    from safetensors.torch import load_file
-                except ImportError:
-                    logger.warning("safetensors not installed, cannot load .safetensors files.")
-                    return
-
-                for file_path in safetensors_files:
-                    state_dict = load_file(file_path)
-                    for name, tensor in state_dict.items():
-                        yield name, tensor
-            else:
-                # Fallback to bin
-                bin_files = glob.glob(os.path.join(transformer_path, "*.bin"))
-                for file_path in bin_files:
-                    state_dict = torch.load(file_path)
-                    for name, tensor in state_dict.items():
-                        yield name, tensor
-
-        try:
-            # Get model path from config or download from HF
-            model_name = self.od_config.model if hasattr(self, "od_config") else "Qwen/Qwen-Image"
-            if os.path.exists(model_name):
-                model_path = model_name
-            else:
-                model_path = download_weights_from_hf_specific(model_name, None, ["*"])
-
-            transformer_path = os.path.join(model_path, "transformer")
-            self.transformer.load_weights(weight_iterator(transformer_path))
-
-        except Exception as e:
-            print(f"An error occurred: {e}")
-            raise e
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        loader = AutoWeightsLoader(self)
+        return loader.load_weights(weights)
