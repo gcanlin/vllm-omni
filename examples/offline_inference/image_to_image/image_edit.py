@@ -326,7 +326,7 @@ def parse_args() -> argparse.Namespace:
         help="Enable layerwise (blockwise) offloading on DiT modules.",
     )
     parser.add_argument(
-        "--enable-profiler",
+        "--profiler-dir",
         type=str,
         default=None,
         help="Enables profiling when set.",

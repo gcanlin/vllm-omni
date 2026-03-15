@@ -90,15 +90,15 @@ omni_llm.close()
 ```bash
 # Profile only Stage 0 (Thinker)
 python end2end.py --output-wav output_audio \
-    --query-type text --enable-profiler --profiler-stages 0
+    --query-type text --profiler-dir ./profile --profiler-stages 0
 
 # Profile Stage 0 and Stage 2
 python end2end.py --output-wav output_audio \
-    --query-type text --enable-profiler --profiler-stages 0 2
+    --query-type text --profiler-dir ./profile --profiler-stages 0 2
 
 # Profile all stages (omit --profiler-stages)
 python end2end.py --output-wav output_audio \
-    --query-type text --enable-profiler
+    --query-type text --profiler-dir ./profile
 ```
 
 **Examples**:
@@ -109,7 +109,7 @@ python end2end.py --output-wav output_audio \
 
 ### 3. Profiling diffusion models
 
-Diffusion profiling is End-to-End, capturing encoding, denoising loops, and decoding. Standalone diffusion scripts use `--enable-profiler` to enable profiling.
+Diffusion profiling is End-to-End, capturing encoding, denoising loops, and decoding. Standalone diffusion scripts use `--profiler-dir` to enable profiling.
 
 **CLI Usage:**
 ```bash
@@ -117,7 +117,7 @@ python image_to_video.py \
     --model Wan-AI/Wan2.2-I2V-A14B-Diffusers \
     --image qwen-bear.png \
     --prompt "A cat playing with yarn, smooth motion" \
-    --enable-profiler \
+    --profiler-dir \
     \
     # Minimize Spatial Dimensions (Optional but helpful):
     #    Drastically reduces memory usage so the profiler doesn't

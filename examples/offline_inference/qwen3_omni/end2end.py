@@ -528,7 +528,7 @@ def parse_args():
         help="Use py_generator mode. The returned type of Omni.generate() is a Python Generator object.",
     )
     parser.add_argument(
-        "--enable-profiler",
+        "--profiler-dir",
         type=str,
         default=None,
         help="Enables profiling when set.",
