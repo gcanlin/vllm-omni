@@ -458,7 +458,7 @@ class OmniDiffusionConfig:
     omni_kv_config: dict[str, Any] = field(default_factory=dict)
 
     profiler_config: ProfilerConfig | dict[str, Any] | None = None
-    
+
     # Model-specific function for collecting CFG KV caches (set at runtime)
     cfg_kv_collect_func: Any | None = None
 
