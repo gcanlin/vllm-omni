@@ -203,7 +203,7 @@ Trace files are written to the `torch_profiler_dir` specified in your stage YAML
 
 > **Important:** Always stop the same stages you started. Stopping a stage that was never started will produce errors.
 
-### 6. Analyzing Traces
+### 5. Analyzing Traces
 
 Output files are saved to the `torch_profiler_dir` specified in your stage YAML config.
 
