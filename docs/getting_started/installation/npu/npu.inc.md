@@ -33,7 +33,7 @@ docker run --rm \
     -p 8000:8000 \
     -it $IMAGE bash
 
-cd /vllm-workspace/vllm-ascend
+cd /vllm-workspace/vllm
 git pull origin main
 git fetch origin --tags
 git checkout v0.16.0
@@ -48,9 +48,10 @@ pip install -v -e .
 # Inside the container, install vLLM-Omni from source
 cd /vllm-workspace
 git clone -b v0.16.0 https://github.com/vllm-project/vllm-omni.git
-
 cd vllm-omni
 pip install -v -e . --no-build-isolation
+# or VLLM_OMNI_TARGET_DEVICE=npu pip install -v -e .
+
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 ```
 
