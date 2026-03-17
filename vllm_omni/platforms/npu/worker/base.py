@@ -37,9 +37,7 @@ class OmniNPUWorkerBase(NPUWorker):
         a descriptive trace filename for OmniProfiler.
         """
         if self.profiler is None:
-            raise RuntimeError(
-                "Profiling is not enabled. Please set --profiler-config to enable profiling."
-            )
+            raise RuntimeError("Profiling is not enabled. Please set --profiler-config to enable profiling.")
         if is_start:
             from vllm_omni.profiler import OmniTorchProfilerWrapper
 
