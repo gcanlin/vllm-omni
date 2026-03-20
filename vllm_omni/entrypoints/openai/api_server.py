@@ -1307,6 +1307,9 @@ async def edit_images(
     generator_device: str | None = Form(None),
     # vllm-omni extension for per-request LoRA.
     lora: str | None = Form(None),  # Json string
+    # vllm-omni extension for layered models (e.g., Qwen-Image-Layered)
+    layers: int | None = Form(None),
+    resolution: int | None = Form(None),  # 640 or 1024
 ) -> ImageGenerationResponse:
     """
     OpenAI-compatible image edit endpoint.
@@ -1370,17 +1373,21 @@ async def edit_images(
         max_generated_image_size = getattr(app_state_args, "max_generated_image_size", None)
         width, height = None, None
         if size.lower() == "auto":
-            width, height = pil_images[0].size  # Use first image size
+            if resolution is None:
+                # No resolution specified, use input image size
+                width, height = pil_images[0].size
+            # else: let pipeline calculate dimensions based on resolution
         else:
             width, height = parse_size(size)
-        if max_generated_image_size is not None and (width * height > max_generated_image_size):
-            raise HTTPException(
-                status_code=HTTPStatus.BAD_REQUEST.value,
-                detail=f"Requested image size {width}x{height} exceeds the maximum allowed "
-                f"size of {max_generated_image_size} pixels.",
-            )
+        if width is not None and height is not None:
+            if max_generated_image_size is not None and (width * height > max_generated_image_size):
+                raise HTTPException(
+                    status_code=HTTPStatus.BAD_REQUEST.value,
+                    detail=f"Requested image size {width}x{height} exceeds the maximum allowed "
+                    f"size of {max_generated_image_size} pixels.",
+                )
 
-        size_str = f"{width}x{height}"
+        size_str = f"{width}x{height}" if width and height else "auto"
         _update_if_not_none(gen_params, "width", width)
         _update_if_not_none(gen_params, "height", height)
 
@@ -1394,6 +1401,8 @@ async def edit_images(
         # might produce blurry images in some environments.
         _update_if_not_none(gen_params, "seed", seed if seed is not None else random.randint(0, 2**32 - 1))
         _update_if_not_none(gen_params, "generator_device", generator_device)
+        _update_if_not_none(gen_params, "layers", layers)
+        _update_if_not_none(gen_params, "resolution", resolution)
 
         # 4. Generate images using AsyncOmni (multi-stage mode)
         request_id = f"img_edit_{int(time.time())}"
@@ -1576,7 +1585,14 @@ def _extract_images_from_result(result: Any) -> list[Any]:
             images = request_output["images"]
         elif hasattr(request_output, "images") and request_output.images:
             images = request_output.images
-    return images
+    # Flatten nested lists (e.g., from layered models like Qwen-Image-Layered)
+    flattened = []
+    for img in images:
+        if isinstance(img, list):
+            flattened.extend(img)
+        else:
+            flattened.append(img)
+    return flattened
 
 
 async def _load_input_images(
