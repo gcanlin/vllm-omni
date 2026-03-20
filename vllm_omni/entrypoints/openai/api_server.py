@@ -1369,7 +1369,14 @@ async def edit_images(
         lora_request, lora_scale = _parse_lora_request(lora_dict)
         _update_if_not_none(gen_params, "lora_request", lora_request)
         _update_if_not_none(gen_params, "lora_scale", lora_scale)
-        # 3.2 Parse and add size if provided
+        # 3.2 Validate resolution if provided (only 640 or 1024 are supported)
+        if resolution is not None and resolution not in (640, 1024):
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST.value,
+                detail=f"Invalid resolution {resolution}. Only 640 or 1024 are supported.",
+            )
+
+        # 3.3 Parse and add size if provided
         max_generated_image_size = getattr(app_state_args, "max_generated_image_size", None)
         width, height = None, None
         if size.lower() == "auto":
@@ -1379,13 +1386,24 @@ async def edit_images(
             # else: let pipeline calculate dimensions based on resolution
         else:
             width, height = parse_size(size)
-        if width is not None and height is not None:
-            if max_generated_image_size is not None and (width * height > max_generated_image_size):
-                raise HTTPException(
-                    status_code=HTTPStatus.BAD_REQUEST.value,
-                    detail=f"Requested image size {width}x{height} exceeds the maximum allowed "
-                    f"size of {max_generated_image_size} pixels.",
-                )
+
+        # Check max_generated_image_size
+        if max_generated_image_size is not None:
+            if width is not None and height is not None:
+                if width * height > max_generated_image_size:
+                    raise HTTPException(
+                        status_code=HTTPStatus.BAD_REQUEST.value,
+                        detail=f"Requested image size {width}x{height} exceeds the maximum allowed "
+                        f"size of {max_generated_image_size} pixels.",
+                    )
+            elif resolution is not None:
+                # When resolution is set, the output size is resolution * resolution
+                if resolution * resolution > max_generated_image_size:
+                    raise HTTPException(
+                        status_code=HTTPStatus.BAD_REQUEST.value,
+                        detail=f"Requested resolution {resolution} (max {resolution}x{resolution} pixels) "
+                        f"exceeds the maximum allowed size of {max_generated_image_size} pixels.",
+                    )
 
         size_str = f"{width}x{height}" if width and height else "auto"
         _update_if_not_none(gen_params, "width", width)
