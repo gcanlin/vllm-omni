@@ -835,12 +835,13 @@ def test_image_edit_parameter_default(async_omni_test_client):
     assert captured_sampling_params.num_inference_steps == 4
     assert captured_sampling_params.guidance_scale == 7.5
 
+    # Test that a size exceeding max_generated_image_size returns 400
     response = async_omni_test_client.post(
         "/v1/images/edits",
         files=[("image", img_bytes_1)],
         data={
             "prompt": "hello world.",
-            "size": "96x96",
+            "size": "2048x2048",  # 4,194,304 pixels > max_generated_image_size (1,048,576)
         },
     )
     assert response.status_code == 400
