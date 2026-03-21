@@ -754,6 +754,65 @@ def test_image_edit_parameter_pass(async_omni_test_client):
         assert data["size"] == "16x24"
 
 
+def test_image_edit_layers_and_resolution(async_omni_test_client):
+    """Test layers and resolution parameters for layered models."""
+    img_bytes = make_test_image_bytes((16, 16))
+
+    response = async_omni_test_client.post(
+        "/v1/images/edits",
+        files=[("image", img_bytes)],
+        data={
+            "prompt": "decompose into layers",
+            "layers": 4,
+            "resolution": 1024,
+        },
+    )
+    assert response.status_code == 200
+    engine = async_omni_test_client.app.state.engine_client
+    captured_sampling_params = engine.captured_sampling_params_list[-1]
+    assert captured_sampling_params.layers == 4
+    assert captured_sampling_params.resolution == 1024
+
+
+def test_image_edit_resolution_auto_size(async_omni_test_client):
+    """Test that size='auto' with resolution lets pipeline calculate dimensions."""
+    img_bytes = make_test_image_bytes((16, 16))
+
+    response = async_omni_test_client.post(
+        "/v1/images/edits",
+        files=[("image", img_bytes)],
+        data={
+            "prompt": "test",
+            "size": "auto",
+            "resolution": 640,
+        },
+    )
+    assert response.status_code == 200
+    engine = async_omni_test_client.app.state.engine_client
+    captured_sampling_params = engine.captured_sampling_params_list[-1]
+    # When resolution is set with size=auto, width/height should be None
+    # to let pipeline calculate based on resolution
+    assert captured_sampling_params.width is None
+    assert captured_sampling_params.height is None
+    assert captured_sampling_params.resolution == 640
+
+
+def test_image_edit_invalid_resolution(async_omni_test_client):
+    """Test that invalid resolution values are rejected with 400."""
+    img_bytes = make_test_image_bytes((16, 16))
+
+    response = async_omni_test_client.post(
+        "/v1/images/edits",
+        files=[("image", img_bytes)],
+        data={
+            "prompt": "test",
+            "resolution": 512,  # Invalid, only 640 or 1024 are supported
+        },
+    )
+    assert response.status_code == 400
+    assert "Only 640 or 1024" in response.json()["detail"]
+
+
 def test_image_edit_parameter_default(async_omni_test_client):
     img_bytes_1 = make_test_image_bytes((24, 16))
 
