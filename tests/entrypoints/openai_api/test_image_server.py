@@ -194,7 +194,7 @@ def async_omni_test_client():
     ]
     app.state.args = Namespace(
         default_sampling_params='{"1": {"num_inference_steps":4, "guidance_scale":7.5}}',
-        max_generated_image_size=4096,  # 64*64
+        max_generated_image_size=1048576,  # 1024*1024 to support resolution tests
     )
     return TestClient(app)
 
