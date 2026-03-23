@@ -45,8 +45,12 @@ class OmniGPUWorkerBase(GPUWorker):
                 local_rank=self.local_rank,
             )
 
-    def profile(self, is_start: bool = True):
+    def profile(self, is_start: bool = True, profile_prefix: str | None = None):
         """Override to set trace filename before starting the profiler.
+
+        Args:
+            is_start: True to start profiling, False to stop.
+            profile_prefix: Optional prefix for trace filename (vLLM compat).
 
         vLLM's profile() only passes is_start, so we generate a descriptive
         trace filename here before delegating to the profiler.
@@ -57,7 +61,7 @@ class OmniGPUWorkerBase(GPUWorker):
             from vllm_omni.profiler import OmniTorchProfilerWrapper
 
             if isinstance(self.profiler, OmniTorchProfilerWrapper):
-                filename = f"stage_llm_{int(time.time())}"
+                filename = profile_prefix or f"stage_llm_{int(time.time())}"
                 self.profiler.set_trace_filename(filename)
             self.profiler.start()
         else:

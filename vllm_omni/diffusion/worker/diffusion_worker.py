@@ -183,22 +183,32 @@ class DiffusionWorker:
         """Generate output for the given requests."""
         return self.execute_model(request, self.od_config)
 
-    def start_profile(self, trace_path_template: str) -> str:
-        """Start profiling for this GPU worker."""
-        if self.profiler is None:
-            logger.warning("Profiler not initialized, skipping start_profile")
-            return ""
-        self.profiler.set_trace_filename(trace_path_template)
-        self.profiler.start()
-        return trace_path_template
+    def profile(self, is_start: bool = True, profile_prefix: str | None = None) -> None:
+        """Start or stop profiling for this GPU worker.
 
-    def stop_profile(self) -> dict:
-        """Stop profiling and return the result dictionary."""
+        Args:
+            is_start: True to start profiling, False to stop.
+            profile_prefix: Optional prefix for trace filename (vLLM compat).
+
+        Note:
+            Matches vLLM's worker.profile() signature for consistency.
+            Traces are saved automatically via on_trace_ready callback.
+        """
         if self.profiler is None:
-            logger.warning("Profiler not initialized, skipping stop_profile")
-            return {}
-        self.profiler.stop()
-        return self.profiler.get_results()
+            logger.warning("Profiler not initialized, skipping profile(%s)", is_start)
+            return
+
+        if is_start:
+            from vllm_omni.profiler import OmniTorchProfilerWrapper
+
+            if isinstance(self.profiler, OmniTorchProfilerWrapper):
+                import time
+
+                filename = profile_prefix or f"diffusion_{int(time.time())}"
+                self.profiler.set_trace_filename(filename)
+            self.profiler.start()
+        else:
+            self.profiler.stop()
 
     def execute_model(self, req: OmniDiffusionRequest, od_config: OmniDiffusionConfig) -> DiffusionOutput:
         """Execute a forward pass by delegating to the model runner."""
