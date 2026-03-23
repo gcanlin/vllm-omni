@@ -57,7 +57,7 @@ class OmniGPUWorkerBase(GPUWorker):
         trace filename here before delegating to the profiler.
         """
         if self.profiler is None:
-            raise RuntimeError("Profiling is not enabled. Please set --profiler-config to enable profiling.")
+            raise RuntimeError("Profiling is not enabled. Please set --profiler-config (diffusion) or --stage-configs-path (omni) to enable profiling.")
         if is_start:
             from vllm_omni.profiler import OmniTorchProfilerWrapper
 
