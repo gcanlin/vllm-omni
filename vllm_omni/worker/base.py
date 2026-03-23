@@ -38,7 +38,8 @@ class OmniGPUWorkerBase(GPUWorker):
         if profiler_config and profiler_config.profiler == "torch":
             from vllm_omni.profiler import create_omni_profiler
 
-            worker_name = f"stage-rank-{self.rank}"
+            stage_id = getattr(self.vllm_config.model_config, "stage_id", 0)
+            worker_name = f"stage{stage_id}_rank{self.rank}"
             self.profiler = create_omni_profiler(
                 profiler_config=profiler_config,
                 worker_name=worker_name,
@@ -61,7 +62,10 @@ class OmniGPUWorkerBase(GPUWorker):
             from vllm_omni.profiler import OmniTorchProfilerWrapper
 
             if isinstance(self.profiler, OmniTorchProfilerWrapper):
-                filename = profile_prefix or f"stage_llm_{int(time.time())}"
+                # Include stage_id and rank in default filename to distinguish
+                # traces from different stages profiling on the same local_rank
+                stage_id = getattr(self.vllm_config.model_config, "stage_id", 0)
+                filename = profile_prefix or f"stage{stage_id}_rank{self.rank}_{int(time.time())}"
                 self.profiler.set_trace_filename(filename)
             self.profiler.start()
         else:

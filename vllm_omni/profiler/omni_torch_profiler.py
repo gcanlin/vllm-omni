@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from typing import Literal
 
 import torch
@@ -53,6 +54,7 @@ class OmniTorchProfilerWrapper(WorkerProfiler):
 
         self.local_rank = local_rank
         self.profiler_config = profiler_config
+        self._worker_name = worker_name
         self._trace_dir = profiler_config.torch_profiler_dir
         self._use_gzip = profiler_config.torch_profiler_use_gzip
         self._trace_filename: str | None = None
@@ -107,7 +109,7 @@ class OmniTorchProfilerWrapper(WorkerProfiler):
     def _on_trace_ready(self, prof) -> None:
         """Custom trace handler: export chrome trace with omni naming."""
         rank = self.local_rank
-        filename = self._trace_filename or f"omni_{os.getpid()}"
+        filename = self._trace_filename or f"{self._worker_name}_{int(time.time())}"
         # If filename already contains a directory, use as-is (e.g. from
         # diffusion engine which builds full path). Otherwise join with trace_dir.
         if os.path.dirname(filename):
