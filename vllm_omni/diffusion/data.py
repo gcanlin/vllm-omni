@@ -464,6 +464,9 @@ class OmniDiffusionConfig:
     # Diffusion pipeline Profiling config
     enable_diffusion_pipeline_profiler: bool = False
 
+    # Step mode settings
+    step_execution: bool = False
+
     @property
     def is_moe(self) -> bool:
         num_experts = self.tf_model_config.get("num_experts", None)
@@ -647,6 +650,9 @@ class DiffusionOutput:
 
     # logged duration of stages
     stage_durations: dict[str, float] = field(default_factory=dict)
+
+    # memory usage info
+    peak_memory_mb: float = 0.0
 
 
 class AttentionBackendEnum(enum.Enum):
