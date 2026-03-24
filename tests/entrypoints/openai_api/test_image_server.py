@@ -810,7 +810,61 @@ def test_image_edit_invalid_resolution(async_omni_test_client):
         },
     )
     assert response.status_code == 400
-    assert "Only 640 or 1024" in response.json()["detail"]
+    detail = response.json()["detail"]
+    assert "Invalid resolution" in detail
+    assert "512" in detail
+
+
+def test_image_edit_invalid_layers(async_omni_test_client):
+    """Test that invalid layers values (< 1) are rejected with 400."""
+    img_bytes = make_test_image_bytes((16, 16))
+
+    # Test layers = 0
+    response = async_omni_test_client.post(
+        "/v1/images/edits",
+        files=[("image", img_bytes)],
+        data={
+            "prompt": "test",
+            "layers": 0,
+        },
+    )
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "Invalid layers" in detail
+    assert "layers must be >= 1" in detail
+
+    # Test layers = -1
+    response = async_omni_test_client.post(
+        "/v1/images/edits",
+        files=[("image", img_bytes)],
+        data={
+            "prompt": "test",
+            "layers": -1,
+        },
+    )
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "Invalid layers" in detail
+
+
+def test_image_edit_resolution_and_size_conflict(async_omni_test_client):
+    """Test that providing both resolution and explicit size raises 400."""
+    img_bytes = make_test_image_bytes((16, 16))
+
+    response = async_omni_test_client.post(
+        "/v1/images/edits",
+        files=[("image", img_bytes)],
+        data={
+            "prompt": "test",
+            "resolution": 1024,
+            "size": "512x512",  # Conflict: both resolution and explicit size
+        },
+    )
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "Cannot specify both" in detail
+    assert "resolution" in detail
+    assert "size" in detail
 
 
 def test_image_edit_parameter_default(async_omni_test_client):

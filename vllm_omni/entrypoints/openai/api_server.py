@@ -117,6 +117,9 @@ from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniSamplingParam
 
 logger = init_logger(__name__)
 router = APIRouter()
+
+# Supported resolution buckets for layered models (e.g., Qwen-Image-Layered)
+SUPPORTED_LAYERED_RESOLUTIONS = (640, 1024)
 profiler_router = APIRouter()
 
 
@@ -1309,7 +1312,7 @@ async def edit_images(
     lora: str | None = Form(None),  # Json string
     # vllm-omni extension for layered models (e.g., Qwen-Image-Layered)
     layers: int | None = Form(None),
-    resolution: int | None = Form(None),  # 640 or 1024
+    resolution: int | None = Form(None),  # See SUPPORTED_LAYERED_RESOLUTIONS
 ) -> ImageGenerationResponse:
     """
     OpenAI-compatible image edit endpoint.
@@ -1369,11 +1372,24 @@ async def edit_images(
         lora_request, lora_scale = _parse_lora_request(lora_dict)
         _update_if_not_none(gen_params, "lora_request", lora_request)
         _update_if_not_none(gen_params, "lora_scale", lora_scale)
-        # 3.2 Validate resolution if provided (only 640 or 1024 are supported)
-        if resolution is not None and resolution not in (640, 1024):
+        # 3.2 Validate resolution if provided
+        if resolution is not None and resolution not in SUPPORTED_LAYERED_RESOLUTIONS:
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST.value,
-                detail=f"Invalid resolution {resolution}. Only 640 or 1024 are supported.",
+                detail=f"Invalid resolution {resolution}. Supported resolutions: {SUPPORTED_LAYERED_RESOLUTIONS}.",
+            )
+        # 3.2.1 Validate layers if provided
+        if layers is not None and layers < 1:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST.value,
+                detail=f"Invalid layers value {layers}. layers must be >= 1.",
+            )
+        # 3.2.2 Check for conflicting size and resolution parameters
+        if resolution is not None and size.lower() != "auto":
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST.value,
+                detail="Cannot specify both 'resolution' and 'size'. "
+                "Use 'resolution' with size='auto', or use 'size' without 'resolution'.",
             )
 
         # 3.3 Parse and add size if provided
@@ -1405,7 +1421,7 @@ async def edit_images(
                         f"exceeds the maximum allowed size of {max_generated_image_size} pixels.",
                     )
 
-        size_str = f"{width}x{height}" if width and height else "auto"
+        size_str = f"{width}x{height}" if width is not None and height is not None else "auto"
         _update_if_not_none(gen_params, "width", width)
         _update_if_not_none(gen_params, "height", height)
 
@@ -1603,7 +1619,8 @@ def _extract_images_from_result(result: Any) -> list[Any]:
             images = request_output["images"]
         elif hasattr(request_output, "images") and request_output.images:
             images = request_output.images
-    # Flatten nested lists (e.g., from layered models like Qwen-Image-Layered)
+    # Flatten nested lists (e.g., from layered models like Qwen-Image-Layered).
+    # Note: This only flattens one level deep. Deeper nesting is not supported.
     flattened = []
     for img in images:
         if isinstance(img, list):
