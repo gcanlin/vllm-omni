@@ -62,9 +62,8 @@ class NPUTorchProfilerWrapper(OmniTorchProfilerWrapper):
         )
 
         # Set up trace directory for NPU - tensorboard_trace_handler creates
-        # its own subdirectory structure
-        rank = self.local_rank
-        npu_trace_dir = os.path.join(self._trace_dir, f"npu_rank{rank}")
+        # its own subdirectory structure. Use worker_name which includes stage_id.
+        npu_trace_dir = os.path.join(self._trace_dir, self._worker_name)
         os.makedirs(npu_trace_dir, exist_ok=True)
         self._trace_path = npu_trace_dir
 
