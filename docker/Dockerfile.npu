@@ -6,7 +6,7 @@ WORKDIR /vllm-workspace/vllm
 RUN git fetch origin --tags && git checkout v0.18.0
 
 WORKDIR /vllm-workspace/vllm-ascend
-RUN git fetch origin --tags && git checkout d781902ce9dbda8ab1e11bb0f2f0c1bc508fee7a
+RUN git fetch origin releases/v0.18.0 && git checkout d781902ce9dbda8ab1e11bb0f2f0c1bc508fee7a
 # Install vllm-ascend
 # Append `libascend_hal.so` path (devlib) to LD_LIBRARY_PATH
 RUN export PIP_EXTRA_INDEX_URL=https://mirrors.huaweicloud.com/ascend/repos/pypi && \
