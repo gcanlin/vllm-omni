@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
@@ -21,11 +22,53 @@ from vllm.model_executor.model_loader.weight_utils import (
 )
 from vllm.model_executor.models.utils import is_pp_missing_parameter
 
+from vllm_omni.compilation import BucketedStaticGraphRunner, GraphWorkloadAdapter, PowerOfTwoBucketPolicy
 from vllm_omni.platforms import current_omni_platform
 
 from .configuration_qwen3_tts import Qwen3TTSTalkerCodePredictorConfig, Qwen3TTSTalkerConfig
 
 logger = init_logger(__name__)
+
+
+@dataclass
+class _CodePredictorStaticState:
+    static_input: torch.Tensor
+    position_ids: torch.Tensor
+
+
+class _CodePredictorStaticGraphWorkload(GraphWorkloadAdapter[_CodePredictorStaticState, torch.Tensor]):
+    def __init__(self, owner: "Qwen3TTSTalkerCodePredictorForConditionalGenerationVLLM"):
+        self.owner = owner
+
+    def bucket_value(self, *, input_tensor: torch.Tensor, position_ids: torch.Tensor, padded_bsz: int) -> int:
+        return int(padded_bsz)
+
+    def build_static_state(
+        self, bucket_size: int, device: torch.device, dtype: torch.dtype
+    ) -> _CodePredictorStaticState:
+        assert self.owner._proj_buf is not None
+        max_seq = self.owner._num_groups + 1
+        return _CodePredictorStaticState(
+            static_input=self.owner._proj_buf[:bucket_size, :max_seq, :],
+            position_ids=self.owner._bucket_pos_ids[bucket_size],
+        )
+
+    def warmup(self, state: _CodePredictorStaticState) -> None:
+        for _ in range(2):
+            _ = self.owner._compiled_model_fwd(state.static_input, state.position_ids)
+
+    def run(self, state: _CodePredictorStaticState) -> torch.Tensor:
+        return self.owner._compiled_model_fwd(state.static_input, state.position_ids)
+
+    def eager(self, *, input_tensor: torch.Tensor, position_ids: torch.Tensor, padded_bsz: int) -> torch.Tensor:
+        return self.owner._compiled_model_fwd(input_tensor, position_ids)
+
+    def copy_inputs(
+        self, state: _CodePredictorStaticState, *, input_tensor: torch.Tensor, position_ids: torch.Tensor, padded_bsz: int
+    ) -> None:
+        # The static input is a view into the owner's persistent projection
+        # buffer. The caller has already populated it before replay.
+        return None
 
 
 # ===================================================================
@@ -42,6 +85,7 @@ class _CodePredictorAttention(nn.Module):
     """Standalone multi-head attention for code predictor.
 
     Uses F.scaled_dot_product_attention (SDPA) instead of vLLM's paged Attention.
+    On NPU, uses torch_npu.npu_fusion_attention for graph capture compatibility.
     Supports fused QKV, RoPE, q/k normalization, and native GQA via enable_gqa.
     Input: [B, seq_len, hidden_size], output: [B, seq_len, hidden_size].
     """
@@ -91,6 +135,26 @@ class _CodePredictorAttention(nn.Module):
         self.q_norm = RMSNorm(self.head_dim, eps=config.rms_norm_eps)
         self.k_norm = RMSNorm(self.head_dim, eps=config.rms_norm_eps)
 
+        # Check if running on NPU for graph-compatible attention
+        self._use_npu_fusion_attn = current_omni_platform.is_npu()
+        # Cache for NPU causal attention mask (created lazily)
+        # NPU requires fixed 2048x2048 mask shape for attention mask compression
+        self._npu_attn_mask: torch.Tensor | None = None
+
+    def _get_npu_causal_mask(self, device: torch.device) -> torch.Tensor:
+        """Get or create a causal attention mask for NPU fusion attention.
+
+        Returns a bool upper triangular mask of fixed shape [2048, 2048].
+        NPU requires this fixed size for attention mask compression.
+        True=mask (don't attend), False=attend.
+        """
+        if self._npu_attn_mask is not None:
+            return self._npu_attn_mask
+        # Create fixed-size 2048x2048 upper triangular mask
+        mask = torch.triu(torch.ones(2048, 2048, device=device, dtype=torch.bool), diagonal=1)
+        self._npu_attn_mask = mask
+        return mask
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -106,20 +170,57 @@ class _CodePredictorAttention(nn.Module):
 
         q, k = self.rotary_emb(position_ids, q, k)
 
-        q = q.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-        k = k.view(bsz, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
-        v = v.view(bsz, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        if self._use_npu_fusion_attn:
+            # NPU path: use npu_fusion_attention for graph capture compatibility
+            # Reshape to TND layout: (bsz * seq_len, num_heads, head_dim)
+            q = q.view(bsz * seq_len, self.num_heads, self.head_dim)
+            k = k.view(bsz * seq_len, self.num_kv_heads, self.head_dim)
+            v = v.view(bsz * seq_len, self.num_kv_heads, self.head_dim)
 
-        attn_out = F.scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            scale=self.scaling,
-            is_causal=True,
-            enable_gqa=self._use_gqa,
-        )
+            # Handle GQA by repeating KV heads
+            if self._use_gqa:
+                num_repeat = self.num_heads // self.num_kv_heads
+                k = k.repeat_interleave(num_repeat, dim=1)
+                v = v.repeat_interleave(num_repeat, dim=1)
 
-        attn_out = attn_out.transpose(1, 2).reshape(bsz * seq_len, -1)
+            # Cumulative sequence lengths for each batch item (required by npu_fusion_attention)
+            # For uniform sequence lengths, this is [seq_len, 2*seq_len, ..., bsz*seq_len]
+            actual_seq_lens = [seq_len * (i + 1) for i in range(bsz)]
+
+            # Get causal attention mask for NPU (fixed 2048x2048 shape required)
+            attn_mask = self._get_npu_causal_mask(q.device)
+
+            import torch_npu
+            attn_out = torch_npu.npu_fusion_attention(
+                query=q,
+                key=k,
+                value=v,
+                head_num=self.num_heads,
+                input_layout="TND",
+                scale=self.scaling,
+                sparse_mode=3,  # Causal attention mode with mask
+                atten_mask=attn_mask,
+                actual_seq_qlen=actual_seq_lens,
+                actual_seq_kvlen=actual_seq_lens,
+            )[0]
+            # Reshape from TND (bsz*seq_len, num_heads, head_dim) to (bsz*seq_len, hidden_size)
+            attn_out = attn_out.reshape(bsz * seq_len, -1)
+        else:
+            # CUDA/other path: use F.scaled_dot_product_attention
+            q = q.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+            k = k.view(bsz, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
+            v = v.view(bsz, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
+
+            attn_out = F.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                scale=self.scaling,
+                is_causal=True,
+                enable_gqa=self._use_gqa,
+            )
+            attn_out = attn_out.transpose(1, 2).reshape(bsz * seq_len, -1)
+
         output, _ = self.o_proj(attn_out)
         return output.view(bsz, seq_len, -1)
 
@@ -353,7 +454,7 @@ class Qwen3TTSTalkerCodePredictorForConditionalGenerationVLLM(nn.Module):
         self._bucket_pos_ids: dict[int, torch.Tensor] = {}
         self._lm_heads_list: list[nn.Module] | None = None
         self._codec_embeds_list: list[nn.Module] | None = None
-        self._cuda_graphs: dict[int, tuple[torch.cuda.CUDAGraph, torch.Tensor]] = {}
+        self._graph_runner: BucketedStaticGraphRunner[_CodePredictorStaticState, torch.Tensor] | None = None
 
     def get_input_embeddings(self) -> nn.ModuleList:
         return self.model.get_input_embeddings()
@@ -399,20 +500,22 @@ class Qwen3TTSTalkerCodePredictorForConditionalGenerationVLLM(nn.Module):
         )
 
     def _setup_compile(self) -> None:
-        """Lazily set up torch.compile with manual CUDA graph capture."""
+        """Lazily set up torch.compile and the shared static-graph runner."""
         if self._compiled_model_fwd is not None:
             return
         self._lm_heads_list = list(self.lm_head)
         self._codec_embeds_list = list(self.model.codec_embedding)
         if not current_omni_platform.supports_torch_inductor():
-            logger.warning_once("code_predictor: torch.compile disabled")
+            logger.warning_once("code_predictor: torch.compile disabled, using eager callable")
             self._compiled_model_fwd = self.model.forward
-            return
-
-        self._compiled_model_fwd = torch.compile(self.model.forward, mode="default", dynamic=False)
+        else:
+            self._compiled_model_fwd = torch.compile(self.model.forward, mode="default", dynamic=False)
         self._warmup_buckets()
-        self._capture_cuda_graphs()
-        logger.info("code_predictor: torch.compile (mode=default) + CUDA graphs")
+        self._setup_static_graph_runner()
+        if self._graph_runner is not None:
+            logger.info("code_predictor: helper forward uses shared static-graph runner")
+        elif current_omni_platform.supports_torch_inductor():
+            logger.info("code_predictor: torch.compile enabled without static graphs")
 
     def _padded_bsz(self, bsz: int) -> int:
         for bucket in self._bucket_sizes:
@@ -421,12 +524,9 @@ class Qwen3TTSTalkerCodePredictorForConditionalGenerationVLLM(nn.Module):
         return bsz
 
     def _warmup_buckets(self) -> None:
-        """Warmup power-of-2 batch-size buckets to front-load Inductor compilation."""
+        """Prepare power-of-2 batch-size buckets and warm up the callable."""
         max_bsz = self._vllm_config.scheduler_config.max_num_seqs
-        bucket_sizes = [1 << i for i in range(max_bsz.bit_length()) if (1 << i) <= max_bsz]
-        if max_bsz not in bucket_sizes:
-            bucket_sizes.append(max_bsz)
-        self._bucket_sizes = sorted(bucket_sizes)
+        self._bucket_sizes = PowerOfTwoBucketPolicy.from_max_batch_size(max_bsz).capture_sizes
 
         max_seq = self._num_groups + 1
         device = next(self.model.parameters()).device
@@ -440,26 +540,22 @@ class Qwen3TTSTalkerCodePredictorForConditionalGenerationVLLM(nn.Module):
                 self._compiled_model_fwd(proj_buf[:bsz, :max_seq, :], pos_ids)
         logger.info("code_predictor: warmup done for buckets %s", self._bucket_sizes)
 
-    def _capture_cuda_graphs(self) -> None:
-        """Capture a CUDA graph per bucket using vLLM's global graph pool."""
-        from vllm.platforms import current_platform
+    def _setup_static_graph_runner(self) -> None:
+        backend = current_omni_platform.create_static_graph_backend()
+        if backend is None:
+            self._graph_runner = None
+            return
 
-        pool = current_platform.get_global_graph_pool()
-
-        max_seq = self._num_groups + 1
-        proj_buf = self._proj_buf
-
-        for bsz in self._bucket_sizes:
-            static_input = proj_buf[:bsz, :max_seq, :]
-            pos_ids = self._bucket_pos_ids[bsz]
-
-            g = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(g, pool=pool):
-                static_output = self._compiled_model_fwd(static_input, pos_ids)
-
-            self._cuda_graphs[bsz] = (g, static_output)
-
-        logger.info("code_predictor: captured CUDA graphs for buckets %s", self._bucket_sizes)
+        device = next(self.model.parameters()).device
+        dtype = next(self.model.parameters()).dtype
+        self._graph_runner = BucketedStaticGraphRunner(
+            backend=backend,
+            bucket_policy=PowerOfTwoBucketPolicy(self._bucket_sizes),
+            workload=_CodePredictorStaticGraphWorkload(self),
+            enabled=True,
+            use_global_graph_pool=True,
+        )
+        self._graph_runner.warmup(device=device, dtype=dtype, continue_on_capture_failure=True)
 
     # ------------------------------------------------------------------
     #  Optimized forward: re-prefill + torch.compile + projection cache
@@ -520,13 +616,13 @@ class Qwen3TTSTalkerCodePredictorForConditionalGenerationVLLM(nn.Module):
             base_pos = torch.arange(max_seq, device=device, dtype=torch.long)
             full_pos_ids = base_pos if padded_bsz == 1 else base_pos.repeat(padded_bsz)
 
-        # Use captured CUDA graph if available, otherwise call compiled fn.
-        cuda_graph_entry = self._cuda_graphs.get(padded_bsz)
-
         for step in range(1, num_groups):
-            if cuda_graph_entry is not None:
-                cuda_graph_entry[0].replay()
-                hidden_out = cuda_graph_entry[1]
+            if self._graph_runner is not None:
+                hidden_out = self._graph_runner.run(
+                    input_tensor=proj_buf[:padded_bsz, :max_seq, :],
+                    position_ids=full_pos_ids,
+                    padded_bsz=padded_bsz,
+                )
             else:
                 hidden_out = model_fwd(proj_buf[:padded_bsz, :max_seq, :], full_pos_ids)
             logits = lm_heads[step - 1](hidden_out[:bsz, step, :])

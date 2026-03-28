@@ -954,7 +954,7 @@ class Qwen3TTSTokenizerV2Decoder(Qwen3TTSTokenizerV2DecoderPreTrainedModel):
 
         self.post_init()
 
-        # CUDA Graph support
+        # Static graph support
         self._cudagraph_enabled = False
         self._cudagraph_wrapper = None
 
@@ -968,7 +968,7 @@ class Qwen3TTSTokenizerV2Decoder(Qwen3TTSTokenizerV2DecoderPreTrainedModel):
         if count > 0:
             logger.info("Precomputed exp caches for %d SnakeBeta activations", count)
 
-    def enable_cudagraph(
+    def enable_static_graph(
         self,
         capture_sizes: list[int] | None = None,
         device: torch.device | None = None,
@@ -979,9 +979,6 @@ class Qwen3TTSTokenizerV2Decoder(Qwen3TTSTokenizerV2DecoderPreTrainedModel):
 
         if device is None:
             device = next(self.parameters()).device
-        if device.type != "cuda":
-            logger.warning("Cannot enable CUDA Graph: decoder is not on a CUDA device (got %s)", device)
-            return
 
         self._cudagraph_wrapper = CUDAGraphDecoderWrapper(
             decoder=self,
@@ -995,16 +992,37 @@ class Qwen3TTSTokenizerV2Decoder(Qwen3TTSTokenizerV2DecoderPreTrainedModel):
             codec_chunk_frames=codec_chunk_frames,
             codec_left_context_frames=codec_left_context_frames,
         )
-        self._cudagraph_enabled = True
+        self._cudagraph_enabled = bool(self._cudagraph_wrapper.is_enabled)
+        if not self._cudagraph_enabled:
+            self._cudagraph_wrapper = None
+            logger.info("Static graph disabled for decoder: no buckets were captured on device=%s", device)
+            return
         logger.info(
-            "CUDA Graph enabled for decoder: seq_lens=%s",
+            "Static graph enabled for decoder: seq_lens=%s",
             self._cudagraph_wrapper.capture_sizes,
         )
 
-    def disable_cudagraph(self):
+    def enable_cudagraph(
+        self,
+        capture_sizes: list[int] | None = None,
+        device: torch.device | None = None,
+        codec_chunk_frames: int = 0,
+        codec_left_context_frames: int = 0,
+    ):
+        self.enable_static_graph(
+            capture_sizes=capture_sizes,
+            device=device,
+            codec_chunk_frames=codec_chunk_frames,
+            codec_left_context_frames=codec_left_context_frames,
+        )
+
+    def disable_static_graph(self):
         self._cudagraph_enabled = False
         self._cudagraph_wrapper = None
-        logger.info("CUDA Graph disabled for decoder")
+        logger.info("Static graph disabled for decoder")
+
+    def disable_cudagraph(self):
+        self.disable_static_graph()
 
     def forward(self, codes):
         if codes.shape[1] != self.config.num_quantizers:
@@ -1024,9 +1042,9 @@ class Qwen3TTSTokenizerV2Decoder(Qwen3TTSTokenizerV2DecoderPreTrainedModel):
         return wav.clamp(min=-1, max=1)
 
     def chunked_decode(self, codes, chunk_size=300, left_context_size=25):
-        # Use CUDA graph if enabled
+        # Use static graph if enabled.
         if self._cudagraph_enabled and self._cudagraph_wrapper is not None:
-            return self._cudagraph_wrapper.chunked_decode_with_cudagraph(codes, chunk_size, left_context_size)
+            return self._cudagraph_wrapper.chunked_decode_with_static_graph(codes, chunk_size, left_context_size)
 
         # Original implementation (eager mode)
         wavs = []

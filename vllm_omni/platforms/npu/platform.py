@@ -97,6 +97,12 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
         torch.npu.synchronize()
 
     @classmethod
+    def create_static_graph_backend(cls):
+        from vllm_omni.compilation import NPUGraphBackend
+
+        return NPUGraphBackend()
+
+    @classmethod
     def get_free_memory(cls, device: torch.device | None = None) -> int:
         free, _ = torch.npu.mem_get_info(device)
         return free

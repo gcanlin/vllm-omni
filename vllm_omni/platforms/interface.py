@@ -106,6 +106,11 @@ class OmniPlatform(Platform):
         raise NotImplementedError
 
     @classmethod
+    def create_static_graph_backend(cls):
+        """Create a backend for model-local static graph execution."""
+        return None
+
+    @classmethod
     def get_free_memory(cls, device: torch.device | None = None) -> int:
         raise NotImplementedError
 

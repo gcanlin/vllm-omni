@@ -111,32 +111,35 @@ class Qwen3TTSCode2Wav(nn.Module):
         if hasattr(decoder, "precompute_snake_caches"):
             decoder.precompute_snake_caches()
 
-        if hasattr(decoder, "enable_cudagraph"):
+        graph_enable = getattr(decoder, "enable_static_graph", None) or getattr(decoder, "enable_cudagraph", None)
+        if graph_enable is not None:
             device = self._module_device(decoder)
-            if device.type == "cuda":
-                try:
-                    chunk_frames = 0
-                    left_frames = 0
+            try:
+                chunk_frames = 0
+                left_frames = 0
 
-                    model_cfg = getattr(self.vllm_config, "model_config", None)
-                    connector_cfg = getattr(model_cfg, "stage_connector_config", None)
-                    extra_cfg = (
-                        connector_cfg.get("extra", connector_cfg)
-                        if isinstance(connector_cfg, dict)
-                        else getattr(connector_cfg, "extra", None)
-                    )
-                    if isinstance(extra_cfg, dict):
-                        chunk_frames = int(extra_cfg.get("codec_chunk_frames") or 0)
-                        left_frames = int(extra_cfg.get("codec_left_context_frames") or 0)
+                model_cfg = getattr(self.vllm_config, "model_config", None)
+                connector_cfg = getattr(model_cfg, "stage_connector_config", None)
+                extra_cfg = (
+                    connector_cfg.get("extra", connector_cfg)
+                    if isinstance(connector_cfg, dict)
+                    else getattr(connector_cfg, "extra", None)
+                )
+                if isinstance(extra_cfg, dict):
+                    chunk_frames = int(extra_cfg.get("codec_chunk_frames") or 0)
+                    left_frames = int(extra_cfg.get("codec_left_context_frames") or 0)
 
-                    decoder.enable_cudagraph(
-                        device=device,
-                        codec_chunk_frames=chunk_frames,
-                        codec_left_context_frames=left_frames,
-                    )
-                    logger.info("Code2Wav decoder CUDA Graph enabled")
-                except Exception:
-                    logger.warning("Failed to enable CUDA Graph for Code2Wav decoder", exc_info=True)
+                graph_enable(
+                    device=device,
+                    codec_chunk_frames=chunk_frames,
+                    codec_left_context_frames=left_frames,
+                )
+                if bool(getattr(decoder, "_cudagraph_enabled", False)):
+                    logger.info("Code2Wav decoder static graph enabled on device=%s", device)
+                else:
+                    logger.info("Code2Wav decoder static graph unavailable on device=%s; using eager decode", device)
+            except Exception:
+                logger.warning("Failed to enable static graph for Code2Wav decoder", exc_info=True)
 
     def embed_input_ids(self, input_ids: torch.Tensor, **_: Any) -> torch.Tensor:
         # This stage ignores token embeddings. Keep a stable dummy embedding for vLLM runner.
@@ -276,7 +279,7 @@ class Qwen3TTSCode2Wav(nn.Module):
                 pass
 
         # Decode directly via decoder.chunked_decode(), staying entirely on GPU.
-        # Each request decoded individually with CUDA graph replay at bs=1.
+        # Each request is decoded individually through the model-local static graph path at bs=1.
         wav_tensors: list[torch.Tensor] = []
         for codes_qf in valid_codes_qf:
             codes_bqf = codes_qf.unsqueeze(0)  # [1, Q, F]

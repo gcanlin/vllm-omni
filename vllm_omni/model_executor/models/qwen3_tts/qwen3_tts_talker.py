@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-import dataclasses
+import copy
 import io
 import os
 from collections.abc import Callable, Iterable, Mapping
@@ -368,11 +368,14 @@ class Qwen3TTSTalkerForConditionalGeneration(nn.Module):
         self.speaker_encoder: Qwen3TTSSpeakerEncoder | None = None
 
         # Code predictor uses an isolated vLLM config so its KV cache doesn't
-        # pollute the main engine's static_forward_context (shallow-copy shares
-        # the dict by reference — must assign a fresh one).
-        predictor_compilation = dataclasses.replace(vllm_config.compilation_config)
+        # pollute the main engine's static_forward_context.
+        # Use shallow object copies instead of config reconstruction because
+        # some OOT backends attach non-dataclass attributes (for example
+        # vllm-ascend's `oot_compiler`) to CompilationConfig at runtime.
+        self._code_predictor_vllm_config = copy.copy(vllm_config)
+        predictor_compilation = copy.copy(vllm_config.compilation_config)
         predictor_compilation.static_forward_context = {}
-        self._code_predictor_vllm_config = dataclasses.replace(vllm_config, compilation_config=predictor_compilation)
+        self._code_predictor_vllm_config.compilation_config = predictor_compilation
         from vllm.config.vllm import set_current_vllm_config as _set_cfg
 
         with _set_cfg(self._code_predictor_vllm_config):
