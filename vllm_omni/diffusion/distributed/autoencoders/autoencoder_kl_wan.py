@@ -5,8 +5,10 @@ from typing import Any
 
 import torch
 from diffusers.models.autoencoders import AutoencoderKLWan
-from diffusers.models.autoencoders.autoencoder_kl_wan import unpatchify
-from diffusers.models.autoencoders.vae import DecoderOutput
+from diffusers.models.autoencoders.autoencoder_kl_wan import patchify, unpatchify
+from diffusers.models.autoencoders.vae import DecoderOutput, DiagonalGaussianDistribution
+from diffusers.models.modeling_outputs import AutoencoderKLOutput
+from diffusers.utils.accelerate_utils import apply_forward_hook
 from vllm.logger import init_logger
 
 from vllm_omni.diffusion.distributed.autoencoders.distributed_vae_executor import (
@@ -92,6 +94,108 @@ class DistributedAutoencoderKLWan(AutoencoderKLWan, DistributedVaeMixin):
         result = torch.cat(time, dim=2)
         return result
 
+    def encode_tile_split(self, x: torch.Tensor) -> tuple[list[TileTask], GridSpec]:
+        _, _, num_frames, height, width = x.shape
+        encode_spatial_compression_ratio = self.spatial_compression_ratio
+        if self.config.patch_size is not None:
+            assert encode_spatial_compression_ratio % self.config.patch_size == 0
+            encode_spatial_compression_ratio = self.spatial_compression_ratio // self.config.patch_size
+
+        latent_height = height // encode_spatial_compression_ratio
+        latent_width = width // encode_spatial_compression_ratio
+
+        tile_latent_min_height = self.tile_sample_min_height // encode_spatial_compression_ratio
+        tile_latent_min_width = self.tile_sample_min_width // encode_spatial_compression_ratio
+        tile_latent_stride_height = self.tile_sample_stride_height // encode_spatial_compression_ratio
+        tile_latent_stride_width = self.tile_sample_stride_width // encode_spatial_compression_ratio
+
+        blend_height = tile_latent_min_height - tile_latent_stride_height
+        blend_width = tile_latent_min_width - tile_latent_stride_width
+
+        tiletask_list = []
+        for i in range(0, height, self.tile_sample_stride_height):
+            for j in range(0, width, self.tile_sample_stride_width):
+                time_list = []
+                frame_range = 1 + (num_frames - 1) // 4
+                for k in range(frame_range):
+                    if k == 0:
+                        tile = x[:, :, :1, i : i + self.tile_sample_min_height, j : j + self.tile_sample_min_width]
+                    else:
+                        tile = x[
+                            :,
+                            :,
+                            1 + 4 * (k - 1) : 1 + 4 * k,
+                            i : i + self.tile_sample_min_height,
+                            j : j + self.tile_sample_min_width,
+                        ]
+                    time_list.append(tile)
+                tiletask_list.append(
+                    TileTask(
+                        len(tiletask_list),
+                        (i // self.tile_sample_stride_height, j // self.tile_sample_stride_width),
+                        time_list,
+                        workload=time_list[0].shape[3] * time_list[0].shape[4],
+                    )
+                )
+
+        grid_spec = GridSpec(
+            split_dims=(3, 4),
+            grid_shape=(tiletask_list[-1].grid_coord[0] + 1, tiletask_list[-1].grid_coord[1] + 1),
+            tile_spec={
+                "latent_height": latent_height,
+                "latent_width": latent_width,
+                "blend_height": blend_height,
+                "blend_width": blend_width,
+                "tile_latent_stride_height": tile_latent_stride_height,
+                "tile_latent_stride_width": tile_latent_stride_width,
+            },
+            output_dtype=self.dtype,
+        )
+        return tiletask_list, grid_spec
+
+    def encode_tile_exec(self, task: TileTask) -> torch.Tensor:
+        """Encode a single sample tile into latent space."""
+        self.clear_cache()
+        time = []
+        for k, tile in enumerate(task.tensor):
+            self._enc_conv_idx = [0]
+            encoded = self.encoder(tile, feat_cache=self._enc_feat_map, feat_idx=self._enc_conv_idx)
+            encoded = self.quant_conv(encoded)
+            time.append(encoded)
+        result = torch.cat(time, dim=2)
+        self.clear_cache()
+        return result
+
+    def encode_tile_merge(
+        self, coord_tensor_map: dict[tuple[int, ...], torch.Tensor], grid_spec: GridSpec
+    ) -> torch.Tensor:
+        """Merge encoded tiles into a full latent tensor."""
+        grid_h, grid_w = grid_spec.grid_shape
+        result_rows = []
+        for i in range(grid_h):
+            result_row = []
+            for j in range(grid_w):
+                tile = coord_tensor_map[(i, j)]
+                if i > 0:
+                    tile = self.blend_v(coord_tensor_map[(i - 1, j)], tile, grid_spec.tile_spec["blend_height"])
+                if j > 0:
+                    tile = self.blend_h(coord_tensor_map[(i, j - 1)], tile, grid_spec.tile_spec["blend_width"])
+                result_row.append(
+                    tile[
+                        :,
+                        :,
+                        :,
+                        : grid_spec.tile_spec["tile_latent_stride_height"],
+                        : grid_spec.tile_spec["tile_latent_stride_width"],
+                    ]
+                )
+            result_rows.append(torch.cat(result_row, dim=-1))
+
+        enc = torch.cat(result_rows, dim=3)[
+            :, :, :, : grid_spec.tile_spec["latent_height"], : grid_spec.tile_spec["latent_width"]
+        ]
+        return enc
+
     def tile_merge(self, coord_tensor_map: dict[tuple[int, ...], torch.Tensor], grid_spec: GridSpec) -> torch.Tensor:
         """Merge decoded tiles into a full image."""
         grid_h, grid_w = grid_spec.grid_shape
@@ -140,3 +244,40 @@ class DistributedAutoencoderKLWan(AutoencoderKLWan, DistributedVaeMixin):
             return (result,)
 
         return DecoderOutput(sample=result)
+
+    def _encode_distributed(self, x: torch.Tensor) -> torch.Tensor:
+        self.clear_cache()
+        _, _, _, height, width = x.shape
+        if self.use_tiling and (width > self.tile_sample_min_width or height > self.tile_sample_min_height):
+            if self.config.patch_size is not None:
+                x = patchify(x, patch_size=self.config.patch_size)
+            logger.info("Encode run with distributed executor")
+            result = self.distributed_decoder.execute(
+                x,
+                DistributedOperator(
+                    split=self.encode_tile_split,
+                    exec=self.encode_tile_exec,
+                    merge=self.encode_tile_merge,
+                ),
+                broadcast_result=True,
+            )
+            self.clear_cache()
+            return result
+
+        return super()._encode(x)
+
+    @apply_forward_hook
+    def encode(self, x: torch.Tensor, return_dict: bool = True):
+        if not self.is_distributed_enabled():
+            return super().encode(x, return_dict=return_dict)
+
+        if self.use_slicing and x.shape[0] > 1:
+            encoded_slices = [self._encode_distributed(x_slice) for x_slice in x.split(1)]
+            h = torch.cat(encoded_slices)
+        else:
+            h = self._encode_distributed(x)
+
+        posterior = DiagonalGaussianDistribution(h)
+        if not return_dict:
+            return (posterior,)
+        return AutoencoderKLOutput(latent_dist=posterior)
