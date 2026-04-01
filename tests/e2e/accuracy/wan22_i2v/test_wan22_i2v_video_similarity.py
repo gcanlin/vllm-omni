@@ -228,6 +228,9 @@ SERVER_CASES = [
                 "--use-hsdp",
                 "--hsdp-shard-size",
                 "2",
+                "--vae-patch-parallel-size",
+                "2",
+                "--vae-use-tiling"
             ],
             use_omni=True,
         ),
