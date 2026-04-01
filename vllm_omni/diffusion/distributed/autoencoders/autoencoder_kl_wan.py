@@ -97,42 +97,53 @@ class DistributedAutoencoderKLWan(AutoencoderKLWan, DistributedVaeMixin):
     def encode_tile_split(self, x: torch.Tensor) -> tuple[list[TileTask], GridSpec]:
         _, _, num_frames, height, width = x.shape
         encode_spatial_compression_ratio = self.spatial_compression_ratio
+        # Scale tile parameters for patchified coordinate system
+        tile_sample_min_height = self.tile_sample_min_height
+        tile_sample_min_width = self.tile_sample_min_width
+        tile_sample_stride_height = self.tile_sample_stride_height
+        tile_sample_stride_width = self.tile_sample_stride_width
         if self.config.patch_size is not None:
             assert encode_spatial_compression_ratio % self.config.patch_size == 0
             encode_spatial_compression_ratio = self.spatial_compression_ratio // self.config.patch_size
+            # When input is patchified, scale tile parameters accordingly
+            tile_sample_min_height = tile_sample_min_height // self.config.patch_size
+            tile_sample_min_width = tile_sample_min_width // self.config.patch_size
+            tile_sample_stride_height = tile_sample_stride_height // self.config.patch_size
+            tile_sample_stride_width = tile_sample_stride_width // self.config.patch_size
 
         latent_height = height // encode_spatial_compression_ratio
         latent_width = width // encode_spatial_compression_ratio
 
-        tile_latent_min_height = self.tile_sample_min_height // encode_spatial_compression_ratio
-        tile_latent_min_width = self.tile_sample_min_width // encode_spatial_compression_ratio
-        tile_latent_stride_height = self.tile_sample_stride_height // encode_spatial_compression_ratio
-        tile_latent_stride_width = self.tile_sample_stride_width // encode_spatial_compression_ratio
+        tile_latent_min_height = tile_sample_min_height // encode_spatial_compression_ratio
+        tile_latent_min_width = tile_sample_min_width // encode_spatial_compression_ratio
+        tile_latent_stride_height = tile_sample_stride_height // encode_spatial_compression_ratio
+        tile_latent_stride_width = tile_sample_stride_width // encode_spatial_compression_ratio
 
         blend_height = tile_latent_min_height - tile_latent_stride_height
         blend_width = tile_latent_min_width - tile_latent_stride_width
 
         tiletask_list = []
-        for i in range(0, height, self.tile_sample_stride_height):
-            for j in range(0, width, self.tile_sample_stride_width):
+        temporal_compression = self.config.scale_factor_temporal
+        for i in range(0, height, tile_sample_stride_height):
+            for j in range(0, width, tile_sample_stride_width):
                 time_list = []
-                frame_range = 1 + (num_frames - 1) // 4
+                frame_range = 1 + (num_frames - 1) // temporal_compression
                 for k in range(frame_range):
                     if k == 0:
-                        tile = x[:, :, :1, i : i + self.tile_sample_min_height, j : j + self.tile_sample_min_width]
+                        tile = x[:, :, :1, i : i + tile_sample_min_height, j : j + tile_sample_min_width]
                     else:
                         tile = x[
                             :,
                             :,
-                            1 + 4 * (k - 1) : 1 + 4 * k,
-                            i : i + self.tile_sample_min_height,
-                            j : j + self.tile_sample_min_width,
+                            1 + temporal_compression * (k - 1) : 1 + temporal_compression * k,
+                            i : i + tile_sample_min_height,
+                            j : j + tile_sample_min_width,
                         ]
                     time_list.append(tile)
                 tiletask_list.append(
                     TileTask(
                         len(tiletask_list),
-                        (i // self.tile_sample_stride_height, j // self.tile_sample_stride_width),
+                        (i // tile_sample_stride_height, j // tile_sample_stride_width),
                         time_list,
                         workload=time_list[0].shape[3] * time_list[0].shape[4],
                     )
