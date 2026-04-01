@@ -230,7 +230,7 @@ SERVER_CASES = [
                 "2",
                 "--vae-patch-parallel-size",
                 "2",
-                "--vae-use-tiling"
+                "--vae-use-tiling",
             ],
             use_omni=True,
         ),
