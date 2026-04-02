@@ -60,7 +60,7 @@ You can also build vLLM-Omni from the latest main branch if you want to use the 
 git clone -b v0.18.0 https://github.com/vllm-project/vllm.git
 VLLM_TARGET_DEVICE=empty pip install -v -e .
 
-git clone -b v0.18.0rc1 https://github.com/vllm-project/vllm.git
+git clone -b v0.18.0rc1 https://github.com/vllm-project/vllm-ascend.git
 pip install -v -e .
 
 # Install vLLM-Omni from the latest main branch
