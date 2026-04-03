@@ -213,14 +213,14 @@ def tile_merge(self, coord_tensor_map: dict[tuple[int, ...], torch.Tensor], grid
 We need to override tiled_decode, the main logic is:
 + check distributed is enabled
 + select split/exec/merge
-+ Invoke self.distributed_decoder.execute to decode
++ Invoke self.distributed_executor.execute to decode
 ```
 def tiled_decode(self, z: torch.Tensor, return_dict: bool = True):
     if not self.is_distributed_enabled():
         return super().tiled_decode(z, return_dict=return_dict)
 
     logger.info("Decode run with distributed executor")
-    result = self.distributed_decoder.execute(
+    result = self.distributed_executor.execute(
         z,
         DistributedOperator(split=self.tile_split, exec=self.tile_exec, merge=self.tile_merge),
         broadcast_result=True,
@@ -384,7 +384,7 @@ def _encode_distributed(self, x: torch.Tensor) -> torch.Tensor:
     if self.use_tiling and (width > self.tile_sample_min_width or height > self.tile_sample_min_height):
         if self.config.patch_size is not None:
             x = patchify(x, patch_size=self.config.patch_size)
-        result = self.distributed_decoder.execute(
+        result = self.distributed_executor.execute(
             x,
             DistributedOperator(
                 split=self.encode_tile_split,
