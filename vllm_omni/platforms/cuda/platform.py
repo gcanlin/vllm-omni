@@ -81,6 +81,10 @@ class CudaOmniPlatform(OmniPlatform, CudaPlatformBase):
         return DiffusionAttentionBackendEnum.TORCH_SDPA.get_path()
 
     @classmethod
+    def supports_compile(cls) -> bool:
+        return True
+
+    @classmethod
     def supports_torch_inductor(cls) -> bool:
         return True
 

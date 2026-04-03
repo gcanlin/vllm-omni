@@ -82,6 +82,11 @@ class MUSAOmniPlatform(OmniPlatform, MUSAPlatformBase):
         return True
 
     @classmethod
+    def supports_compile(cls) -> bool:
+        """MUSA supports torch.compile with inductor backend."""
+        return True
+
+    @classmethod
     def get_torch_device(cls, local_rank: int | None = None) -> torch.device:
         """Get the torch device for MUSA platform.
 

@@ -94,6 +94,11 @@ class OmniPlatform(Platform):
         raise NotImplementedError
 
     @classmethod
+    def supports_compile(cls) -> bool:
+        """Check if the platform supports torch.compile."""
+        raise NotImplementedError
+
+    @classmethod
     def get_torch_device(cls, local_rank: int | None = None) -> torch.device:
         raise NotImplementedError
 

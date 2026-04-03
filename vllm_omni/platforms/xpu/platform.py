@@ -44,6 +44,11 @@ class XPUOmniPlatform(OmniPlatform, XPUPlatform):
         return DiffusionAttentionBackendEnum.TORCH_SDPA.get_path()
 
     @classmethod
+    def supports_compile(cls) -> bool:
+        """Check if the platform supports torch.compile."""
+        return False
+
+    @classmethod
     def supports_torch_inductor(cls) -> bool:
         # TODO: Enable this when torch compile bugs are resolved
         return False

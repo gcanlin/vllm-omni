@@ -67,6 +67,11 @@ class RocmOmniPlatform(OmniPlatform, RocmPlatform):
         return DiffusionAttentionBackendEnum.TORCH_SDPA.get_path()
 
     @classmethod
+    def supports_compile(cls) -> bool:
+        """Check if the platform supports torch.compile."""
+        return False
+
+    @classmethod
     def supports_torch_inductor(cls) -> bool:
         return True
 

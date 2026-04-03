@@ -5,7 +5,18 @@ from typing import Any
 import torch.nn as nn
 from vllm.logger import init_logger
 
+from vllm_omni.platforms import current_omni_platform
+
 logger = init_logger(__name__)
+
+
+def _get_compile_backend():
+    """Get the appropriate compile backend for the current platform."""
+    if current_omni_platform.is_npu():
+        from mindiesd.compilation import MindieSDBackend
+
+        return MindieSDBackend()
+    return None  # Use default inductor backend
 
 
 def regionally_compile(model: nn.Module, *compile_args: Any, **compile_kwargs: Any) -> nn.Module:
@@ -20,12 +31,25 @@ def regionally_compile(model: nn.Module, *compile_args: Any, **compile_kwargs: A
     Returns:
         The same model instance (modified in-place)
     """
+    # Check if platform supports compile
+    if not current_omni_platform.supports_compile():
+        logger.warning(
+            "Regional compilation skipped because platform %s does not support compile.",
+            current_omni_platform.device_type,
+        )
+        return model
+
     # Get the list of repeated blocks from the model
     repeated_blocks = getattr(model, "_repeated_blocks", None)
 
     if not repeated_blocks:
         logger.warning("Regional compilation skipped because the model does not define `_repeated_blocks`.")
         return model
+
+    # Get platform-specific backend
+    backend = _get_compile_backend()
+    if backend is not None:
+        compile_kwargs["backend"] = backend
 
     # Check if we have modules with the specified class names
     has_compiled_region = False

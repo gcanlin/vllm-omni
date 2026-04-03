@@ -160,7 +160,7 @@ class DiffusionModelRunner:
 
         # Apply torch.compile if not in eager mode
         if not self.od_config.enforce_eager:
-            if current_omni_platform.supports_torch_inductor():
+            if current_omni_platform.supports_compile():
                 self._compile_transformer("transformer")
                 self._compile_transformer("transformer_2")
             else:

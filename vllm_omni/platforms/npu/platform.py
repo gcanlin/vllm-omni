@@ -79,6 +79,12 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
         return False
 
     @classmethod
+    def supports_compile(cls) -> bool:
+        from importlib.util import find_spec
+
+        return find_spec("mindiesd") is not None
+
+    @classmethod
     def get_torch_device(cls, local_rank: int | None = None) -> torch.device:
         if local_rank is None:
             return torch.device("npu")
