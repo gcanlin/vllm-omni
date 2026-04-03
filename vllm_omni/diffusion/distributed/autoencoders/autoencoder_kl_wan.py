@@ -5,10 +5,8 @@ from typing import Any
 
 import torch
 from diffusers.models.autoencoders import AutoencoderKLWan
-from diffusers.models.autoencoders.autoencoder_kl_wan import patchify, unpatchify
-from diffusers.models.autoencoders.vae import DecoderOutput, DiagonalGaussianDistribution
-from diffusers.models.modeling_outputs import AutoencoderKLOutput
-from diffusers.utils.accelerate_utils import apply_forward_hook
+from diffusers.models.autoencoders.autoencoder_kl_wan import unpatchify
+from diffusers.models.autoencoders.vae import DecoderOutput
 from vllm.logger import init_logger
 
 from vllm_omni.diffusion.distributed.autoencoders.distributed_vae_executor import (
@@ -245,8 +243,8 @@ class DistributedAutoencoderKLWan(AutoencoderKLWan, DistributedVaeMixin):
         if not self.is_distributed_enabled():
             return super().tiled_decode(z, return_dict=return_dict)
 
-        logger.info("Decode run with distributed executor")
-        result = self.distributed_decoder.execute(
+        logger.debug("Decode running with distributed executor")
+        result = self.distributed_executor.execute(
             z,
             DistributedOperator(split=self.tile_split, exec=self.tile_exec, merge=self.tile_merge),
             broadcast_result=False,
@@ -256,39 +254,25 @@ class DistributedAutoencoderKLWan(AutoencoderKLWan, DistributedVaeMixin):
 
         return DecoderOutput(sample=result)
 
-    def _encode_distributed(self, x: torch.Tensor) -> torch.Tensor:
-        self.clear_cache()
-        _, _, _, height, width = x.shape
-        if self.use_tiling and (width > self.tile_sample_min_width or height > self.tile_sample_min_height):
-            if self.config.patch_size is not None:
-                x = patchify(x, patch_size=self.config.patch_size)
-            logger.info("Encode run with distributed executor")
-            result = self.distributed_decoder.execute(
-                x,
-                DistributedOperator(
-                    split=self.encode_tile_split,
-                    exec=self.encode_tile_exec,
-                    merge=self.encode_tile_merge,
-                ),
-                broadcast_result=True,
-            )
-            self.clear_cache()
-            return result
+    def tiled_encode(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Encode using distributed VAE executor.
 
-        return super()._encode(x)
-
-    @apply_forward_hook
-    def encode(self, x: torch.Tensor, return_dict: bool = True):
+        Note: x is already patchified by parent's _encode() before calling this method.
+        """
         if not self.is_distributed_enabled():
-            return super().encode(x, return_dict=return_dict)
+            return super().tiled_encode(x)
 
-        if self.use_slicing and x.shape[0] > 1:
-            encoded_slices = [self._encode_distributed(x_slice) for x_slice in x.split(1)]
-            h = torch.cat(encoded_slices)
-        else:
-            h = self._encode_distributed(x)
-
-        posterior = DiagonalGaussianDistribution(h)
-        if not return_dict:
-            return (posterior,)
-        return AutoencoderKLOutput(latent_dist=posterior)
+        logger.debug("Encode running with distributed executor")
+        self.clear_cache()
+        result = self.distributed_executor.execute(
+            x,
+            DistributedOperator(
+                split=self.encode_tile_split,
+                exec=self.encode_tile_exec,
+                merge=self.encode_tile_merge,
+            ),
+            broadcast_result=True,
+        )
+        self.clear_cache()
+        return result
