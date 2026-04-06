@@ -375,37 +375,32 @@ def encode_tile_merge(
     return enc
 ```
 
-### Step 4: Override encode method
+### Step 4: Override tiled_encode method
+
+Override `tiled_encode` instead of `encode`. The parent's `_encode()` handles patchify before calling `tiled_encode()`, so input `x` is already patchified.
 
 ```python
-def _encode_distributed(self, x: torch.Tensor) -> torch.Tensor:
-    self.clear_cache()
-    _, _, _, height, width = x.shape
-    if self.use_tiling and (width > self.tile_sample_min_width or height > self.tile_sample_min_height):
-        if self.config.patch_size is not None:
-            x = patchify(x, patch_size=self.config.patch_size)
-        result = self.distributed_executor.execute(
-            x,
-            DistributedOperator(
-                split=self.encode_tile_split,
-                exec=self.encode_tile_exec,
-                merge=self.encode_tile_merge,
-            ),
-            broadcast_result=True,  # Latents needed by all ranks for diffusion
-        )
-        self.clear_cache()
-        return result
-    return super()._encode(x)
+def tiled_encode(self, x: torch.Tensor) -> torch.Tensor:
+    """
+    Encode using distributed VAE executor.
 
-def encode(self, x: torch.Tensor, return_dict: bool = True):
+    Note: x is already patchified by parent's _encode() before calling this method.
+    """
     if not self.is_distributed_enabled():
-        return super().encode(x, return_dict=return_dict)
+        return super().tiled_encode(x)
 
-    h = self._encode_distributed(x)
-    posterior = DiagonalGaussianDistribution(h)
-    if not return_dict:
-        return (posterior,)
-    return AutoencoderKLOutput(latent_dist=posterior)
+    self.clear_cache()
+    result = self.distributed_executor.execute(
+        x,
+        DistributedOperator(
+            split=self.encode_tile_split,
+            exec=self.encode_tile_exec,
+            merge=self.encode_tile_merge,
+        ),
+        broadcast_result=True,  # Latents needed by all ranks for diffusion
+    )
+    self.clear_cache()
+    return result
 ```
 
 **Key differences from decode parallel:**
@@ -413,7 +408,7 @@ def encode(self, x: torch.Tensor, return_dict: bool = True):
 | Aspect | Decode Parallel | Encode Parallel |
 |--------|-----------------|-----------------|
 | `broadcast_result` | Often `False` (only rank 0 needs output) | `True` (all ranks need latents for diffusion) |
-| Patchify | Applied in merge (unpatchify) | Applied before split (patchify) |
+| Patchify | Applied in merge (unpatchify) | Handled by parent `_encode()` before `tiled_encode()` |
 | Temporal chunking | Frame-by-frame | Chunk-based (e.g., 1 + 4n frames) |
 
 ## Testing

@@ -6,7 +6,7 @@
 import pytest
 import torch
 
-pytestmark = [pytest.mark.cpu]
+pytestmark = [pytest.mark.cpu, pytest.mark.core_model]
 
 
 class _DummyConfig:

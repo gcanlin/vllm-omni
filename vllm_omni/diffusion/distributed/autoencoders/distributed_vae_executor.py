@@ -170,8 +170,8 @@ class DistributedVaeMixin:
     def init_distributed(self):
         self.distributed_executor = DistributedVaeExecutor()
 
-    def set_parallel_size(self, parallel_size: int) -> bool:
-        return self.distributed_executor.set_parallel_size(parallel_size)
+    def set_parallel_size(self, parallel_size: int) -> None:
+        self.distributed_executor.set_parallel_size(parallel_size)
 
     def is_distributed_enabled(self) -> bool:
         if (
