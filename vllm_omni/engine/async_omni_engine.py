@@ -620,6 +620,10 @@ class AsyncOmniEngine:
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        # Expose the orchestrator loop so other threads (API server) can
+        # schedule coroutines onto it via run_coroutine_threadsafe, keeping
+        # single-threaded access to StatLoggerManager (mirrors AsyncLLM).
+        self.orchestrator_loop = loop
 
         async def _run_orchestrator() -> None:
             self._initialize_janus_queues()

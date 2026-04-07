@@ -751,8 +751,19 @@ class AsyncOmni(EngineClient, OmniBase):
         manager = getattr(self.engine, "logger_manager", None)
         if manager is None:
             return
-        try:
+        # StatLoggerManager is only safe to access from the orchestrator
+        # thread (where record() runs). Schedule log() onto that loop via
+        # run_coroutine_threadsafe so all access stays single-threaded,
+        # matching upstream AsyncLLM's output_handler semantics.
+        loop = getattr(self.engine, "orchestrator_loop", None)
+        if loop is None or not loop.is_running():
+            return
+
+        async def _log() -> None:
             manager.log()
+
+        try:
+            asyncio.run_coroutine_threadsafe(_log(), loop).result()
         except Exception:
             logger.exception("[AsyncOmni] do_log_stats failed")
 
