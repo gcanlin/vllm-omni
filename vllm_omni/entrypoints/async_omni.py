@@ -743,11 +743,18 @@ class AsyncOmni(EngineClient, OmniBase):
         return False
 
     async def do_log_stats(self) -> None:
-        """Log statistics.
+        """Log statistics by flushing per-stage StatLoggerManagers.
 
-        TODO: Forward to Orchestrator process via message.
+        Mirrors vLLM AsyncLLM.do_log_stats which calls
+        ``self.logger_manager.log()``.
         """
-        pass
+        manager = getattr(self.engine, "logger_manager", None)
+        if manager is None:
+            return
+        try:
+            manager.log()
+        except Exception:
+            logger.exception("[AsyncOmni] do_log_stats failed")
 
     async def get_supported_tasks(self) -> tuple[SupportedTask, ...]:
         """Return the task set exposed by the orchestrator-backed engine."""

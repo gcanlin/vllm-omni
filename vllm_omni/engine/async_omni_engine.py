@@ -32,6 +32,7 @@ from vllm.logger import init_logger
 from vllm.tokenizers import cached_tokenizer_from_config
 from vllm.v1.engine import EngineCoreRequest
 from vllm.v1.engine.input_processor import InputProcessor
+from vllm.v1.metrics.loggers import StatLoggerManager
 
 from vllm_omni.diffusion.data import DiffusionParallelConfig
 from vllm_omni.distributed.omni_connectors.utils.initialization import (
@@ -244,6 +245,7 @@ class AsyncOmniEngine:
         self.num_stages = len(self.stage_configs)
         stage0_args = getattr(self.stage_configs[0], "engine_args", None) if self.num_stages > 0 else None
         self.async_chunk = bool(getattr(stage0_args, "async_chunk", False))
+        self.log_stats = not bool(getattr(stage0_args, "disable_log_stats", False))
         self.stage_clients: list[Any] = []
         self.stage_vllm_configs: list[Any] = []
         self.output_processors: list[MultimodalOutputProcessor | None] = []
@@ -350,9 +352,7 @@ class AsyncOmniEngine:
                     addresses, proc, handshake_address = spawn_stage_core(
                         vllm_config=vllm_config,
                         executor_class=executor_class,
-                        log_stats=not engine_args_dict.get(
-                            "disable_log_stats", False
-                        ),
+                        log_stats=self.log_stats,
                     )
                     started_stage = StartedLlmStage(
                         stage_id=metadata.stage_id,
@@ -416,9 +416,7 @@ class AsyncOmniEngine:
                 )
             output_processor = MultimodalOutputProcessor(
                 tokenizer=tokenizer,
-                log_stats=not started.vllm_config.observability_config.disable_log_stats
-                if started.vllm_config.observability_config is not None
-                else True,
+                log_stats=self.log_stats,
                 engine_core_output_type=started.metadata.engine_output_type,
             )
             input_processor = None
@@ -582,6 +580,30 @@ class AsyncOmniEngine:
         self.default_sampling_params_list = default_sampling_params_list
         self.stage_metadata = stage_metadata
 
+        # Single StatLoggerManager for the whole pipeline, mirroring how
+        # vLLM AsyncLLM uses one manager with multiple engine indices for DP.
+        # We treat each stage as a separate "engine_idx" so logs are
+        # distinguishable as "Engine 000/001/002/...". Using a single manager
+        # also avoids PrometheusStatLogger registry collisions.
+        self.logger_manager: StatLoggerManager | None = None
+        if self.log_stats:
+            base_vllm_config = next(
+                (cfg for cfg in self.stage_vllm_configs if cfg is not None),
+                None,
+            )
+            if base_vllm_config is not None:
+                try:
+                    self.logger_manager = StatLoggerManager(
+                        vllm_config=base_vllm_config,
+                        engine_idxs=list(range(self.num_stages)),
+                        custom_stat_loggers=None,
+                        enable_default_loggers=True,
+                    )
+                    self.logger_manager.log_engine_initialized()
+                except Exception:
+                    logger.exception("[AsyncOmniEngine] Failed to build StatLoggerManager")
+                    self.logger_manager = None
+
     def _initialize_janus_queues(self) -> None:
         """Initialize janus queues inside orchestrator thread loop context."""
         self.request_queue = janus.Queue()
@@ -611,6 +633,8 @@ class AsyncOmniEngine:
                 stage_clients=self.stage_clients,
                 output_processors=self.output_processors,
                 stage_vllm_configs=self.stage_vllm_configs,
+                logger_manager=self.logger_manager,
+                log_stats=self.log_stats,
             )
             if not startup_future.done():
                 startup_future.set_result(asyncio.get_running_loop())
