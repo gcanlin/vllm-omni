@@ -3,6 +3,7 @@
 These are pure-Python tests that bypass __init__ and only exercise the
 no-op branches of do_log_stats, so no stage cores / threads are needed.
 """
+
 import asyncio
 
 import pytest
