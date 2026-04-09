@@ -638,7 +638,6 @@ class AsyncOmniEngine:
                 output_processors=self.output_processors,
                 stage_vllm_configs=self.stage_vllm_configs,
                 logger_manager=self.logger_manager,
-                log_stats=self.log_stats,
             )
             if not startup_future.done():
                 startup_future.set_result(asyncio.get_running_loop())
@@ -1187,6 +1186,29 @@ class AsyncOmniEngine:
     async def abort_async(self, request_ids: list[str]) -> None:
         """Async abort API."""
         self.abort(request_ids)
+
+    async def do_log_stats(self) -> None:
+        """Flush the StatLoggerManager on the orchestrator thread.
+
+        ``StatLoggerManager`` is only safe to access from the orchestrator
+        loop (where ``record()`` runs). Schedule ``log()`` onto that loop
+        via ``run_coroutine_threadsafe`` so all access stays single-threaded,
+        matching upstream vLLM ``AsyncLLM``.
+        """
+        manager = self.logger_manager
+        if manager is None:
+            return
+        loop = getattr(self, "orchestrator_loop", None)
+        if loop is None or not loop.is_running():
+            return
+
+        async def _log() -> None:
+            manager.log()
+
+        try:
+            await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(_log(), loop))
+        except Exception:
+            logger.exception("[AsyncOmniEngine] do_log_stats failed")
 
     def collective_rpc(
         self,

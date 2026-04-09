@@ -125,7 +125,6 @@ class Orchestrator:
         *,
         async_chunk: bool = False,
         logger_manager: StatLoggerManager | None = None,
-        log_stats: bool = False,
     ) -> None:
         self.request_async_queue = request_async_queue
         self.output_async_queue = output_async_queue
@@ -137,8 +136,8 @@ class Orchestrator:
         self.stage_clients: list[Any] = stage_clients
         self.output_processors: list[Any] = output_processors
         self.stage_vllm_configs: list[Any] = stage_vllm_configs
-        self.log_stats = log_stats
         self.logger_manager: StatLoggerManager | None = logger_manager
+        self.log_stats = self.logger_manager is not None
 
         # Per-request state
         self.request_states: dict[str, OrchestratorRequestState] = {}

@@ -743,29 +743,8 @@ class AsyncOmni(EngineClient, OmniBase):
         return False
 
     async def do_log_stats(self) -> None:
-        """Log statistics by flushing per-stage StatLoggerManagers.
-
-        Mirrors vLLM AsyncLLM.do_log_stats which calls
-        ``self.logger_manager.log()``.
-        """
-        manager = getattr(self.engine, "logger_manager", None)
-        if manager is None:
-            return
-        # StatLoggerManager is only safe to access from the orchestrator
-        # thread (where record() runs). Schedule log() onto that loop via
-        # run_coroutine_threadsafe so all access stays single-threaded,
-        # matching upstream AsyncLLM's output_handler semantics.
-        loop = getattr(self.engine, "orchestrator_loop", None)
-        if loop is None or not loop.is_running():
-            return
-
-        async def _log() -> None:
-            manager.log()
-
-        try:
-            asyncio.run_coroutine_threadsafe(_log(), loop).result()
-        except Exception:
-            logger.exception("[AsyncOmni] do_log_stats failed")
+        """Log statistics via the engine, mirroring vLLM ``AsyncLLM``."""
+        await self.engine.do_log_stats()
 
     async def get_supported_tasks(self) -> tuple[SupportedTask, ...]:
         """Return the task set exposed by the orchestrator-backed engine."""
