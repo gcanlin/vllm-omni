@@ -16,7 +16,7 @@ from vllm_omni.diffusion.attention.backends.sdpa import SDPABackend
 from vllm_omni.diffusion.attention.parallel import build_parallel_attention_strategy
 from vllm_omni.diffusion.attention.parallel.base import NoParallelAttention
 from vllm_omni.diffusion.attention.parallel.ring import RingParallelAttention
-from vllm_omni.diffusion.attention.selector import get_attn_backend
+from vllm_omni.diffusion.attention.selector import get_attn_backend, get_attn_backend_for_role
 from vllm_omni.diffusion.distributed.parallel_state import get_sp_group
 from vllm_omni.diffusion.forward_context import get_forward_context, is_forward_context_available
 
@@ -32,6 +32,9 @@ class Attention(nn.Module):
         softmax_scale: float,
         num_kv_heads: int | None = None,
         prefix: str = "",
+        # Per-role backend selection (RFC: per-role attention backend)
+        role: str = "self",
+        role_category: str | None = None,
         # ulysses attention
         scatter_idx: int = 2,
         gather_idx: int = 1,
@@ -39,7 +42,34 @@ class Attention(nn.Module):
         skip_sequence_parallel: bool = False,
     ):
         super().__init__()
-        self.attn_backend = get_attn_backend(-1)
+
+        self.role = role
+        self.role_category = role_category
+
+        # Resolve backend via role-aware config if ForwardContext is available,
+        # otherwise fall back to legacy global selector.
+        backend_kwargs: dict | None = None
+        try:
+            config = get_forward_context().omni_diffusion_config
+            attention_config = config.attention if config is not None else None
+            self.backend_pref = config.attention_backend if config is not None else None
+
+            attn_backend_cls, spec = get_attn_backend_for_role(
+                role=role,
+                head_size=head_size,
+                attention_config=attention_config,
+                role_category=role_category,
+            )
+            if spec is not None:
+                backend_kwargs = spec.extra or None
+                # Update backend_pref for logging
+                self.backend_pref = spec.backend
+        except Exception:
+            # ForwardContext not available (e.g. unit tests) — use legacy path
+            attn_backend_cls = get_attn_backend(-1)
+            self.backend_pref = None
+
+        self.attn_backend = attn_backend_cls
         self.attn_impl_cls = self.attn_backend.get_impl_cls()
         self.attention = self.attn_impl_cls(
             num_heads=num_heads,
@@ -47,6 +77,7 @@ class Attention(nn.Module):
             softmax_scale=softmax_scale,
             causal=causal,
             num_kv_heads=num_kv_heads,
+            backend_kwargs=backend_kwargs,
         )
         # Instantiate fallback backend for float32 support
         self.sdpa_fallback = SDPABackend.get_impl_cls()(
@@ -56,7 +87,6 @@ class Attention(nn.Module):
             causal=causal,
             num_kv_heads=num_kv_heads,
         )
-        self.backend_pref = None
 
         self.softmax_scale = softmax_scale
         self.scatter_idx = scatter_idx
@@ -71,7 +101,6 @@ class Attention(nn.Module):
 
         try:
             config = get_forward_context().omni_diffusion_config
-            self.backend_pref = config.attention_backend
             if config.parallel_config.ring_degree > 1:
                 self.use_ring = True
                 try:

@@ -42,11 +42,14 @@ class FlashAttentionImpl(AttentionImpl):
         causal: bool = False,
         num_kv_heads: int | None = None,
         prefix: str = "",
+        backend_kwargs: dict | None = None,
         **extra_impl_args,
     ) -> None:
         self.num_heads = num_heads
         self.causal = causal
         self.softmax_scale = softmax_scale
+        if backend_kwargs:
+            logger.debug("FlashAttentionImpl ignoring backend_kwargs: %s", list(backend_kwargs.keys()))
 
     @staticmethod
     def _unwrap_flash_output(out: torch.Tensor | tuple[torch.Tensor, ...]) -> torch.Tensor:

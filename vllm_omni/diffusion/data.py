@@ -362,7 +362,8 @@ class OmniDiffusionConfig:
     tf_model_config: TransformerConfig = field(default_factory=TransformerConfig)
 
     # Attention
-    attention_backend: str | None = None
+    attention_backend: str | None = None  # DEPRECATED: use attention config
+    attention: "AttentionConfig" = field(default_factory=lambda: AttentionConfig())
 
     # Running mode
     # mode: ExecutionMode = ExecutionMode.INFERENCE
@@ -636,6 +637,16 @@ class OmniDiffusionConfig:
                     f"got {type(self.quantization_config)!r}"
                 )
 
+        # Migrate legacy attention_backend → AttentionConfig
+        if isinstance(self.attention, Mapping):
+            self.attention = AttentionConfig.from_dict(dict(self.attention))
+        elif not isinstance(self.attention, AttentionConfig):
+            self.attention = AttentionConfig()
+
+        if self.attention_backend is not None and self.attention.default is None:
+            # Legacy field takes effect only when the new config has no default
+            self.attention = AttentionConfig.from_legacy(self.attention_backend)
+
         if self.max_cpu_loras is None:
             self.max_cpu_loras = 1
         elif self.max_cpu_loras < 1:
@@ -745,6 +756,77 @@ class AttentionBackendEnum(enum.Enum):
 
     def __str__(self):
         return self.name.lower()
+
+
+@dataclass
+class AttentionSpec:
+    """Specifies a backend and its backend-specific parameters for one attention role."""
+
+    backend: str  # registry name, e.g. "FLASH_ATTN"
+    extra: dict[str, Any] = field(default_factory=dict)  # backend-specific kwargs
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | str) -> "AttentionSpec":
+        if isinstance(data, str):
+            return cls(backend=data)
+        if not isinstance(data, dict):
+            raise TypeError(f"Expected str or dict for AttentionSpec, got {type(data)!r}")
+        return cls(
+            backend=data["backend"],
+            extra=data.get("extra", {}),
+        )
+
+
+@dataclass
+class AttentionConfig:
+    """Per-role attention backend configuration.
+
+    Lookup precedence for a given (role, role_category):
+      1. per_role[role]         — exact match
+      2. per_role[role_category] — category fallback (e.g. "ltx2.audio_to_video" → "cross")
+      3. default                — global default
+      4. platform default       — unchanged platform logic
+    """
+
+    default: AttentionSpec | None = None
+    per_role: dict[str, AttentionSpec] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "AttentionConfig":
+        if not isinstance(data, dict):
+            raise TypeError(f"Expected dict for AttentionConfig, got {type(data)!r}")
+        default = None
+        if "default" in data:
+            default = AttentionSpec.from_dict(data["default"])
+        per_role: dict[str, AttentionSpec] = {}
+        for role_key, spec_data in data.get("per_role", {}).items():
+            per_role[role_key] = AttentionSpec.from_dict(spec_data)
+        return cls(default=default, per_role=per_role)
+
+    @classmethod
+    def from_legacy(cls, attention_backend: str | None) -> "AttentionConfig":
+        """Migrate the old single-string attention_backend to AttentionConfig."""
+        if attention_backend is None:
+            return cls()
+        return cls(default=AttentionSpec(backend=attention_backend))
+
+    def resolve(
+        self,
+        role: str = "self",
+        role_category: str | None = None,
+    ) -> AttentionSpec | None:
+        """Resolve the AttentionSpec for a given role with category fallback.
+
+        Returns None if no spec is configured (caller should fall back to platform default).
+        """
+        spec = self.per_role.get(role)
+        if spec is not None:
+            return spec
+        if role_category is not None:
+            spec = self.per_role.get(role_category)
+            if spec is not None:
+                return spec
+        return self.default
 
 
 # Special message broadcast via scheduler queues to signal worker shutdown.
