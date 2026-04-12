@@ -637,15 +637,31 @@ class OmniDiffusionConfig:
                     f"got {type(self.quantization_config)!r}"
                 )
 
-        # Migrate legacy attention_backend → AttentionConfig
-        if isinstance(self.attention, Mapping):
+        # Normalize attention: str (JSON) | dict | AttentionConfig | None
+        if isinstance(self.attention, str):
+            import json as _json
+
+            self.attention = AttentionConfig.from_dict(_json.loads(self.attention))
+        elif isinstance(self.attention, Mapping):
             self.attention = AttentionConfig.from_dict(dict(self.attention))
         elif not isinstance(self.attention, AttentionConfig):
             self.attention = AttentionConfig()
 
-        if self.attention_backend is not None and self.attention.default is None:
-            # Legacy field takes effect only when the new config has no default
+        # --diffusion-attention-backend and --diffusion-attention-config are mutually exclusive
+        if self.attention_backend is not None and (self.attention.default is not None or self.attention.per_role):
+            raise ValueError(
+                "--diffusion-attention-backend and --diffusion-attention-config "
+                "are mutually exclusive. Use one or the other."
+            )
+
+        if self.attention_backend is not None:
             self.attention = AttentionConfig.from_legacy(self.attention_backend)
+            logger.info(
+                "Parsed attention config from --diffusion-attention-backend '%s': default=%s, per_role=%s",
+                self.attention_backend,
+                self.attention.default,
+                {k: v.backend for k, v in self.attention.per_role.items()},
+            )
 
         if self.max_cpu_loras is None:
             self.max_cpu_loras = 1
@@ -805,9 +821,30 @@ class AttentionConfig:
 
     @classmethod
     def from_legacy(cls, attention_backend: str | None) -> "AttentionConfig":
-        """Migrate the old single-string attention_backend to AttentionConfig."""
+        """Migrate the old single-string attention_backend to AttentionConfig.
+
+        Supports three forms:
+          1. "FLASH_ATTN"                              → default only
+          2. "self=FLASH_ATTN,cross=TORCH_SDPA"        → per-role
+          3. "self=SPARSE_BLOCK,cross=SAGE_ATTN,FLASH_ATTN" → per-role + default
+        """
         if attention_backend is None:
             return cls()
+
+        # Detect per-role inline syntax: contains '='
+        if "=" in attention_backend:
+            per_role: dict[str, AttentionSpec] = {}
+            default: AttentionSpec | None = None
+            for part in attention_backend.split(","):
+                part = part.strip()
+                if "=" in part:
+                    role_key, backend_name = part.split("=", 1)
+                    per_role[role_key.strip()] = AttentionSpec(backend=backend_name.strip())
+                else:
+                    # Bare name without '=' is the default
+                    default = AttentionSpec(backend=part)
+            return cls(default=default, per_role=per_role)
+
         return cls(default=AttentionSpec(backend=attention_backend))
 
     def resolve(
