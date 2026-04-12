@@ -54,6 +54,15 @@ class Attention(nn.Module):
             attention_config = config.attention if config is not None else None
             self.backend_pref = config.attention_backend if config is not None else None
 
+            logger.info(
+                "Attention(role=%s): attention_config default=%s per_role=%s",
+                role,
+                attention_config.default if attention_config else None,
+                {k: v.backend for k, v in attention_config.per_role.items()}
+                if attention_config and attention_config.per_role
+                else {},
+            )
+
             attn_backend_cls, spec = get_attn_backend_for_role(
                 role=role,
                 head_size=head_size,
@@ -62,10 +71,13 @@ class Attention(nn.Module):
             )
             if spec is not None:
                 backend_kwargs = spec.extra or None
-                # Update backend_pref for logging
                 self.backend_pref = spec.backend
-        except Exception:
+                logger.info("Attention(role=%s) → backend=%s", role, spec.backend)
+            else:
+                logger.info("Attention(role=%s) → platform default", role)
+        except Exception as e:
             # ForwardContext not available (e.g. unit tests) — use legacy path
+            logger.debug("Attention(role=%s): ForwardContext unavailable (%s), using legacy path", role, e)
             attn_backend_cls = get_attn_backend(-1)
             self.backend_pref = None
 

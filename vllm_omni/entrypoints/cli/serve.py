@@ -283,6 +283,31 @@ class OmniServeCommand(CLISubcommand):
             help="Number of replica groups for HSDP. Each group holds a full sharded copy.",
         )
 
+        # Attention backend configuration
+        omni_config_group.add_argument(
+            "--diffusion-attention-backend",
+            dest="diffusion_attention_backend",
+            type=str,
+            default=None,
+            help="Diffusion attention backend (shorthand). "
+            "Single backend: 'FLASH_ATTN'. "
+            "Per-role: 'self=FLASH_ATTN,cross=TORCH_SDPA'. "
+            "Mutually exclusive with --diffusion-attention-config. "
+            "Overrides DIFFUSION_ATTENTION_BACKEND env var.",
+        )
+        omni_config_group.add_argument(
+            "--diffusion-attention-config",
+            "-dac",
+            dest="diffusion_attention_config",
+            type=str,
+            default=None,
+            help="Diffusion attention config as JSON. Example: "
+            '\'{"default": {"backend": "FLASH_ATTN"}, '
+            '"per_role": {"cross": {"backend": "TORCH_SDPA", '
+            '"extra": {"window_size": 512}}}}\'. '
+            "Mutually exclusive with --diffusion-attention-backend.",
+        )
+
         # Cache optimization parameters
         omni_config_group.add_argument(
             "--cache-backend",

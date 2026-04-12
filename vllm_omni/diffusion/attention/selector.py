@@ -94,14 +94,41 @@ def _freeze_extra(extra: dict[str, Any]) -> tuple:
 
 @lru_cache(maxsize=128)
 def _cached_get_backend_cls(
-    backend_name: str,
+    backend_name: str | None,
     head_size: int,
 ) -> type[AttentionBackend]:
-    """Cache backend class resolution by (backend_name, head_size)."""
+    """Cache backend class resolution by (backend_name, head_size).
+
+    This ensures platform validation (compute capability checks, package
+    availability, etc.) runs only once per unique (backend_name, head_size)
+    combination, avoiding repeated log messages.
+    """
     return _get_platform_default_backend(
         selected_backend=backend_name,
         head_size=head_size,
     )
+
+
+@lru_cache(maxsize=1)
+def _get_env_attention_config() -> AttentionConfig | None:
+    """Parse DIFFUSION_ATTENTION_BACKEND env var into AttentionConfig.
+
+    Supports:
+      - "FLASH_ATTN"                           → single default
+      - "self=FLASH_ATTN,cross=TORCH_SDPA"     → per-role
+    """
+    from vllm_omni.diffusion.data import AttentionConfig
+
+    env_val = os.environ.get("DIFFUSION_ATTENTION_BACKEND")
+    if env_val is None:
+        return None
+    config = AttentionConfig.from_legacy(env_val)
+    if config.per_role:
+        logger.info(
+            "Parsed DIFFUSION_ATTENTION_BACKEND per-role config: %s",
+            {k: v.backend for k, v in config.per_role.items()},
+        )
+    return config
 
 
 def get_attn_backend_for_role(
@@ -117,7 +144,7 @@ def get_attn_backend_for_role(
       1. attention_config.per_role[role]           — exact match
       2. attention_config.per_role[role_category]   — category fallback
       3. attention_config.default                   — global default
-      4. DIFFUSION_ATTENTION_BACKEND env var        — env var fallback
+      4. DIFFUSION_ATTENTION_BACKEND env var (also supports per-role syntax)
       5. Platform default                           — hardware-specific
 
     Args:
@@ -133,6 +160,7 @@ def get_attn_backend_for_role(
         Tuple of (backend_class, AttentionSpec or None).
         AttentionSpec is None when using platform default without explicit config.
     """
+    # 1. Try config from OmniDiffusionConfig
     spec = None
     if attention_config is not None:
         spec = attention_config.resolve(role=role, role_category=role_category)
@@ -141,7 +169,18 @@ def get_attn_backend_for_role(
         backend_cls = _cached_get_backend_cls(spec.backend, head_size)
         return backend_cls, spec
 
-    # Fall back to env var / platform default
-    selected_backend = os.environ.get("DIFFUSION_ATTENTION_BACKEND")
-    backend_cls = _get_platform_default_backend(selected_backend, head_size)
+    # 2. Try env var (supports per-role syntax like "self=FA,cross=SDPA")
+    env_config = _get_env_attention_config()
+    if env_config is not None:
+        spec = env_config.resolve(role=role, role_category=role_category)
+        if spec is not None:
+            backend_cls = _cached_get_backend_cls(spec.backend, head_size)
+            return backend_cls, spec
+        # Env var set but no match for this role — use env default if any
+        if env_config.default is not None:
+            backend_cls = _cached_get_backend_cls(env_config.default.backend, head_size)
+            return backend_cls, env_config.default
+
+    # 3. Platform default
+    backend_cls = _cached_get_backend_cls(None, head_size)
     return backend_cls, None

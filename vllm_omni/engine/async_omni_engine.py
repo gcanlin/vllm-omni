@@ -1193,6 +1193,8 @@ class AsyncOmniEngine:
             "enable_multithread_weight_load": kwargs.get("enable_multithread_weight_load", True),
             "num_weight_load_threads": kwargs.get("num_weight_load_threads", 4),
             "quantization": kwargs.get("quantization", None),
+            "attention_backend": kwargs.get("diffusion_attention_backend", None),
+            **({"attention": kwargs["diffusion_attention_config"]} if kwargs.get("diffusion_attention_config") else {}),
             "enable_diffusion_pipeline_profiler": kwargs.get("enable_diffusion_pipeline_profiler", False),
             **(
                 {
@@ -1261,6 +1263,14 @@ class AsyncOmniEngine:
                 if lora_scale is not None:
                     if not hasattr(cfg.engine_args, "lora_scale") or cfg.engine_args.lora_scale is None:
                         cfg.engine_args.lora_scale = lora_scale
+                attention_backend = kwargs.get("diffusion_attention_backend")
+                if attention_backend is not None:
+                    if not hasattr(cfg.engine_args, "attention_backend") or cfg.engine_args.attention_backend is None:
+                        cfg.engine_args.attention_backend = attention_backend
+                attention_config = kwargs.get("diffusion_attention_config")
+                if attention_config is not None:
+                    if not hasattr(cfg.engine_args, "attention") or cfg.engine_args.attention is None:
+                        cfg.engine_args.attention = attention_config
                 quantization_config = kwargs.get("quantization_config")
                 if quantization_config is not None:
                     if (
