@@ -1462,6 +1462,7 @@ class TestLaunchLlmStageSingleStageMode:
 
         fake_proc = Mock()
         fake_handshake_address = "ipc:///tmp/fake-handshake"
+        stage_init_timeout = 60
 
         with (
             patch("vllm_omni.engine.async_omni_engine.setup_stage_devices"),
@@ -1487,7 +1488,7 @@ class TestLaunchLlmStageSingleStageMode:
                 stage_cfg=_make_stage_cfg(0),
                 metadata=metadata,
                 stage_connector_spec={},
-                stage_init_timeout=60,
+                stage_init_timeout=stage_init_timeout,
                 llm_stage_launch_lock=threading.Lock(),
             )
 
@@ -1501,6 +1502,7 @@ class TestLaunchLlmStageSingleStageMode:
             fake_handshake_address,
             fake_addresses,
             fake_vllm_config,
+            stage_init_timeout,
         )
         mock_omni.assert_not_called()
         assert isinstance(result, StartedLlmStage)
