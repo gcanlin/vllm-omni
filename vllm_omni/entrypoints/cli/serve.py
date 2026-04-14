@@ -367,6 +367,16 @@ class OmniServeCommand(CLISubcommand):
             action="store_true",
             help="Enable diffusion pipeline profiler to display stage durations.",
         )
+
+        # Default generator device for reproducible random number generation
+        omni_config_group.add_argument(
+            "--default-generator-device",
+            type=str,
+            default=None,
+            help="Default device for torch.Generator in diffusion models (e.g., 'cpu', 'cuda'). "
+            "When set, this device will be used for random number generation if not overridden "
+            "per-request. Using 'cpu' ensures reproducible results across different GPU hardware.",
+        )
         return serve_parser
 
 

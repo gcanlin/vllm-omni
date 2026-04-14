@@ -492,6 +492,12 @@ class OmniDiffusionConfig:
     # Step mode settings
     step_execution: bool = False
 
+    # Default generator device for random number generation (e.g., "cpu", "cuda")
+    # If set, this device will be used for torch.Generator when per-request
+    # generator_device is not specified. This is useful for ensuring reproducible
+    # results across different hardware configurations.
+    default_generator_device: str | None = None
+
     @property
     def is_moe(self) -> bool:
         num_experts = self.tf_model_config.get("num_experts", None)

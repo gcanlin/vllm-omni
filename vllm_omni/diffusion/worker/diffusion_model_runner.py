@@ -251,6 +251,8 @@ class DiffusionModelRunner:
             if req.sampling_params.generator is None and req.sampling_params.seed is not None:
                 if req.sampling_params.generator_device is not None:
                     gen_device = req.sampling_params.generator_device
+                elif self.od_config.default_generator_device is not None:
+                    gen_device = self.od_config.default_generator_device
                 elif self.device.type == "cpu":
                     gen_device = "cpu"
                 else:
@@ -361,6 +363,8 @@ class DiffusionModelRunner:
                 if state.sampling.generator is None and state.sampling.seed is not None:
                     if state.sampling.generator_device is not None:
                         gen_device = state.sampling.generator_device
+                    elif self.od_config.default_generator_device is not None:
+                        gen_device = self.od_config.default_generator_device
                     elif self.device.type == "cpu":
                         gen_device = "cpu"
                     else:
