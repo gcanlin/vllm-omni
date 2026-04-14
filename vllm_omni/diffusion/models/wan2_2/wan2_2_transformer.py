@@ -563,7 +563,7 @@ class WanCrossAttention(nn.Module):
         value = self.to_v(encoder_hidden_states)
         key = self.norm_k(key)
 
-        # Reshape for multi-head attention: [B, S, H, D]
+        # Reshape for multi-head attention
         query = query.unflatten(2, (self.num_heads, self.head_dim))
         key = key.unflatten(2, (self.num_heads, self.head_dim))
         value = value.unflatten(2, (self.num_heads, self.head_dim))
