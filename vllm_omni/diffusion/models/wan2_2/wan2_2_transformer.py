@@ -23,6 +23,7 @@ from vllm.model_executor.layers.linear import ColumnParallelLinear, QKVParallelL
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
+from vllm_omni.diffusion.attention.backends.sdpa import SDPAImpl
 from vllm_omni.diffusion.attention.layer import Attention
 from vllm_omni.diffusion.distributed.sp_plan import (
     SequenceParallelInput,
@@ -444,7 +445,7 @@ class WanSelfAttention(nn.Module):
 
 class WanCrossAttention(nn.Module):
     """
-    Optimized cross-attention module using vLLM layers.
+    Optimized cross-attention module using vLLM layers with SDPA.
     Handles both text cross-attention and optional image cross-attention (I2V).
     """
 
@@ -532,14 +533,12 @@ class WanCrossAttention(nn.Module):
         )
         self.dropout = nn.Dropout(dropout)
 
-        # Unified attention layer
-        self.attn = Attention(
+        # Force SDPA backend for cross-attention (workaround)
+        self.sdpa_impl = SDPAImpl(
             num_heads=self.num_heads,
             head_size=head_dim,
-            num_kv_heads=self.num_heads,
             softmax_scale=1.0 / (head_dim**0.5),
             causal=False,
-            skip_sequence_parallel=True,
         )
 
     def forward(
@@ -564,7 +563,7 @@ class WanCrossAttention(nn.Module):
         value = self.to_v(encoder_hidden_states)
         key = self.norm_k(key)
 
-        # Reshape for multi-head attention
+        # Reshape for multi-head attention: [B, S, H, D]
         query = query.unflatten(2, (self.num_heads, self.head_dim))
         key = key.unflatten(2, (self.num_heads, self.head_dim))
         value = value.unflatten(2, (self.num_heads, self.head_dim))
@@ -579,12 +578,12 @@ class WanCrossAttention(nn.Module):
             key_img = key_img.unflatten(2, (self.num_heads, self.head_dim))
             value_img = value_img.unflatten(2, (self.num_heads, self.head_dim))
 
-            hidden_states_img = self.attn(query, key_img, value_img)
+            hidden_states_img = self.sdpa_impl.forward(query, key_img, value_img)
             hidden_states_img = hidden_states_img.flatten(2, 3)
             hidden_states_img = hidden_states_img.type_as(query)
 
-        # Main cross-attention using unified attention layer
-        hidden_states = self.attn(query, key, value)
+        # Main cross-attention using SDPA (forced)
+        hidden_states = self.sdpa_impl.forward(query, key, value)
         hidden_states = hidden_states.flatten(2, 3)
         hidden_states = hidden_states.type_as(query)
 
