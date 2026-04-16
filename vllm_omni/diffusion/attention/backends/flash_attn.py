@@ -195,38 +195,8 @@ class FlashAttentionImpl(AttentionImpl):
         MINDIE_SD_FA_TYPE environment variable.
         """
         attention_mask = attn_metadata.attn_mask if attn_metadata else None
+        layout = attn_metadata.layout if attn_metadata else None
 
-        # Detect input layout based on num_heads position
-        # BSND: [B, S, N, D] -> shape[2] == num_heads
-        # BNSD: [B, N, S, D] -> shape[1] == num_heads
-        if query.shape[2] == self.num_heads:
-            layout = "BSND"
-            q_seqlen, k_seqlen = query.shape[1], key.shape[1]
-        else:
-            layout = "BNSD"
-            q_seqlen, k_seqlen = query.shape[2], key.shape[2]
-
-        # When Q/KV seqlen differ, LA will fail. Use torch_npu directly to bypass env var.
-        if q_seqlen != k_seqlen:
-            import torch_npu
-
-            if attention_mask is not None:
-                attention_mask = ~attention_mask.to(torch.bool)
-
-            output = torch_npu.npu_fusion_attention(
-                query,
-                key,
-                value,
-                atten_mask=attention_mask,
-                input_layout=layout,
-                scale=self.softmax_scale,
-                pre_tokens=2147483647,
-                next_tokens=2147483647,
-                head_num=self.num_heads,
-            )[0]
-            return output
-
-        # Self attention: use mindiesd which respects MINDIE_SD_FA_TYPE env var
         try:
             from mindiesd import attention_forward
         except ImportError:

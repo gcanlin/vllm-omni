@@ -64,6 +64,8 @@ class AttentionMetadata:
     # a replicated tensor among processes appended to the front or rear of value, depends the joint_strategy
     joint_strategy: str = "front"
     # the strategy to joint the query, key, and value, can be "front" or "rear"
+    layout: str | None = None
+    # the layout of the input query, key, and value, can be "BSND" or "BNSD"
 
 
 T = TypeVar("T", bound=AttentionMetadata)
