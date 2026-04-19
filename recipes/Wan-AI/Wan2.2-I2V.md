@@ -110,17 +110,9 @@ vllm serve \
 
 #### Verification
 
-After the server is ready, send an image-to-video request:
-
-```bash
-curl http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "Wan-AI/Wan2.2-I2V-A14B-Diffusers",
-    "messages": [{"role": "user", "content": "A cat playing piano in a jazz bar"}],
-    "modalities": ["video"]
-  }'
-```
+After the server is ready, see
+[`examples/online_serving/image_to_video/README.md`](../../examples/online_serving/image_to_video/README.md)
+for complete client examples and request formats.
 
 #### Notes
 
