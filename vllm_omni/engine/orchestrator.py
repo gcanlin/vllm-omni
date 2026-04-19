@@ -644,23 +644,39 @@ class Orchestrator:
         if raw_outputs.scheduler_stats is not None:
             processor.update_scheduler_stats(raw_outputs.scheduler_stats)
 
-        # Mirror vLLM AsyncLLM output_handler: feed stats to the logger
-        # manager so LoggingStatLogger can periodically print KV cache /
-        # prefix cache hit rate, and PrometheusStatLogger can publish.
+        # Defer stats recording to a background asyncio task so it does
+        # not block stage-to-stage routing.  The task runs at the next
+        # event-loop yield (after outputs have been forwarded to downstream
+        # stages), allowing them to accumulate requests and batch.
         if self.logger_manager is not None:
-            try:
-                self.logger_manager.record(
-                    engine_idx=stage_id,
-                    scheduler_stats=raw_outputs.scheduler_stats,
-                    iteration_stats=iteration_stats,
-                )
-            except Exception:
-                logger.exception(
-                    "[Orchestrator] stat logger record failed for stage-%s",
+            asyncio.create_task(
+                self._record_stats(
                     stage_id,
+                    raw_outputs.scheduler_stats,
+                    iteration_stats,
                 )
+            )
 
         return processed.request_outputs
+
+    async def _record_stats(
+        self,
+        stage_id: int,
+        scheduler_stats: Any,
+        iteration_stats: IterationStats | None,
+    ) -> None:
+        """Background task: record stats without blocking the routing loop."""
+        try:
+            self.logger_manager.record(
+                engine_idx=stage_id,
+                scheduler_stats=scheduler_stats,
+                iteration_stats=iteration_stats,
+            )
+        except Exception:
+            logger.exception(
+                "[Orchestrator] stat logger record failed for stage-%s",
+                stage_id,
+            )
 
     async def _handle_add_request(self, msg: dict[str, Any]) -> None:
         """Handle an add_request message from the main thread."""
