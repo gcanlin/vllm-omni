@@ -1,18 +1,17 @@
-# Wan2.2 Text-to-Video on Ascend NPU
+# Wan2.2 Image To Video
 
 ## Summary
 
 - Vendor: Wan-AI
-- Model: `Wan-AI/Wan2.2-T2V-A14B-Diffusers`
-- Task: Text-to-video generation
+- Model: `Wan-AI/Wan2.2-I2V-A14B-Diffusers`
+- Task: Image-to-video generation
 - Mode: Online serving with the OpenAI-compatible API
 - Maintainer: Community
 
 ## When to use this recipe
 
-Use this recipe when you want to deploy Wan2.2 14B text-to-video model on
-Ascend NPU (A2 / A3) with optimal multi-card parallelism. Two configurations
-are provided:
+Use this recipe when you want to deploy the Wan2.2 14B image-to-video model
+with vLLM-Omni using multi-card parallelism. Two configurations are provided:
 
 1. **Distilled model (no negative-prompt / CFG computation)** — higher
    throughput, recommended when using a distilled checkpoint that does not
@@ -22,8 +21,7 @@ are provided:
 
 ## References
 
-- Upstream model card: <https://huggingface.co/Wan-AI/Wan2.2-T2V-A14B-Diffusers>
-- PyTorch NPU multi-stream memory reuse issue: <https://github.com/pytorch/pytorch/issues/147168>
+- Upstream model card: <https://huggingface.co/Wan-AI/Wan2.2-I2V-A14B-Diffusers>
 
 ## Hardware Support
 
@@ -83,7 +81,7 @@ export MINDIE_SD_FA_TYPE=ascend_laser_attention
 export MULTI_STREAM_MEMORY_REUSE=2
 
 vllm serve \
-  --omni Wan-AI/Wan2.2-T2V-A14B-Diffusers \
+  --omni Wan-AI/Wan2.2-I2V-A14B-Diffusers \
   --use-hsdp \
   --usp 8 \
   --vae-patch-parallel-size 8 \
@@ -97,7 +95,7 @@ export MINDIE_SD_FA_TYPE=ascend_laser_attention
 export MULTI_STREAM_MEMORY_REUSE=2
 
 vllm serve \
-  --omni Wan-AI/Wan2.2-T2V-A14B-Diffusers \
+  --omni Wan-AI/Wan2.2-I2V-A14B-Diffusers \
   --use-hsdp \
   --usp 4 \
   --cfg 2 \
@@ -112,13 +110,13 @@ vllm serve \
 
 #### Verification
 
-After the server is ready, send a text-to-video request:
+After the server is ready, send an image-to-video request:
 
 ```bash
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+    "model": "Wan-AI/Wan2.2-I2V-A14B-Diffusers",
     "messages": [{"role": "user", "content": "A cat playing piano in a jazz bar"}],
     "modalities": ["video"]
   }'
