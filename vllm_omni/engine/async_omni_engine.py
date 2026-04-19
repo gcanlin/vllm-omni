@@ -32,6 +32,7 @@ from vllm.logger import init_logger
 from vllm.tokenizers import cached_tokenizer_from_config
 from vllm.v1.engine import EngineCoreRequest
 from vllm.v1.engine.input_processor import InputProcessor
+from vllm.v1.metrics.loggers import StatLoggerManager
 
 from vllm_omni.config.stage_config import strip_parent_engine_args
 from vllm_omni.diffusion.data import DiffusionParallelConfig
@@ -312,6 +313,9 @@ class AsyncOmniEngine:
         self.num_stages = len(self.stage_configs)
         stage0_args = getattr(self.stage_configs[0], "engine_args", None) if self.num_stages > 0 else None
         self.async_chunk = bool(getattr(stage0_args, "async_chunk", False))
+        self.log_stats = not bool(getattr(stage0_args, "disable_log_stats", False))
+        self.logger_manager: StatLoggerManager | None = None
+        self.orchestrator_loop: asyncio.AbstractEventLoop | None = None
         self.stage_clients: list[Any] = []
         self.stage_vllm_configs: list[Any] = []
         self.output_processors: list[MultimodalOutputProcessor | None] = []
@@ -428,7 +432,7 @@ class AsyncOmniEngine:
                                 launch_omni_core_engines(
                                     vllm_config=vllm_config,
                                     executor_class=executor_class,
-                                    log_stats=False,
+                                    log_stats=self.log_stats,
                                     omni_master_server=self._omni_master_server,
                                     stage_id=metadata.stage_id,
                                     stage_config=stage_cfg,
@@ -447,7 +451,7 @@ class AsyncOmniEngine:
                             addresses, proc, handshake_address = spawn_stage_core(
                                 vllm_config=vllm_config,
                                 executor_class=executor_class,
-                                log_stats=False,
+                                log_stats=self.log_stats,
                             )
                             started_stage = StartedLlmStage(
                                 stage_id=metadata.stage_id,
@@ -650,7 +654,7 @@ class AsyncOmniEngine:
                 )
             output_processor = MultimodalOutputProcessor(
                 tokenizer=tokenizer,
-                log_stats=False,
+                log_stats=self.log_stats,
                 engine_core_output_type=started.metadata.engine_output_type,
             )
             input_processor = None
@@ -921,11 +925,22 @@ class AsyncOmniEngine:
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        self.orchestrator_loop = loop
 
         async def _run_orchestrator() -> None:
             self._initialize_janus_queues()
 
             self._initialize_stages(stage_init_timeout)
+
+            # Build StatLoggerManager after stages are initialized so we
+            # know how many engine indices to register.
+            if self.log_stats and self.stage_vllm_configs:
+                self.logger_manager = StatLoggerManager(
+                    vllm_config=self.stage_vllm_configs[0],
+                    engine_idxs=list(range(self.num_stages)),
+                )
+                self.logger_manager.log_engine_initialized()
+
             pd_config = self._detect_pd_config()
             orchestrator = Orchestrator(
                 request_async_queue=self.request_queue.async_q,
@@ -935,6 +950,7 @@ class AsyncOmniEngine:
                 stage_clients=self.stage_clients,
                 output_processors=self.output_processors,
                 stage_vllm_configs=self.stage_vllm_configs,
+                logger_manager=self.logger_manager,
                 pd_config=pd_config,
             )
             if not startup_future.done():
@@ -970,6 +986,25 @@ class AsyncOmniEngine:
             finally:
                 asyncio.set_event_loop(None)
                 loop.close()
+
+    # ---- stat logging ----
+
+    async def do_log_stats(self) -> None:
+        """Schedule StatLoggerManager.log() on the orchestrator loop.
+
+        Fire-and-forget: the log() call is dispatched to the orchestrator
+        thread without blocking the caller, so it never stalls the API
+        server's request-handling loop.  Both record() and log() execute
+        on the same (orchestrator) thread, avoiding data races.
+        """
+        manager = self.logger_manager
+        if manager is None:
+            return
+        loop = self.orchestrator_loop
+        if loop is None or loop.is_closed():
+            return
+
+        loop.call_soon_threadsafe(manager.log)
 
     # ---- request helpers ----
 

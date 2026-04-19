@@ -755,11 +755,13 @@ class AsyncOmni(EngineClient, OmniBase):
         return False
 
     async def do_log_stats(self) -> None:
-        """Log statistics.
+        """Delegate stat logging to AsyncOmniEngine.
 
-        TODO: Forward to Orchestrator process via message.
+        The actual StatLoggerManager.log() call is scheduled on the
+        orchestrator thread's event loop so that record() and log()
+        never race on the same accumulators.
         """
-        pass
+        await self.engine.do_log_stats()
 
     async def get_supported_tasks(self) -> tuple[SupportedTask, ...]:
         """Return the task set exposed by the orchestrator-backed engine."""

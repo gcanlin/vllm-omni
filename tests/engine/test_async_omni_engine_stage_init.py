@@ -374,6 +374,7 @@ def test_attach_llm_stage_uses_omni_input_preprocessor(monkeypatch):
     )
 
     engine = object.__new__(AsyncOmniEngine)
+    engine.log_stats = False
 
     _stage_client, _out_proc, _vllm_cfg, input_processor = engine._attach_llm_stage(started)
 
