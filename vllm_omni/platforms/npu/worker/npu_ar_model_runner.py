@@ -87,6 +87,7 @@ class NPUARModelRunner(OmniNPUModelRunner):
         with maybe_disable_pin_memory_for_ray(self, total_bytes):
             return super()._make_buffer(*size, dtype=dtype, numpy=numpy)
 
+    #  -------------------------------------- Omni-new -------------------------------------------------
     def capture_model(self) -> None:
         super().capture_model()
         self._capture_talker_mtp_graphs()
@@ -201,6 +202,7 @@ class NPUARModelRunner(OmniNPUModelRunner):
                 raise RuntimeError("Request IDs in the batch are missing from the merged states!")
             return combined_hidden_states[rid]
         return hidden_states_cpu[start:end]
+    #  -------------------------------------- Omni-new -------------------------------------------------
 
     @torch.inference_mode()
     def execute_model(
@@ -263,10 +265,12 @@ class NPUARModelRunner(OmniNPUModelRunner):
         ):
             scheduler_output = deepcopy(scheduler_output)
 
+        #  -------------------------------------- Omni-new -------------------------------------------------
         if has_kv_transfer_group():
             kv_connector_metadata = scheduler_output.kv_connector_metadata
             if kv_connector_metadata is not None:
                 get_kv_transfer_group().handle_preemptions(kv_connector_metadata)
+        #  -------------------------------------- Omni-new -------------------------------------------------
 
         num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
         with record_function_or_nullcontext("prepare input"):
@@ -274,8 +278,10 @@ class NPUARModelRunner(OmniNPUModelRunner):
                 # Update persistent batch states.
                 deferred_state_corrections_fn = self._update_states(scheduler_output)
 
+                #  -------------------------------------- Omni-new -------------------------------------------------
                 if scheduler_output.finished_req_ids and hasattr(self.model, "on_requests_finished"):
                     self.model.on_requests_finished(scheduler_output.finished_req_ids)
+                #  -------------------------------------- Omni-new -------------------------------------------------
 
                 if has_ec_transfer() and get_ec_transfer().is_producer:
                     with self.maybe_get_ec_connector_output(
@@ -458,6 +464,7 @@ class NPUARModelRunner(OmniNPUModelRunner):
                 intermediate_tensors,
             )
 
+            #  -------------------------------------- Omni-new -------------------------------------------------
             if hasattr(self.model, "prepare_runner_inputs"):
                 input_ids, positions = self.model.prepare_runner_inputs(
                     input_ids=input_ids,
@@ -468,6 +475,7 @@ class NPUARModelRunner(OmniNPUModelRunner):
                     num_scheduled_tokens=[int(num_scheduled_tokens_np[i]) for i in range(num_reqs)],
                     input_ids_buffer=self.input_ids.gpu[:num_tokens_padded],
                 )
+            #  -------------------------------------- Omni-new -------------------------------------------------
 
             # update global cos, sin
             update_cos_sin(positions)
@@ -557,12 +565,14 @@ class NPUARModelRunner(OmniNPUModelRunner):
                         for aux_hidden_states_pcp in aux_hidden_states
                     ]
 
+            #  -------------------------------------- Omni-new -------------------------------------------------
             self._maybe_update_prefix_cache(
                 hidden_states=hidden_states,
                 multimodal_outputs=multimodal_outputs,
                 num_tokens_unpadded=num_tokens_unpadded,
                 num_tokens_padded=num_tokens_padded,
             )
+            #  -------------------------------------- Omni-new -------------------------------------------------
 
             if not self.broadcast_pp_output:
                 # Common case.
@@ -902,6 +912,7 @@ class NPUARModelRunner(OmniNPUModelRunner):
             vocab_size=self.input_batch.vocab_size,
         )
 
+    #  -------------------------------------- Omni-new -------------------------------------------------
     def _resolve_global_request_id(self, req_id: str) -> str:
         """Resolve global request ID from request state."""
         req_state = self.requests.get(req_id)
@@ -917,3 +928,4 @@ class NPUARModelRunner(OmniNPUModelRunner):
                 return global_id.decode("utf-8")
             return str(global_id)
         return req_id
+    #  -------------------------------------- Omni-new -------------------------------------------------
