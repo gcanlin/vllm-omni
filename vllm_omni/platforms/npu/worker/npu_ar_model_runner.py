@@ -42,6 +42,7 @@ from vllm_ascend.utils import enable_sp, global_stream
 from vllm_omni.distributed.omni_connectors.kv_transfer_manager import OmniKVTransferManager
 from vllm_omni.outputs import OmniModelRunnerOutput
 from vllm_omni.platforms.npu.worker.npu_model_runner import OmniNPUModelRunner
+from vllm_omni.utils.mm_outputs import build_mm_cpu, to_payload_element
 
 
 class ExecuteModelState(NamedTuple):
@@ -142,6 +143,64 @@ class NPUARModelRunner(OmniNPUModelRunner):
             ) from e
         finally:
             set_cudagraph_capturing_enabled(False)
+
+    def _maybe_update_prefix_cache(
+        self,
+        hidden_states: torch.Tensor,
+        multimodal_outputs: dict,
+        num_tokens_unpadded: int,
+        num_tokens_padded: int,
+    ):
+        if self.omni_prefix_cache is not None and get_pp_group().is_last_rank:
+            if multimodal_outputs is not None and not isinstance(multimodal_outputs, dict):
+                logger.warning_once(
+                    "prefix caching expects mm outputs to be a dict, but got %s",
+                    type(multimodal_outputs),
+                )
+
+            self.omni_prefix_cache.update_omni_tensor_prefix_cache(
+                hidden_states=hidden_states,
+                multimodal_outputs=multimodal_outputs,
+                num_tokens_unpadded=num_tokens_unpadded,
+                slot_mapping=self.input_batch.block_table[0].slot_mapping.cpu,
+                num_tokens_padded=num_tokens_padded,
+            )
+
+    def _maybe_get_combined_prefix_cache_tensors(
+        self,
+        hidden_states: torch.Tensor,
+        multimodal_outputs: dict,
+        num_scheduled_tokens: dict[str, int],
+    ) -> tuple[dict[str, torch.Tensor] | None, dict | None]:
+        combined_hidden_states, combined_multimodal_outputs = None, None
+        if self.omni_prefix_cache is not None:
+            combined_hidden_states = self.omni_prefix_cache.get_merged_hidden_states(
+                query_start_loc=self.query_start_loc.cpu,
+                input_batch=self.input_batch,
+                hidden_states=hidden_states,
+                num_scheduled_tokens=num_scheduled_tokens,
+            )
+            combined_multimodal_outputs = self.omni_prefix_cache.get_merged_multimodal_states(
+                query_start_loc=self.query_start_loc.cpu,
+                input_batch=self.input_batch,
+                multimodal_outputs=multimodal_outputs,
+                num_scheduled_tokens=num_scheduled_tokens,
+            )
+        return combined_hidden_states, combined_multimodal_outputs
+
+    @staticmethod
+    def _resolve_req_hidden_states(
+        hidden_states_cpu: torch.Tensor,
+        combined_hidden_states: dict[str, torch.Tensor] | None,
+        rid: str,
+        start: int,
+        end: int,
+    ):
+        if combined_hidden_states is not None:
+            if rid not in combined_hidden_states:
+                raise RuntimeError("Request IDs in the batch are missing from the merged states!")
+            return combined_hidden_states[rid]
+        return hidden_states_cpu[start:end]
 
     @torch.inference_mode()
     def execute_model(
@@ -498,6 +557,13 @@ class NPUARModelRunner(OmniNPUModelRunner):
                         for aux_hidden_states_pcp in aux_hidden_states
                     ]
 
+            self._maybe_update_prefix_cache(
+                hidden_states=hidden_states,
+                multimodal_outputs=multimodal_outputs,
+                num_tokens_unpadded=num_tokens_unpadded,
+                num_tokens_padded=num_tokens_padded,
+            )
+
             if not self.broadcast_pp_output:
                 # Common case.
                 if not get_pp_group().is_last_rank:
@@ -590,6 +656,9 @@ class NPUARModelRunner(OmniNPUModelRunner):
         #  -------------------------------------- Omni-new -------------------------------------------------
         kv_extracted_req_ids = getattr(self, "kv_extracted_req_ids", None)
         self.kv_extracted_req_ids = None
+        combined_hidden_states = None
+        combined_multimodal_outputs = None
+        mm_cpu = {}
         #  -------------------------------------- Omni-new -------------------------------------------------
 
 
@@ -628,6 +697,7 @@ class NPUARModelRunner(OmniNPUModelRunner):
         ) = self.execute_model_state
         # Clear ephemeral state.
         self.execute_model_state = None
+        seq_len = hidden_states.shape[0]
 
         # Apply structured output bitmasks if present.
         if grammar_output is not None:
@@ -727,37 +797,26 @@ class NPUARModelRunner(OmniNPUModelRunner):
                 dtype=np.int32,
             )
 
-        self._process_additional_information_updates(
-            hidden_states, multimodal_outputs, num_scheduled_tokens_np, scheduler_output
-        )
+        if self.omni_prefix_cache is not None:
+            (
+                combined_hidden_states,
+                combined_multimodal_outputs,
+            ) = self._maybe_get_combined_prefix_cache_tensors(
+                hidden_states,
+                multimodal_outputs,
+                scheduler_output.num_scheduled_tokens,
+            )
+        else:
+            mm_cpu = build_mm_cpu(multimodal_outputs)
 
-        # Pre-copy multimodal tensors to CPU once (not per-request) to avoid
-        # redundant D2H transfers when gpu_resident_buffer_keys keeps them on GPU.
-        mm_cpu: dict[str, object] = {}
-        if isinstance(multimodal_outputs, dict) and multimodal_outputs:
-            for k, v in multimodal_outputs.items():
-                try:
-                    if isinstance(v, torch.Tensor) and v.shape[0] == hidden_states_cpu.shape[0]:
-                        mm_cpu[k] = v.detach().to("cpu").contiguous()
-                    elif isinstance(v, dict):
-                        sub_dict: dict[str, torch.Tensor] = {}
-                        for sk, sv in v.items():
-                            if isinstance(sv, torch.Tensor) and sv.shape[0] == hidden_states_cpu.shape[0]:
-                                sub_dict[str(sk)] = sv.detach().to("cpu").contiguous()
-                        if sub_dict:
-                            mm_cpu[k] = sub_dict
-                    elif isinstance(v, list):
-                        if len(v) == 0:
-                            continue
-                        cpu_list = []
-                        for elem in v:
-                            if isinstance(elem, torch.Tensor):
-                                cpu_list.append(elem.detach().to("cpu").contiguous())
-                            else:
-                                cpu_list.append(elem)
-                        mm_cpu[k] = cpu_list
-                except Exception as e:
-                    logger.error(f"Error in merge multimodal outputs: {e}")
+        self._process_additional_information_updates(
+            hidden_states,
+            multimodal_outputs,
+            num_scheduled_tokens_np,
+            scheduler_output,
+            combined_hidden_states,
+            combined_multimodal_outputs,
+        )
 
         pooler_output: list[dict[str, object]] = []
         for rid in req_ids_output_copy:
@@ -765,27 +824,33 @@ class NPUARModelRunner(OmniNPUModelRunner):
             start = int(self.query_start_loc.cpu[idx])
             sched = int(num_scheduled_tokens_np[idx])
             end = start + sched
-            hidden_slice = hidden_states_cpu[start:end]
-            payload: dict[str, object] = {"hidden": hidden_slice}
-            if mm_cpu:
-                mm_payload: dict[str, object] = {}
-                for k, v in mm_cpu.items():
-                    if isinstance(v, torch.Tensor) and v.shape[0] == hidden_states_cpu.shape[0]:
-                        mm_payload[k] = v[start:end].contiguous()
-                    elif isinstance(v, dict):
-                        mm_payload[k] = {sk: sv[start:end].contiguous() for sk, sv in v.items()}
-                    elif isinstance(v, list):
-                        element = v[idx] if idx < len(v) else v[0]
-                        if element is not None:
-                            if isinstance(element, torch.Tensor):
-                                element = element.clone()
-                            mm_payload[k] = element
-                    elif isinstance(v, torch.Tensor):
-                        # List-derived tensor payloads are request-invariant; clone to
-                        # avoid accidental cross-request aliasing on downstream mutation.
-                        mm_payload[k] = v.clone()
-                    else:
-                        mm_payload[k] = v
+            req_hidden_states = self._resolve_req_hidden_states(
+                hidden_states_cpu,
+                combined_hidden_states,
+                rid,
+                start,
+                end,
+            )
+            payload: dict[str, object] = {"hidden": req_hidden_states}
+            mm_payload: dict[str, object] = {}
+            if combined_multimodal_outputs or mm_cpu:
+                if combined_multimodal_outputs:
+                    for mm_key in combined_multimodal_outputs.keys():
+                        value = combined_multimodal_outputs[mm_key][rid]
+                        if isinstance(value, list):
+                            mm_payload[mm_key] = value[idx] if idx < len(value) else value[0]
+                        else:
+                            mm_payload[mm_key] = value
+                else:
+                    for mm_key, mm_val in mm_cpu.items():
+                        mm_payload[mm_key] = to_payload_element(
+                            element=mm_val,
+                            idx=idx,
+                            start=start,
+                            end=end,
+                            pass_lists_through=False,
+                            seq_len=seq_len,
+                        )
                 payload.update(mm_payload)
             pooler_output.append(payload)
 
