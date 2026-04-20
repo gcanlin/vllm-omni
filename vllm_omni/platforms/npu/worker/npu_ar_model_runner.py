@@ -31,6 +31,8 @@ from vllm.v1.worker.mamba_utils import preprocess_mamba
 from vllm.v1.worker.ubatch_utils import maybe_create_ubatch_slices
 from vllm_ascend.ascend_forward_context import set_ascend_forward_context
 from vllm_ascend.attention.utils import AscendCommonAttentionMetadata
+from vllm_ascend.compilation.acl_graph import ACLGraphWrapper
+from vllm_ascend.worker.model_runner_v1 import graph_capture
 
 # yapf conflicts with isort for this block
 # yapf: disable
@@ -83,6 +85,63 @@ class NPUARModelRunner(OmniNPUModelRunner):
         # Use the context manager to temporarily disable pinning if needed
         with maybe_disable_pin_memory_for_ray(self, total_bytes):
             return super()._make_buffer(*size, dtype=dtype, numpy=numpy)
+
+    def capture_model(self) -> None:
+        super().capture_model()
+        self._capture_talker_mtp_graphs()
+
+    def _capture_talker_mtp_graphs(self) -> None:
+        if not self.has_talker_mtp or not isinstance(self.talker_mtp, ACLGraphWrapper):
+            return
+
+        from vllm.compilation.monitor import set_cudagraph_capturing_enabled
+
+        capture_sizes = sorted(self.compilation_config.cudagraph_capture_sizes, reverse=True)
+        num_warmups = self.compilation_config.cudagraph_num_of_warmups
+        logger.info("Capturing talker_mtp graphs for sizes %s", capture_sizes)
+
+        set_cudagraph_capturing_enabled(True)
+        try:
+            with torch.inference_mode(), graph_capture(device=self.device):
+                for bsz in capture_sizes:
+                    _, batch_desc, _, _, _ = self._determine_batch_execution_and_padding(
+                        num_tokens=bsz,
+                        num_reqs=bsz,
+                        num_scheduled_tokens_np=np.ones(bsz, dtype=np.int32),
+                        max_num_scheduled_tokens=1,
+                        use_cascade_attn=False,
+                    )
+                    n = batch_desc.num_tokens
+                    ids = self.talker_mtp_input_ids.gpu[:n]
+                    emb = self.talker_mtp_inputs_embeds.gpu[:n]
+                    hid = self.last_talker_hidden.gpu[:n]
+                    ts = self.text_step.gpu[:n]
+
+                    for _ in range(num_warmups):
+                        with set_ascend_forward_context(
+                            None,
+                            self.vllm_config,
+                            aclgraph_runtime_mode=CUDAGraphMode.NONE,
+                            batch_descriptor=batch_desc,
+                        ):
+                            self.talker_mtp(ids, emb, hid, ts)
+
+                    with set_ascend_forward_context(
+                        None,
+                        self.vllm_config,
+                        aclgraph_runtime_mode=CUDAGraphMode.FULL,
+                        batch_descriptor=batch_desc,
+                    ):
+                        self.talker_mtp(ids, emb, hid, ts)
+                    torch.npu.synchronize()
+
+            logger.info("Captured talker_mtp graphs for %d sizes", len(capture_sizes))
+        except RuntimeError as e:
+            raise RuntimeError(
+                f"talker_mtp graph capture failed for a model that declared talker_mtp_graph_safe=True: {e}"
+            ) from e
+        finally:
+            set_cudagraph_capturing_enabled(False)
 
     @torch.inference_mode()
     def execute_model(
