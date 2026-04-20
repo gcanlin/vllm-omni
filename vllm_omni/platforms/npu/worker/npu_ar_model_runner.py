@@ -776,10 +776,10 @@ class NPUARModelRunner(OmniNPUModelRunner):
                         mm_payload[k] = {sk: sv[start:end].contiguous() for sk, sv in v.items()}
                     elif isinstance(v, list):
                         element = v[idx] if idx < len(v) else v[0]
-                        # Clone tensors to avoid cross-request aliasing
-                        if isinstance(element, torch.Tensor):
-                            element = element.clone()
-                        mm_payload[k] = element
+                        if element is not None:
+                            if isinstance(element, torch.Tensor):
+                                element = element.clone()
+                            mm_payload[k] = element
                     elif isinstance(v, torch.Tensor):
                         # List-derived tensor payloads are request-invariant; clone to
                         # avoid accidental cross-request aliasing on downstream mutation.
