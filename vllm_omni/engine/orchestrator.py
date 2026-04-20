@@ -800,11 +800,21 @@ class Orchestrator:
             processor.update_scheduler_stats(raw_outputs.scheduler_stats)
 
         if self.logger_manager is not None:
-            self.logger_manager.record(
-                engine_idx=stage_id,
-                scheduler_stats=raw_outputs.scheduler_stats,
-                iteration_stats=iteration_stats,
-            )
+            # Fire-and-forget: offload Prometheus / logger work so it
+            # doesn't block the output-processing hot path.  Runs on the
+            # same orchestrator loop (single-threaded, no lock needed).
+            manager = self.logger_manager
+            sched_stats = raw_outputs.scheduler_stats
+            iter_stats = iteration_stats
+
+            async def _record() -> None:
+                manager.record(
+                    engine_idx=stage_id,
+                    scheduler_stats=sched_stats,
+                    iteration_stats=iter_stats,
+                )
+
+            asyncio.create_task(_record())
 
         return processed.request_outputs
 
