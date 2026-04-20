@@ -215,6 +215,9 @@ class NPUARModelRunner(OmniNPUModelRunner):
                 # Update persistent batch states.
                 deferred_state_corrections_fn = self._update_states(scheduler_output)
 
+                if scheduler_output.finished_req_ids and hasattr(self.model, "on_requests_finished"):
+                    self.model.on_requests_finished(scheduler_output.finished_req_ids)
+
                 if has_ec_transfer() and get_ec_transfer().is_producer:
                     with self.maybe_get_ec_connector_output(
                         scheduler_output,
