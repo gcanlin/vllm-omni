@@ -933,10 +933,12 @@ class AsyncOmniEngine:
             self._initialize_stages(stage_init_timeout)
 
             # Build StatLoggerManager after stages are initialized so we
-            # know how many engine indices to register.
-            if self.log_stats and self.stage_vllm_configs:
+            # know how many engine indices to register.  Use the first
+            # non-None vllm_config (diffusion stages have None).
+            stats_vllm_config = next((c for c in self.stage_vllm_configs if c is not None), None)
+            if self.log_stats and stats_vllm_config is not None:
                 self.logger_manager = StatLoggerManager(
-                    vllm_config=self.stage_vllm_configs[0],
+                    vllm_config=stats_vllm_config,
                     engine_idxs=list(range(self.num_stages)),
                 )
                 self.logger_manager.log_engine_initialized()
