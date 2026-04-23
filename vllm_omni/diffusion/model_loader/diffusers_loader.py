@@ -278,8 +278,11 @@ class DiffusersPipelineLoader:
                     if load_format == "default":
                         model = initialize_model(od_config)
                     elif load_format == "custom_pipeline":
+                        from vllm_omni.diffusion.forward_context import set_forward_context
+
                         model_cls = resolve_obj_by_qualname(custom_pipeline_name)
-                        model = model_cls(od_config=od_config)
+                        with set_forward_context(omni_diffusion_config=od_config):
+                            model = model_cls(od_config=od_config)
                 logger.debug("Loading weights on %s ...", load_device)
                 if self._is_gguf_quantization(od_config):
                     self._load_weights_with_gguf(model, od_config)
@@ -541,8 +544,11 @@ class DiffusersPipelineLoader:
         if load_format == "default":
             model = initialize_model(od_config)
         elif load_format == "custom_pipeline":
+            from vllm_omni.diffusion.forward_context import set_forward_context
+
             model_cls = resolve_obj_by_qualname(custom_pipeline_name)
-            model = model_cls(od_config=od_config)
+            with set_forward_context(omni_diffusion_config=od_config):
+                model = model_cls(od_config=od_config)
         self.load_weights(model)
 
         # Collect all transformers to shard (some models have transformer_2 for MoE)

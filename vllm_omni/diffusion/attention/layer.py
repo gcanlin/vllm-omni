@@ -51,43 +51,28 @@ class Attention(nn.Module):
         self.qkv_layout = qkv_layout
 
         # Resolve backend via role-aware config if ForwardContext is available,
-        # otherwise fall back to legacy global selector.
+        # otherwise fall back to env-var / platform default.
         backend_kwargs: dict | None = None
-        try:
+        self.backend_pref = None
+
+        if is_forward_context_available():
             config = get_forward_context().omni_diffusion_config
             attention_config = config.attention_config if config is not None else None
-            self.backend_pref = None
+        else:
+            attention_config = build_attention_config()
 
-            logger.info(
-                "Attention(role=%s): attention_config default=%s per_role=%s",
-                role,
-                attention_config.default if attention_config else None,
-                {k: v.backend for k, v in attention_config.per_role.items()}
-                if attention_config and attention_config.per_role
-                else {},
-            )
-
-            attn_backend_cls, spec = get_attn_backend_for_role(
-                role=role,
-                head_size=head_size,
-                attention_config=attention_config,
-                role_category=role_category,
-            )
-            if spec is not None:
-                backend_kwargs = spec.extra or None
-                self.backend_pref = spec.backend
-                logger.info("Attention(role=%s) → backend=%s", role, spec.backend)
-            else:
-                logger.info("Attention(role=%s) → platform default", role)
-        except Exception as e:
-            logger.debug("Attention(role=%s): ForwardContext unavailable (%s), using env/platform path", role, e)
-            attn_backend_cls, _ = get_attn_backend_for_role(
-                role=role,
-                head_size=head_size,
-                attention_config=build_attention_config(),
-                role_category=role_category,
-            )
-            self.backend_pref = None
+        attn_backend_cls, spec = get_attn_backend_for_role(
+            role=role,
+            head_size=head_size,
+            attention_config=attention_config,
+            role_category=role_category,
+        )
+        if spec is not None:
+            backend_kwargs = spec.extra or None
+            self.backend_pref = spec.backend
+            logger.debug("Attention(role=%s) → backend=%s", role, spec.backend)
+        else:
+            logger.debug("Attention(role=%s) → platform default", role)
 
         self.attn_backend = attn_backend_cls
         self.attn_impl_cls = self.attn_backend.get_impl_cls()
@@ -121,9 +106,9 @@ class Attention(nn.Module):
         self.ring_pg = None
         self.ring_runner = None
 
-        try:
+        if is_forward_context_available():
             config = get_forward_context().omni_diffusion_config
-            if config.parallel_config.ring_degree > 1:
+            if config is not None and config.parallel_config.ring_degree > 1:
                 self.use_ring = True
                 try:
                     sp_group = get_sp_group()
@@ -135,9 +120,6 @@ class Attention(nn.Module):
                 except Exception:
                     self.use_ring = False
                     self.ring_runner = None
-        except Exception:
-            self.use_ring = False
-            self.ring_runner = None
 
         self.parallel_strategy = build_parallel_attention_strategy(
             scatter_idx=scatter_idx,

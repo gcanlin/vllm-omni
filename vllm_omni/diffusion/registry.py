@@ -10,7 +10,7 @@ from vllm.model_executor.models.registry import _LazyRegisteredModel, _ModelRegi
 from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.autoencoders.distributed_vae_executor import DistributedVaeMixin
 from vllm_omni.diffusion.distributed.sp_plan import SequenceParallelConfig, get_sp_plan_from_model
-from vllm_omni.diffusion.forward_context import get_forward_context
+from vllm_omni.diffusion.forward_context import get_forward_context, set_forward_context
 from vllm_omni.diffusion.hooks.sequence_parallel import apply_sequence_parallel
 from vllm_omni.diffusion.utils.tf_utils import find_module_with_attr
 
@@ -229,7 +229,12 @@ def initialize_model(
     """
     model_class = DiffusionModelRegistry._try_load_model_cls(od_config.model_class_name)
     if model_class is not None:
-        model = model_class(od_config=od_config)
+        # TODO: Replace set_forward_context with a dedicated diffusion config
+        # context (similar to vLLM's set_current_vllm_config in
+        # initialize_model) to cleanly separate model-init config from
+        # forward-time state (attn_metadata, sp_active, etc.).
+        with set_forward_context(omni_diffusion_config=od_config):
+            model = model_class(od_config=od_config)
 
         vae_pp_size = od_config.parallel_config.vae_patch_parallel_size
         is_distributed_vae = hasattr(model, "vae") and isinstance(model.vae, DistributedVaeMixin)

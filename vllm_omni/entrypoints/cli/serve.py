@@ -322,8 +322,8 @@ class OmniServeCommand(CLISubcommand):
             default=None,
             help="Diffusion attention backend (shorthand). "
             "Sets the default backend for all diffusion attention roles, e.g. 'FLASH_ATTN'. "
-            "May be combined with --diffusion-attention-config per_role.* overrides, "
-            "but not with --diffusion-attention-config default.backend=...",
+            "May be combined with --diffusion-attention-config.per_role.* overrides, "
+            "but mutually exclusive with --diffusion-attention-config.default.backend.",
         )
         omni_config_group.add_argument(
             "--diffusion-attention-config",
@@ -331,12 +331,13 @@ class OmniServeCommand(CLISubcommand):
             dest="diffusion_attention_config",
             type=json.loads,
             default=None,
-            help="Diffusion attention config. Accepts JSON, e.g. "
-            '\'{"default": {"backend": "FLASH_ATTN"}, '
-            '"per_role": {"cross": {"backend": "TORCH_SDPA", '
-            '"extra": {"window_size": 512}}}}\'. '
-            "Also supports vLLM-style dotted flags such as "
-            "'--diffusion-attention-config.per_role.self.backend FLASH_ATTN'.",
+            help="Diffusion attention config. Accepts JSON or vLLM-style dotted flags. "
+            "Examples: "
+            "--diffusion-attention-config.default.backend FLASH_ATTN, "
+            "--diffusion-attention-config.per_role.self.backend SPARSE_BLOCK, "
+            "--diffusion-attention-config.per_role.cross.backend SAGE_ATTN, "
+            '--diffusion-attention-config \'{"default": {"backend": "FLASH_ATTN"}, '
+            '"per_role": {"cross": {"backend": "SAGE_ATTN"}}}\'.',
         )
 
         # Cache optimization parameters

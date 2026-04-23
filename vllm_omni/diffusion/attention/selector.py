@@ -11,7 +11,7 @@ This module resolves diffusion attention backends from:
 from __future__ import annotations
 
 import importlib
-from functools import lru_cache
+from functools import cache
 from typing import TYPE_CHECKING
 
 from vllm_omni.diffusion.attention.backends.abstract import (
@@ -43,21 +43,7 @@ def _load_backend_cls(cls_path: str) -> type[AttentionBackend]:
         raise AttributeError(f"Class {class_name} not found in module: {e}")
 
 
-def _get_platform_default_backend(
-    selected_backend: str | None,
-    head_size: int,
-) -> type[AttentionBackend]:
-    """Get the platform default backend class."""
-    from vllm_omni.platforms import current_omni_platform
-
-    backend_cls_path = current_omni_platform.get_diffusion_attn_backend_cls(
-        selected_backend=selected_backend,
-        head_size=head_size,
-    )
-    return _load_backend_cls(backend_cls_path)
-
-
-@lru_cache(maxsize=128)
+@cache
 def _cached_get_backend_cls(
     backend_name: str | None,
     head_size: int,
@@ -68,10 +54,13 @@ def _cached_get_backend_cls(
     availability, etc.) runs only once per unique (backend_name, head_size)
     combination, avoiding repeated log messages.
     """
-    return _get_platform_default_backend(
+    from vllm_omni.platforms import current_omni_platform
+
+    backend_cls_path = current_omni_platform.get_diffusion_attn_backend_cls(
         selected_backend=backend_name,
         head_size=head_size,
     )
+    return _load_backend_cls(backend_cls_path)
 
 
 def get_attn_backend_for_role(
