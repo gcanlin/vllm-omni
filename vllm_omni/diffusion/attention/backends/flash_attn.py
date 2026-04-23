@@ -51,7 +51,7 @@ class FlashAttentionImpl(AttentionImpl):
         self.softmax_scale = softmax_scale
         self.qkv_layout = qkv_layout
         if backend_kwargs:
-            logger.debug("FlashAttentionImpl ignoring backend_kwargs: %s", list(backend_kwargs.keys()))
+            logger.warning("FlashAttentionImpl ignoring backend_kwargs: %s", list(backend_kwargs.keys()))
 
     @staticmethod
     def _unwrap_flash_output(out: torch.Tensor | tuple[torch.Tensor, ...]) -> torch.Tensor:

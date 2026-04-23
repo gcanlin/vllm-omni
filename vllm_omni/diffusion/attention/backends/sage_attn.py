@@ -55,7 +55,7 @@ class SageAttentionImpl(AttentionImpl):
         self.causal = causal
         self.softmax_scale = softmax_scale
         if backend_kwargs:
-            logger.debug("SageAttentionImpl ignoring backend_kwargs: %s", list(backend_kwargs.keys()))
+            logger.warning("SageAttentionImpl ignoring backend_kwargs: %s", list(backend_kwargs.keys()))
 
     def forward_cuda(
         self,
