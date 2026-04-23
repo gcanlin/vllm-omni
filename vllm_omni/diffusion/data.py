@@ -1,7 +1,7 @@
 # adapted from sglang and fastvideo
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-import enum
+import copy
 import os
 import random
 from collections.abc import Callable, Mapping
@@ -363,8 +363,7 @@ class OmniDiffusionConfig:
     tf_model_config: TransformerConfig = field(default_factory=TransformerConfig)
 
     # Attention
-    attention_backend: str | None = None  # DEPRECATED: use attention config
-    attention: "AttentionConfig" = field(default_factory=lambda: AttentionConfig())
+    attention_config: "AttentionConfig" = field(default_factory=lambda: AttentionConfig())
 
     # Running mode
     # mode: ExecutionMode = ExecutionMode.INFERENCE
@@ -640,31 +639,9 @@ class OmniDiffusionConfig:
                     f"got {type(self.quantization_config)!r}"
                 )
 
-        # Normalize attention: str (JSON) | dict | AttentionConfig | None
-        if isinstance(self.attention, str):
-            import json as _json
-
-            self.attention = AttentionConfig.from_dict(_json.loads(self.attention))
-        elif isinstance(self.attention, Mapping):
-            self.attention = AttentionConfig.from_dict(dict(self.attention))
-        elif not isinstance(self.attention, AttentionConfig):
-            self.attention = AttentionConfig()
-
-        # --diffusion-attention-backend and --diffusion-attention-config are mutually exclusive
-        if self.attention_backend is not None and (self.attention.default is not None or self.attention.per_role):
-            raise ValueError(
-                "--diffusion-attention-backend and --diffusion-attention-config "
-                "are mutually exclusive. Use one or the other."
-            )
-
-        if self.attention_backend is not None:
-            self.attention = AttentionConfig.from_legacy(self.attention_backend)
-            logger.info(
-                "Parsed attention config from --diffusion-attention-backend '%s': default=%s, per_role=%s",
-                self.attention_backend,
-                self.attention.default,
-                {k: v.backend for k, v in self.attention.per_role.items()},
-            )
+        # Match vLLM's config flow: parse entrypoint shorthands before the
+        # config object is built, and keep a single runtime truth source.
+        self.attention_config = build_attention_config(self.attention_config)
 
         if self.max_cpu_loras is None:
             self.max_cpu_loras = 1
@@ -809,21 +786,6 @@ class DiffusionRequestAbortedError(RuntimeError):
     """Raised when a diffusion request ends via user-visible abort."""
 
 
-class AttentionBackendEnum(enum.Enum):
-    FA = enum.auto()
-    SLIDING_TILE_ATTN = enum.auto()
-    TORCH_SDPA = enum.auto()
-    SAGE_ATTN = enum.auto()
-    SAGE_ATTN_THREE = enum.auto()
-    VIDEO_SPARSE_ATTN = enum.auto()
-    VMOBA_ATTN = enum.auto()
-    AITER = enum.auto()
-    NO_ATTENTION = enum.auto()
-
-    def __str__(self):
-        return self.name.lower()
-
-
 @dataclass
 class AttentionSpec:
     """Specifies a backend and its backend-specific parameters for one attention role."""
@@ -831,16 +793,16 @@ class AttentionSpec:
     backend: str  # registry name, e.g. "FLASH_ATTN"
     extra: dict[str, Any] = field(default_factory=dict)  # backend-specific kwargs
 
-    @classmethod
-    def from_dict(cls, data: dict[str, Any] | str) -> "AttentionSpec":
-        if isinstance(data, str):
-            return cls(backend=data)
-        if not isinstance(data, dict):
-            raise TypeError(f"Expected str or dict for AttentionSpec, got {type(data)!r}")
-        return cls(
-            backend=data["backend"],
-            extra=data.get("extra", {}),
-        )
+    def __post_init__(self) -> None:
+        if not isinstance(self.backend, str):
+            raise TypeError(f"Expected str for AttentionSpec.backend, got {type(self.backend)!r}")
+
+        if self.extra is None:
+            self.extra = {}
+        elif isinstance(self.extra, Mapping):
+            self.extra = dict(self.extra)
+        else:
+            raise TypeError(f"Expected dict for AttentionSpec.extra, got {type(self.extra)!r}")
 
 
 @dataclass
@@ -857,45 +819,65 @@ class AttentionConfig:
     default: AttentionSpec | None = None
     per_role: dict[str, AttentionSpec] = field(default_factory=dict)
 
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "AttentionConfig":
-        if not isinstance(data, dict):
-            raise TypeError(f"Expected dict for AttentionConfig, got {type(data)!r}")
-        default = None
-        if "default" in data:
-            default = AttentionSpec.from_dict(data["default"])
-        per_role: dict[str, AttentionSpec] = {}
-        for role_key, spec_data in data.get("per_role", {}).items():
-            per_role[role_key] = AttentionSpec.from_dict(spec_data)
-        return cls(default=default, per_role=per_role)
+    def __post_init__(self) -> None:
+        if self.default is not None:
+            self.default = self._coerce_spec(self.default, "default")
+
+        self.per_role = {
+            role_key: self._coerce_spec(spec_data, f"per_role[{role_key!r}]")
+            for role_key, spec_data in self._normalize_per_role_mapping(self.per_role).items()
+        }
+
+    @staticmethod
+    def _coerce_spec(spec_data: Any, field_name: str) -> AttentionSpec:
+        if isinstance(spec_data, AttentionSpec):
+            return spec_data
+        if isinstance(spec_data, str):
+            return AttentionSpec(backend=spec_data)
+        if isinstance(spec_data, Mapping):
+            return AttentionSpec(**dict(spec_data))
+        raise TypeError(f"Expected str, dict, or AttentionSpec for {field_name}, got {type(spec_data)!r}")
 
     @classmethod
-    def from_legacy(cls, attention_backend: str | None) -> "AttentionConfig":
-        """Migrate the old single-string attention_backend to AttentionConfig.
+    def _normalize_per_role_mapping(cls, raw_per_role: Any) -> dict[str, Any]:
+        if raw_per_role is None:
+            return {}
+        if not isinstance(raw_per_role, Mapping):
+            raise TypeError(f"Expected dict for AttentionConfig.per_role, got {type(raw_per_role)!r}")
 
-        Supports three forms:
-          1. "FLASH_ATTN"                              → default only
-          2. "self=FLASH_ATTN,cross=TORCH_SDPA"        → per-role
-          3. "self=SPARSE_BLOCK,cross=SAGE_ATTN,FLASH_ATTN" → per-role + default
-        """
-        if attention_backend is None:
-            return cls()
+        normalized: dict[str, Any] = {}
+        for role_key, spec_data in raw_per_role.items():
+            cls._flatten_per_role_entry([role_key], spec_data, normalized)
+        return normalized
 
-        # Detect per-role inline syntax: contains '='
-        if "=" in attention_backend:
-            per_role: dict[str, AttentionSpec] = {}
-            default: AttentionSpec | None = None
-            for part in attention_backend.split(","):
-                part = part.strip()
-                if "=" in part:
-                    role_key, backend_name = part.split("=", 1)
-                    per_role[role_key.strip()] = AttentionSpec(backend=backend_name.strip())
-                else:
-                    # Bare name without '=' is the default
-                    default = AttentionSpec(backend=part)
-            return cls(default=default, per_role=per_role)
+    @classmethod
+    def _flatten_per_role_entry(
+        cls,
+        path: list[str],
+        node: Any,
+        normalized: dict[str, Any],
+    ) -> None:
+        role = ".".join(path)
+        if not isinstance(node, Mapping):
+            normalized[role] = node
+            return
 
-        return cls(default=AttentionSpec(backend=attention_backend))
+        spec_keys = {"backend", "extra"}
+        node_dict = dict(node)
+        node_keys = set(node_dict)
+        if node_keys & spec_keys:
+            if not node_keys <= spec_keys:
+                raise ValueError(
+                    f"Invalid per_role entry for role {role!r}: cannot mix backend/extra with nested role keys."
+                )
+            normalized[role] = node_dict
+            return
+
+        if not node_dict:
+            raise ValueError(f"Empty per_role entry for role {role!r}")
+
+        for child_key, child_value in node_dict.items():
+            cls._flatten_per_role_entry([*path, child_key], child_value, normalized)
 
     def resolve(
         self,
@@ -914,6 +896,59 @@ class AttentionConfig:
             if spec is not None:
                 return spec
         return self.default
+
+
+def build_attention_config(
+    attention_config: AttentionConfig | Mapping[str, Any] | None = None,
+    *,
+    attention_backend: str | None = None,
+) -> AttentionConfig:
+    """Normalize diffusion attention config to a single AttentionConfig value."""
+    if attention_config is None:
+        normalized = AttentionConfig()
+    elif isinstance(attention_config, AttentionConfig):
+        normalized = copy.deepcopy(attention_config)
+    elif isinstance(attention_config, Mapping):
+        normalized = AttentionConfig(**dict(attention_config))
+    else:
+        raise TypeError(
+            f"attention_config must be an AttentionConfig, mapping, or None; got {type(attention_config)!r}"
+        )
+
+    env_attention_backend = os.environ.get("DIFFUSION_ATTENTION_BACKEND")
+    if attention_backend is None and env_attention_backend is not None:
+        if "=" in env_attention_backend or "," in env_attention_backend:
+            raise ValueError(
+                "DIFFUSION_ATTENTION_BACKEND accepts a single backend name only. "
+                "Use --diffusion-attention-config per_role.<role>.backend=<backend> "
+                "for per-role overrides."
+            )
+        if env_attention_backend.lower() != "auto":
+            attention_backend = env_attention_backend
+
+    if attention_backend is None:
+        return normalized
+
+    if normalized.default is not None:
+        return normalized
+
+    if "=" in attention_backend or "," in attention_backend:
+        raise ValueError(
+            "--diffusion-attention-backend accepts a single backend name only. "
+            "Use --diffusion-attention-config per_role.<role>.backend=<backend> "
+            "for per-role overrides."
+        )
+
+    if attention_backend.lower() != "auto":
+        normalized.default = AttentionSpec(backend=attention_backend)
+
+    logger.info(
+        "Parsed attention config from --diffusion-attention-backend '%s': default=%s, per_role=%s",
+        attention_backend,
+        normalized.default,
+        {k: v.backend for k, v in normalized.per_role.items()},
+    )
+    return normalized
 
 
 # Special message broadcast via scheduler queues to signal worker shutdown.

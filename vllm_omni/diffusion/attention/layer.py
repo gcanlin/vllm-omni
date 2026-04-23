@@ -16,7 +16,8 @@ from vllm_omni.diffusion.attention.backends.sdpa import SDPABackend
 from vllm_omni.diffusion.attention.parallel import build_parallel_attention_strategy
 from vllm_omni.diffusion.attention.parallel.base import NoParallelAttention
 from vllm_omni.diffusion.attention.parallel.ring import RingParallelAttention
-from vllm_omni.diffusion.attention.selector import get_attn_backend, get_attn_backend_for_role
+from vllm_omni.diffusion.attention.selector import get_attn_backend_for_role
+from vllm_omni.diffusion.data import build_attention_config
 from vllm_omni.diffusion.distributed.parallel_state import get_sp_group
 from vllm_omni.diffusion.forward_context import get_forward_context, is_forward_context_available
 
@@ -54,8 +55,8 @@ class Attention(nn.Module):
         backend_kwargs: dict | None = None
         try:
             config = get_forward_context().omni_diffusion_config
-            attention_config = config.attention if config is not None else None
-            self.backend_pref = config.attention_backend if config is not None else None
+            attention_config = config.attention_config if config is not None else None
+            self.backend_pref = None
 
             logger.info(
                 "Attention(role=%s): attention_config default=%s per_role=%s",
@@ -79,9 +80,13 @@ class Attention(nn.Module):
             else:
                 logger.info("Attention(role=%s) → platform default", role)
         except Exception as e:
-            # ForwardContext not available (e.g. unit tests) — use legacy path
-            logger.debug("Attention(role=%s): ForwardContext unavailable (%s), using legacy path", role, e)
-            attn_backend_cls = get_attn_backend(-1)
+            logger.debug("Attention(role=%s): ForwardContext unavailable (%s), using env/platform path", role, e)
+            attn_backend_cls, _ = get_attn_backend_for_role(
+                role=role,
+                head_size=head_size,
+                attention_config=build_attention_config(),
+                role_category=role_category,
+            )
             self.backend_pref = None
 
         self.attn_backend = attn_backend_cls
@@ -123,7 +128,10 @@ class Attention(nn.Module):
                 try:
                     sp_group = get_sp_group()
                     self.ring_pg = sp_group.ring_group
-                    self.ring_runner = RingParallelAttention(sp_group)
+                    self.ring_runner = RingParallelAttention(
+                        sp_group,
+                        attn_backend_pref=self.backend_pref,
+                    )
                 except Exception:
                     self.use_ring = False
                     self.ring_runner = None
