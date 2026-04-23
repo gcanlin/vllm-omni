@@ -35,6 +35,8 @@ class Attention(nn.Module):
         # Per-role backend selection (RFC: per-role attention backend)
         role: str = "self",
         role_category: str | None = None,
+        # Model-defined Q/K/V tensor layout hint for backend execution.
+        qkv_layout: str | None = None,
         # ulysses attention
         scatter_idx: int = 2,
         gather_idx: int = 1,
@@ -45,6 +47,7 @@ class Attention(nn.Module):
 
         self.role = role
         self.role_category = role_category
+        self.qkv_layout = qkv_layout
 
         # Resolve backend via role-aware config if ForwardContext is available,
         # otherwise fall back to legacy global selector.
@@ -89,6 +92,7 @@ class Attention(nn.Module):
             softmax_scale=softmax_scale,
             causal=causal,
             num_kv_heads=num_kv_heads,
+            qkv_layout=qkv_layout,
             backend_kwargs=backend_kwargs,
         )
         # Instantiate fallback backend for float32 support
@@ -98,6 +102,7 @@ class Attention(nn.Module):
             softmax_scale=softmax_scale,
             causal=causal,
             num_kv_heads=num_kv_heads,
+            qkv_layout=qkv_layout,
         )
 
         self.softmax_scale = softmax_scale

@@ -82,6 +82,7 @@ class AttentionImpl(ABC, Generic[T]):
         causal: bool = False,
         num_kv_heads: int | None = None,
         prefix: str = "",
+        qkv_layout: str | None = None,
         backend_kwargs: dict[str, Any] | None = None,
         **extra_impl_args,
     ) -> None:
