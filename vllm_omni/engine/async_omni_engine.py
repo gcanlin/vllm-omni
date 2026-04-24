@@ -1473,7 +1473,10 @@ class AsyncOmniEngine:
                             kwargs.get("diffusion_attention_config"),
                             attention_backend=kwargs.get("diffusion_attention_backend"),
                         )
+                # Prefer explicit quantization_config; fallback to legacy --quantization.
                 quantization_config = kwargs.get("quantization_config")
+                if quantization_config is None:
+                    quantization_config = kwargs.get("quantization")
                 if quantization_config is not None:
                     if (
                         not hasattr(cfg.engine_args, "quantization_config")
