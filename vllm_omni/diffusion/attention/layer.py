@@ -17,7 +17,7 @@ from vllm_omni.diffusion.attention.parallel import build_parallel_attention_stra
 from vllm_omni.diffusion.attention.parallel.base import NoParallelAttention
 from vllm_omni.diffusion.attention.parallel.ring import RingParallelAttention
 from vllm_omni.diffusion.attention.selector import get_attn_backend_for_role
-from vllm_omni.diffusion.data import build_attention_config
+from vllm_omni.diffusion.config import get_current_diffusion_config_or_none
 from vllm_omni.diffusion.distributed.parallel_state import get_sp_group
 from vllm_omni.diffusion.forward_context import get_forward_context, is_forward_context_available
 
@@ -50,16 +50,14 @@ class Attention(nn.Module):
         self.role_category = role_category
         self.qkv_layout = qkv_layout
 
-        # Resolve backend via role-aware config if ForwardContext is available,
-        # otherwise fall back to env-var / platform default.
+        # Resolve backend via role-aware config.
+        # The global diffusion config is set during model init via
+        # set_current_diffusion_config(); no env-var re-parsing needed here.
         backend_kwargs: dict | None = None
         self.backend_pref = None
 
-        if is_forward_context_available():
-            config = get_forward_context().omni_diffusion_config
-            attention_config = config.attention_config if config is not None else None
-        else:
-            attention_config = build_attention_config()
+        config = get_current_diffusion_config_or_none()
+        attention_config = config.attention_config if config is not None else None
 
         attn_backend_cls, spec = get_attn_backend_for_role(
             role=role,
@@ -106,9 +104,8 @@ class Attention(nn.Module):
         self.ring_pg = None
         self.ring_runner = None
 
-        if is_forward_context_available():
-            config = get_forward_context().omni_diffusion_config
-            if config is not None and config.parallel_config.ring_degree > 1:
+        if config is not None:
+            if config.parallel_config.ring_degree > 1:
                 self.use_ring = True
                 try:
                     sp_group = get_sp_group()

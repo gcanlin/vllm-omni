@@ -13,7 +13,12 @@ Tests cover:
 import pytest
 
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
-from vllm_omni.diffusion.data import AttentionConfig, AttentionSpec, build_attention_config
+from vllm_omni.diffusion.data import (
+    AttentionConfig,
+    AttentionSpec,
+    build_attention_config,
+    parse_attention_config,
+)
 
 
 class TestAttentionSpec:
@@ -224,7 +229,7 @@ class TestBuildAttentionConfig:
     def test_attention_backend_overrides_env(self, monkeypatch):
         monkeypatch.setenv("DIFFUSION_ATTENTION_BACKEND", "TORCH_SDPA")
 
-        config = build_attention_config(attention_backend="SAGE_ATTN")
+        config = parse_attention_config(attention_backend="SAGE_ATTN")
 
         assert config.default is not None
         assert config.default.backend == "SAGE_ATTN"
@@ -232,7 +237,7 @@ class TestBuildAttentionConfig:
     def test_attention_backend_auto_disables_env_fallback(self, monkeypatch):
         monkeypatch.setenv("DIFFUSION_ATTENTION_BACKEND", "TORCH_SDPA")
 
-        config = build_attention_config(attention_backend="auto")
+        config = parse_attention_config(attention_backend="auto")
 
         assert config.default is None
 
@@ -255,7 +260,7 @@ class TestBuildAttentionConfig:
 
     def test_attention_backend_conflicts_with_explicit_default(self):
         with pytest.raises(ValueError):
-            build_attention_config(
+            parse_attention_config(
                 AttentionConfig(default=AttentionSpec(backend="FLASH_ATTN")),
                 attention_backend="SAGE_ATTN",
             )

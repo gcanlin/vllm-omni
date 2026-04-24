@@ -955,12 +955,18 @@ class AttentionConfig:
         return None, None
 
 
-def build_attention_config(
+def parse_attention_config(
     attention_config: AttentionConfig | Mapping[str, Any] | None = None,
     *,
     attention_backend: str | None = None,
 ) -> AttentionConfig:
-    """Normalize diffusion attention config to a single AttentionConfig value."""
+    """Pure type-conversion: coerce *attention_config* to an AttentionConfig.
+
+    Optionally merges an ``attention_backend`` shorthand into the config's
+    ``default`` field.  This does **not** read environment variables —
+    use :func:`build_attention_config` for the full normalisation that
+    should happen exactly once in ``OmniDiffusionConfig.__post_init__``.
+    """
     if attention_config is None:
         normalized = AttentionConfig()
     elif isinstance(attention_config, AttentionConfig):
@@ -972,23 +978,29 @@ def build_attention_config(
             f"attention_config must be an AttentionConfig, mapping, or None; got {type(attention_config)!r}"
         )
 
-    if normalized.default is not None:
-        if attention_backend is not None:
+    if attention_backend is not None:
+        if normalized.default is not None:
             raise ValueError(
                 "--diffusion-attention-backend is mutually exclusive with --diffusion-attention-config.default.backend."
             )
-        return normalized
+        if attention_backend.lower() != "auto":
+            normalized.default = AttentionSpec(backend=attention_backend)
 
-    if attention_backend is not None:
-        if attention_backend.lower() == "auto":
-            return normalized
-        normalized.default = AttentionSpec(backend=attention_backend)
-        logger.info(
-            "Parsed attention config from --diffusion-attention-backend '%s': default=%s, per_role=%s",
-            attention_backend,
-            normalized.default,
-            {k: v.backend for k, v in normalized.per_role.items()},
-        )
+    return normalized
+
+
+def build_attention_config(
+    attention_config: AttentionConfig | Mapping[str, Any] | None = None,
+) -> AttentionConfig:
+    """Normalize diffusion attention config — the single authoritative entry point.
+
+    Called exactly once in ``OmniDiffusionConfig.__post_init__``.
+    Handles type-conversion **and** env-var fallback
+    (``DIFFUSION_ATTENTION_BACKEND``).
+    """
+    normalized = parse_attention_config(attention_config)
+
+    if normalized.default is not None:
         return normalized
 
     env_attention_backend = os.environ.get("DIFFUSION_ATTENTION_BACKEND")

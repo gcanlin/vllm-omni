@@ -284,10 +284,10 @@ class DiffusersPipelineLoader:
                     elif load_format == "diffusers":
                         model = DiffusersAdapterPipeline(od_config=od_config, device=target_device)
                     elif load_format == "custom_pipeline":
-                        from vllm_omni.diffusion.forward_context import set_forward_context
+                        from vllm_omni.diffusion.config import set_current_diffusion_config
 
                         model_cls = resolve_obj_by_qualname(custom_pipeline_name)
-                        with set_forward_context(omni_diffusion_config=od_config):
+                        with set_current_diffusion_config(od_config):
                             model = model_cls(od_config=od_config)
                     else:
                         # 'dummy' format should not call this function at all
@@ -558,10 +558,10 @@ class DiffusersPipelineLoader:
         if load_format == "default":
             model = initialize_model(od_config)
         elif load_format == "custom_pipeline":
-            from vllm_omni.diffusion.forward_context import set_forward_context
+            from vllm_omni.diffusion.config import set_current_diffusion_config
 
             model_cls = resolve_obj_by_qualname(custom_pipeline_name)
-            with set_forward_context(omni_diffusion_config=od_config):
+            with set_current_diffusion_config(od_config):
                 model = model_cls(od_config=od_config)
         self.load_weights(model)
 
