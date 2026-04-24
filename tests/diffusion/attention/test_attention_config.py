@@ -10,9 +10,17 @@ Tests cover:
 - AttentionMetadata.extra field
 """
 
+from types import SimpleNamespace
+
 import pytest
 
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
+from vllm_omni.diffusion.attention.layer import Attention
+from vllm_omni.diffusion.config import (
+    get_current_diffusion_config,
+    get_current_diffusion_config_or_none,
+    set_current_diffusion_config,
+)
 from vllm_omni.diffusion.data import (
     AttentionConfig,
     AttentionSpec,
@@ -234,6 +242,13 @@ class TestBuildAttentionConfig:
         assert config.default is not None
         assert config.default.backend == "SAGE_ATTN"
 
+    def test_parse_attention_config_does_not_read_env(self, monkeypatch):
+        monkeypatch.setenv("DIFFUSION_ATTENTION_BACKEND", "TORCH_SDPA")
+
+        config = parse_attention_config()
+
+        assert config.default is None
+
     def test_attention_backend_auto_disables_env_fallback(self, monkeypatch):
         monkeypatch.setenv("DIFFUSION_ATTENTION_BACKEND", "TORCH_SDPA")
 
@@ -318,3 +333,101 @@ class TestOmniDiffusionConfigAttentionParsing:
         assert isinstance(config.attention_config, AttentionConfig)
         assert config.attention_config.default is None
         assert config.attention_config.per_role == {}
+
+
+class TestCurrentDiffusionConfig:
+    def test_get_current_diffusion_config_or_none_defaults_to_none(self):
+        assert get_current_diffusion_config_or_none() is None
+
+    def test_get_current_diffusion_config_raises_when_unset(self):
+        with pytest.raises(AssertionError, match="Diffusion config is not set"):
+            get_current_diffusion_config()
+
+    def test_set_current_diffusion_config_restores_previous_value(self):
+        outer = SimpleNamespace(name="outer")
+        inner = SimpleNamespace(name="inner")
+
+        with set_current_diffusion_config(outer):
+            assert get_current_diffusion_config() is outer
+            with set_current_diffusion_config(inner):
+                assert get_current_diffusion_config() is inner
+            assert get_current_diffusion_config() is outer
+
+        assert get_current_diffusion_config_or_none() is None
+
+
+class TestAttentionInitUsesCurrentDiffusionConfig:
+    def test_attention_init_uses_current_diffusion_config_without_forward_context(self, monkeypatch):
+        import vllm_omni.diffusion.attention.layer as layer_mod
+
+        class _FakeAttentionImpl:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def forward(self, query, key, value, attn_metadata=None):
+                return query
+
+        class _FakeBackend:
+            @staticmethod
+            def get_name() -> str:
+                return "FAKE_BACKEND"
+
+            @staticmethod
+            def get_impl_cls():
+                return _FakeAttentionImpl
+
+        captured = {}
+
+        def _fake_get_attn_backend_for_role(role, head_size, attention_config=None, role_category=None):
+            captured["role"] = role
+            captured["head_size"] = head_size
+            captured["role_category"] = role_category
+            captured["attention_config"] = attention_config
+            return _FakeBackend, AttentionSpec(backend="TORCH_SDPA", extra={"block_size": 128})
+
+        class _FakeRingParallelAttention:
+            def __init__(self, sp_group, attn_backend_pref=None):
+                self.sp_group = sp_group
+                self.attn_backend_pref = attn_backend_pref
+
+        monkeypatch.setattr(layer_mod, "get_attn_backend_for_role", _fake_get_attn_backend_for_role)
+        monkeypatch.setattr(layer_mod.SDPABackend, "get_impl_cls", staticmethod(lambda: _FakeAttentionImpl))
+        monkeypatch.setattr(layer_mod, "build_parallel_attention_strategy", lambda **kwargs: object())
+        monkeypatch.setattr(layer_mod, "get_sp_group", lambda: SimpleNamespace(ring_group="ring-group"))
+        monkeypatch.setattr(layer_mod, "RingParallelAttention", _FakeRingParallelAttention)
+        monkeypatch.setattr(layer_mod, "is_forward_context_available", lambda: False)
+        monkeypatch.setattr(
+            layer_mod,
+            "get_forward_context",
+            lambda: (_ for _ in ()).throw(AssertionError("Attention init should not read ForwardContext")),
+        )
+
+        od_config = SimpleNamespace(
+            attention_config=AttentionConfig(
+                default=AttentionSpec(backend="FLASH_ATTN"),
+                per_role={"cross": AttentionSpec(backend="TORCH_SDPA", extra={"block_size": 128})},
+            ),
+            parallel_config=SimpleNamespace(ring_degree=2),
+        )
+
+        with set_current_diffusion_config(od_config):
+            attn = Attention(
+                num_heads=4,
+                head_size=64,
+                causal=False,
+                softmax_scale=1.0,
+                role="cross",
+                role_category="cross",
+                qkv_layout="BSND",
+            )
+
+        assert captured["role"] == "cross"
+        assert captured["role_category"] == "cross"
+        assert captured["head_size"] == 64
+        assert captured["attention_config"] is od_config.attention_config
+        assert attn.backend_pref == "TORCH_SDPA"
+        assert attn.attention.kwargs["backend_kwargs"] == {"block_size": 128}
+        assert attn.attention.kwargs["qkv_layout"] == "BSND"
+        assert attn.use_ring is True
+        assert attn.ring_runner is not None
+        assert attn.ring_runner.attn_backend_pref == "TORCH_SDPA"

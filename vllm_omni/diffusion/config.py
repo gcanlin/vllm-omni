@@ -33,8 +33,7 @@ def set_current_diffusion_config(config: OmniDiffusionConfig):
 def get_current_diffusion_config() -> OmniDiffusionConfig:
     """Return the current diffusion config or raise."""
     assert _current_diffusion_config is not None, (
-        "Diffusion config is not set. "
-        "Wrap model construction with set_current_diffusion_config()."
+        "Diffusion config is not set. Wrap model construction with set_current_diffusion_config()."
     )
     return _current_diffusion_config
 
