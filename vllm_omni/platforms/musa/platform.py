@@ -72,18 +72,18 @@ class MUSAOmniPlatform(OmniPlatform, MUSAPlatformBase):
             backend_upper = selected_backend.upper()
             if backend_upper == "FLASH_ATTN" and not flash_attn_available:
                 logger.warning("Flash Attention (mate package) not available. Falling back to TORCH_SDPA backend.")
-                logger.info("Defaulting to diffusion attention backend SDPA")
+                logger.debug("Defaulting to diffusion attention backend SDPA")
                 return DiffusionAttentionBackendEnum.TORCH_SDPA.get_path()
             backend = DiffusionAttentionBackendEnum[backend_upper]
-            logger.info("Using diffusion attention backend '%s'", backend_upper)
+            logger.debug("Using diffusion attention backend '%s'", backend_upper)
             return backend.get_path()
 
         # Default to FLASH_ATTN if mate is available, otherwise SDPA
         if flash_attn_available:
-            logger.info("Defaulting to diffusion attention backend FLASH_ATTN")
+            logger.debug("Defaulting to diffusion attention backend FLASH_ATTN")
             return DiffusionAttentionBackendEnum.FLASH_ATTN.get_path()
 
-        logger.info("Defaulting to diffusion attention backend SDPA")
+        logger.debug("Defaulting to diffusion attention backend SDPA")
         return DiffusionAttentionBackendEnum.TORCH_SDPA.get_path()
 
     @classmethod

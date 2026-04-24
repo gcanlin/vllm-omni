@@ -14,12 +14,16 @@ import importlib
 from functools import cache
 from typing import TYPE_CHECKING
 
+from vllm.logger import init_logger
+
 from vllm_omni.diffusion.attention.backends.abstract import (
     AttentionBackend,
 )
 
 if TYPE_CHECKING:
     from vllm_omni.diffusion.data import AttentionConfig, AttentionSpec
+
+logger = init_logger(__name__)
 
 
 def _load_backend_cls(cls_path: str) -> type[AttentionBackend]:
@@ -63,6 +67,31 @@ def _cached_get_backend_cls(
     return _load_backend_cls(backend_cls_path)
 
 
+@cache
+def _log_backend_resolution(
+    role: str,
+    role_category: str | None,
+    backend_name: str,
+    source: str,
+) -> None:
+    if role_category is not None:
+        logger.info(
+            "Resolved diffusion attention backend '%s' for role=%r (role_category=%r) via %s",
+            backend_name,
+            role,
+            role_category,
+            source,
+        )
+        return
+
+    logger.info(
+        "Resolved diffusion attention backend '%s' for role=%r via %s",
+        backend_name,
+        role,
+        source,
+    )
+
+
 def get_attn_backend_for_role(
     role: str,
     head_size: int,
@@ -93,13 +122,29 @@ def get_attn_backend_for_role(
     """
     # 1. Try config from OmniDiffusionConfig
     spec = None
+    source = None
     if attention_config is not None:
-        spec = attention_config.resolve(role=role, role_category=role_category)
+        spec, source = attention_config.resolve_with_source(
+            role=role,
+            role_category=role_category,
+        )
 
     if spec is not None:
         backend_cls = _cached_get_backend_cls(spec.backend, head_size)
+        _log_backend_resolution(
+            role=role,
+            role_category=role_category,
+            backend_name=backend_cls.get_name(),
+            source=source or "attention_config",
+        )
         return backend_cls, spec
 
     # 2. Platform default
     backend_cls = _cached_get_backend_cls(None, head_size)
+    _log_backend_resolution(
+        role=role,
+        role_category=role_category,
+        backend_name=backend_cls.get_name(),
+        source="platform default",
+    )
     return backend_cls, None

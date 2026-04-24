@@ -821,12 +821,14 @@ class AttentionConfig:
 
     def __post_init__(self) -> None:
         if self.default is not None:
-            self.default = self._coerce_spec(self.default, "default")
+            self.default = self._coerce_spec_or_none(self.default, "default")
 
-        self.per_role = {
-            role_key: self._coerce_spec(spec_data, f"per_role[{role_key!r}]")
-            for role_key, spec_data in self._normalize_per_role_mapping(self.per_role).items()
-        }
+        normalized_per_role: dict[str, AttentionSpec] = {}
+        for role_key, spec_data in self._normalize_per_role_mapping(self.per_role).items():
+            spec = self._coerce_spec_or_none(spec_data, f"per_role[{role_key!r}]")
+            if spec is not None:
+                normalized_per_role[role_key] = spec
+        self.per_role = normalized_per_role
 
     @staticmethod
     def _coerce_spec(spec_data: Any, field_name: str) -> AttentionSpec:
@@ -837,6 +839,13 @@ class AttentionConfig:
         if isinstance(spec_data, Mapping):
             return AttentionSpec(**dict(spec_data))
         raise TypeError(f"Expected str, dict, or AttentionSpec for {field_name}, got {type(spec_data)!r}")
+
+    @classmethod
+    def _coerce_spec_or_none(cls, spec_data: Any, field_name: str) -> AttentionSpec | None:
+        spec = cls._coerce_spec(spec_data, field_name)
+        if spec.backend.lower() == "auto":
+            return None
+        return spec
 
     @classmethod
     def _normalize_per_role_mapping(cls, raw_per_role: Any) -> dict[str, Any]:
@@ -888,14 +897,25 @@ class AttentionConfig:
 
         Returns None if no spec is configured (caller should fall back to platform default).
         """
+        spec, _ = self.resolve_with_source(role=role, role_category=role_category)
+        return spec
+
+    def resolve_with_source(
+        self,
+        role: str = "self",
+        role_category: str | None = None,
+    ) -> tuple[AttentionSpec | None, str | None]:
+        """Resolve the AttentionSpec and report which config entry matched."""
         spec = self.per_role.get(role)
         if spec is not None:
-            return spec
+            return spec, f"attention_config.per_role[{role!r}]"
         if role_category is not None:
             spec = self.per_role.get(role_category)
             if spec is not None:
-                return spec
-        return self.default
+                return spec, f"attention_config.per_role[{role_category!r}] (role_category fallback)"
+        if self.default is not None:
+            return self.default, "attention_config.default"
+        return None, None
 
 
 def build_attention_config(
@@ -915,36 +935,36 @@ def build_attention_config(
             f"attention_config must be an AttentionConfig, mapping, or None; got {type(attention_config)!r}"
         )
 
-    env_attention_backend = os.environ.get("DIFFUSION_ATTENTION_BACKEND")
-    if attention_backend is None and env_attention_backend is not None:
-        if "=" in env_attention_backend or "," in env_attention_backend:
-            raise ValueError(
-                "DIFFUSION_ATTENTION_BACKEND accepts a single backend name only. "
-                "Use --diffusion-attention-config per_role.<role>.backend=<backend> "
-                "for per-role overrides."
-            )
-        if env_attention_backend.lower() != "auto":
-            attention_backend = env_attention_backend
-
-    if attention_backend is None:
-        return normalized
-
     if normalized.default is not None:
+        if attention_backend is not None:
+            raise ValueError(
+                "--diffusion-attention-backend is mutually exclusive with --diffusion-attention-config.default.backend."
+            )
         return normalized
 
-    if "=" in attention_backend or "," in attention_backend:
-        raise ValueError(
-            "--diffusion-attention-backend accepts a single backend name only. "
-            "Use --diffusion-attention-config per_role.<role>.backend=<backend> "
-            "for per-role overrides."
-        )
-
-    if attention_backend.lower() != "auto":
+    if attention_backend is not None:
+        if attention_backend.lower() == "auto":
+            return normalized
         normalized.default = AttentionSpec(backend=attention_backend)
+        logger.info(
+            "Parsed attention config from --diffusion-attention-backend '%s': default=%s, per_role=%s",
+            attention_backend,
+            normalized.default,
+            {k: v.backend for k, v in normalized.per_role.items()},
+        )
+        return normalized
 
+    env_attention_backend = os.environ.get("DIFFUSION_ATTENTION_BACKEND")
+    if env_attention_backend is None:
+        return normalized
+
+    if env_attention_backend.lower() == "auto":
+        return normalized
+
+    normalized.default = AttentionSpec(backend=env_attention_backend)
     logger.info(
-        "Parsed attention config from --diffusion-attention-backend '%s': default=%s, per_role=%s",
-        attention_backend,
+        "Parsed attention config from DIFFUSION_ATTENTION_BACKEND '%s': default=%s, per_role=%s",
+        env_attention_backend,
         normalized.default,
         {k: v.backend for k, v in normalized.per_role.items()},
     )

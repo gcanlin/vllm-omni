@@ -4,36 +4,31 @@
 """Tests for per-role attention backend configuration (RFC: per-role-attention-backend).
 
 Tests cover:
-- AttentionSpec and AttentionConfig construction and serialization
+- AttentionSpec and AttentionConfig normalization
 - Role-aware backend resolution with category fallback
-- Legacy attention_backend migration
+- OmniDiffusionConfig attention shorthand handling
 - AttentionMetadata.extra field
 """
 
 import pytest
 
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
-from vllm_omni.diffusion.data import AttentionConfig, AttentionSpec
+from vllm_omni.diffusion.data import AttentionConfig, AttentionSpec, build_attention_config
 
 
 class TestAttentionSpec:
-    def test_from_string(self):
-        spec = AttentionSpec.from_dict("FLASH_ATTN")
-        assert spec.backend == "FLASH_ATTN"
+    def test_construct_no_extra(self):
+        spec = AttentionSpec(backend="FLASH_ATTN")
         assert spec.extra == {}
 
-    def test_from_dict(self):
-        spec = AttentionSpec.from_dict({"backend": "SAGE_ATTN", "extra": {"quant": "int8"}})
+    def test_mapping_extra_normalized(self):
+        spec = AttentionSpec(backend="SAGE_ATTN", extra={"quant": "int8"})
         assert spec.backend == "SAGE_ATTN"
         assert spec.extra == {"quant": "int8"}
 
-    def test_from_dict_no_extra(self):
-        spec = AttentionSpec.from_dict({"backend": "FLASH_ATTN"})
-        assert spec.extra == {}
-
-    def test_from_dict_invalid_type(self):
+    def test_invalid_backend_type(self):
         with pytest.raises(TypeError):
-            AttentionSpec.from_dict(123)
+            AttentionSpec(backend=123)  # type: ignore[arg-type]
 
 
 class TestAttentionConfig:
@@ -42,28 +37,41 @@ class TestAttentionConfig:
         assert config.default is None
         assert config.per_role == {}
 
-    def test_from_legacy(self):
-        config = AttentionConfig.from_legacy("FLASH_ATTN")
-        assert config.default is not None
-        assert config.default.backend == "FLASH_ATTN"
-        assert config.per_role == {}
-
-    def test_from_legacy_none(self):
-        config = AttentionConfig.from_legacy(None)
-        assert config.default is None
-
-    def test_from_dict(self):
-        data = {
-            "default": {"backend": "FLASH_ATTN"},
-            "per_role": {
+    def test_constructor_normalizes_mappings(self):
+        config = AttentionConfig(
+            default={"backend": "FLASH_ATTN"},
+            per_role={
                 "self": {"backend": "SPARSE_BLOCK", "extra": {"block_size": 128}},
                 "cross": "SAGE_ATTN",
             },
-        }
-        config = AttentionConfig.from_dict(data)
+        )
         assert config.default.backend == "FLASH_ATTN"
         assert config.per_role["self"].backend == "SPARSE_BLOCK"
         assert config.per_role["self"].extra == {"block_size": 128}
+        assert config.per_role["cross"].backend == "SAGE_ATTN"
+
+    def test_constructor_flattens_nested_per_role_tree(self):
+        config = AttentionConfig(
+            per_role={
+                "ltx2": {
+                    "audio_self": {"backend": "FLASH_ATTN"},
+                    "audio_to_video": {"backend": "SAGE_ATTN"},
+                }
+            }
+        )
+        assert config.per_role["ltx2.audio_self"].backend == "FLASH_ATTN"
+        assert config.per_role["ltx2.audio_to_video"].backend == "SAGE_ATTN"
+
+    def test_constructor_normalizes_auto_to_unset(self):
+        config = AttentionConfig(
+            default={"backend": "auto"},
+            per_role={
+                "self": "auto",
+                "cross": {"backend": "SAGE_ATTN"},
+            },
+        )
+        assert config.default is None
+        assert "self" not in config.per_role
         assert config.per_role["cross"].backend == "SAGE_ATTN"
 
     def test_resolve_exact_match(self):
@@ -79,6 +87,30 @@ class TestAttentionConfig:
 
         spec = config.resolve(role="cross")
         assert spec.backend == "SAGE_ATTN"
+
+    def test_resolve_with_source_reports_match_origin(self):
+        config = AttentionConfig(
+            default=AttentionSpec(backend="FLASH_ATTN"),
+            per_role={
+                "cross": AttentionSpec(backend="SAGE_ATTN"),
+                "ltx2.audio_to_video": AttentionSpec(backend="SPARSE_BLOCK"),
+            },
+        )
+
+        spec, source = config.resolve_with_source(role="ltx2.audio_to_video", role_category="cross")
+        assert spec is not None
+        assert spec.backend == "SPARSE_BLOCK"
+        assert source == "attention_config.per_role['ltx2.audio_to_video']"
+
+        spec, source = config.resolve_with_source(role="ltx2.video_to_audio", role_category="cross")
+        assert spec is not None
+        assert spec.backend == "SAGE_ATTN"
+        assert source == "attention_config.per_role['cross'] (role_category fallback)"
+
+        spec, source = config.resolve_with_source(role="self")
+        assert spec is not None
+        assert spec.backend == "FLASH_ATTN"
+        assert source == "attention_config.default"
 
     def test_resolve_category_fallback(self):
         config = AttentionConfig(
@@ -180,43 +212,104 @@ class TestAttentionMetadataExtra:
         assert meta.extra == {"foo": "bar"}
 
 
-class TestOmniDiffusionConfigMigration:
-    """Test that the legacy attention_backend field migrates correctly."""
+class TestBuildAttentionConfig:
+    def test_env_sets_default_when_no_higher_priority_input(self, monkeypatch):
+        monkeypatch.setenv("DIFFUSION_ATTENTION_BACKEND", "TORCH_SDPA")
 
-    def test_legacy_attention_backend_migrates(self):
+        config = build_attention_config()
+
+        assert config.default is not None
+        assert config.default.backend == "TORCH_SDPA"
+
+    def test_attention_backend_overrides_env(self, monkeypatch):
+        monkeypatch.setenv("DIFFUSION_ATTENTION_BACKEND", "TORCH_SDPA")
+
+        config = build_attention_config(attention_backend="SAGE_ATTN")
+
+        assert config.default is not None
+        assert config.default.backend == "SAGE_ATTN"
+
+    def test_attention_backend_auto_disables_env_fallback(self, monkeypatch):
+        monkeypatch.setenv("DIFFUSION_ATTENTION_BACKEND", "TORCH_SDPA")
+
+        config = build_attention_config(attention_backend="auto")
+
+        assert config.default is None
+
+    def test_explicit_default_ignores_env(self, monkeypatch):
+        monkeypatch.setenv("DIFFUSION_ATTENTION_BACKEND", "self=FLASH_ATTN,cross=TORCH_SDPA")
+
+        config = build_attention_config(
+            AttentionConfig(default=AttentionSpec(backend="FLASH_ATTN")),
+        )
+
+        assert config.default is not None
+        assert config.default.backend == "FLASH_ATTN"
+
+    def test_env_auto_does_not_set_default(self, monkeypatch):
+        monkeypatch.setenv("DIFFUSION_ATTENTION_BACKEND", "auto")
+
+        config = build_attention_config()
+
+        assert config.default is None
+
+    def test_attention_backend_conflicts_with_explicit_default(self):
+        with pytest.raises(ValueError):
+            build_attention_config(
+                AttentionConfig(default=AttentionSpec(backend="FLASH_ATTN")),
+                attention_backend="SAGE_ATTN",
+            )
+
+
+class TestOmniDiffusionConfigAttentionParsing:
+    """Test OmniDiffusionConfig attention shorthand and structured config."""
+
+    def test_attention_backend_sets_default(self):
         from vllm_omni.diffusion.data import OmniDiffusionConfig
 
         config = OmniDiffusionConfig(attention_backend="SAGE_ATTN")
-        assert isinstance(config.attention, AttentionConfig)
-        assert config.attention.default is not None
-        assert config.attention.default.backend == "SAGE_ATTN"
+        assert isinstance(config.attention_config, AttentionConfig)
+        assert config.attention_config.default is not None
+        assert config.attention_config.default.backend == "SAGE_ATTN"
 
-    def test_new_attention_config_takes_precedence(self):
+    def test_attention_backend_auto_means_platform_default(self):
         from vllm_omni.diffusion.data import OmniDiffusionConfig
 
-        attn_cfg = AttentionConfig(default=AttentionSpec(backend="FLASH_ATTN"))
-        config = OmniDiffusionConfig(
-            attention_backend="SAGE_ATTN",  # legacy
-            attention=attn_cfg,  # new — has a default, so legacy is ignored
-        )
-        assert config.attention.default.backend == "FLASH_ATTN"
+        config = OmniDiffusionConfig(attention_backend="auto")
+        assert isinstance(config.attention_config, AttentionConfig)
+        assert config.attention_config.default is None
+
+    def test_attention_backend_and_default_are_mutually_exclusive(self):
+        from vllm_omni.diffusion.data import OmniDiffusionConfig
+
+        with pytest.raises(ValueError):
+            OmniDiffusionConfig(
+                attention_backend="SAGE_ATTN",
+                attention_config=AttentionConfig(default=AttentionSpec(backend="FLASH_ATTN")),
+            )
 
     def test_dict_attention_config(self):
         from vllm_omni.diffusion.data import OmniDiffusionConfig
 
         config = OmniDiffusionConfig(
-            attention={
+            attention_config={
                 "default": {"backend": "FLASH_ATTN"},
                 "per_role": {"self": "SPARSE_BLOCK"},
             }
         )
-        assert config.attention.default.backend == "FLASH_ATTN"
-        assert config.attention.per_role["self"].backend == "SPARSE_BLOCK"
+        assert config.attention_config.default.backend == "FLASH_ATTN"
+        assert config.attention_config.per_role["self"].backend == "SPARSE_BLOCK"
+
+    def test_old_attention_name_raises(self):
+        from vllm_omni.diffusion.data import OmniDiffusionConfig
+
+        with pytest.raises(TypeError):
+            OmniDiffusionConfig.from_kwargs(attention={})  # type: ignore[call-arg]
 
     def test_no_attention_config_defaults_to_empty(self):
         from vllm_omni.diffusion.data import OmniDiffusionConfig
 
         config = OmniDiffusionConfig()
-        assert isinstance(config.attention, AttentionConfig)
-        assert config.attention.default is None
-        assert config.attention.per_role == {}
+        assert isinstance(config.attention_config, AttentionConfig)
+        assert config.attention_config.default is None
+        assert config.attention_config.per_role == {}
