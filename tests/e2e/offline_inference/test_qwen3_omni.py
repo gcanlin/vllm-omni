@@ -11,7 +11,7 @@ import pytest
 
 from tests.helpers.mark import hardware_test
 from tests.helpers.media import generate_synthetic_video
-from tests.helpers.stage_config import get_deploy_config_path, modify_stage_config
+from tests.helpers.stage_config import QWEN3_OMNI_MOE_DEPLOY, modify_stage_config
 from vllm_omni.platforms import current_omni_platform
 
 models = ["Qwen/Qwen3-Omni-30B-A3B-Instruct"]
@@ -19,7 +19,7 @@ models = ["Qwen/Qwen3-Omni-30B-A3B-Instruct"]
 
 # Single deploy YAML; rocm/xpu deltas are picked automatically via the
 # platforms: section. Only CUDA needs an extra enforce_eager tweak.
-_DEPLOY = get_deploy_config_path("qwen3_omni_moe.yaml")
+_DEPLOY = QWEN3_OMNI_MOE_DEPLOY
 
 
 def get_cuda_graph_config():

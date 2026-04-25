@@ -9,7 +9,7 @@ import pytest
 from tests.helpers.mark import hardware_test
 from tests.helpers.media import generate_synthetic_audio, generate_synthetic_image, generate_synthetic_video
 from tests.helpers.runtime import OmniServerParams, dummy_messages_from_mix_data
-from tests.helpers.stage_config import get_deploy_config_path, modify_stage_config
+from tests.helpers.stage_config import QWEN3_OMNI_MOE_DEPLOY, modify_stage_config
 
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 os.environ["VLLM_TEST_CLEAN_GPU_MEMORY"] = "0"
@@ -20,7 +20,7 @@ models = ["Qwen/Qwen3-Omni-30B-A3B-Instruct"]
 # Set VLLM_TEST_PD_MODE=1 to test PD disaggregation (follow-up — deploy overlay not yet migrated).
 _USE_PD = os.environ.get("VLLM_TEST_PD_MODE", "0") == "1"
 
-_DEPLOY = get_deploy_config_path("qwen3_omni_moe.yaml")
+_DEPLOY = QWEN3_OMNI_MOE_DEPLOY
 
 
 def get_prefix_caching_config(config_path: str):

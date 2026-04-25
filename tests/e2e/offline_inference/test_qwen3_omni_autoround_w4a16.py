@@ -20,7 +20,7 @@ from tests.helpers.media import (
     generate_synthetic_image,
     generate_synthetic_video,
 )
-from tests.helpers.stage_config import get_deploy_config_path, modify_stage_config
+from tests.helpers.stage_config import QWEN3_OMNI_MOE_DEPLOY, modify_stage_config
 
 QUANTIZED_MODEL = "Intel/Qwen3-Omni-30B-A3B-Instruct-int4-AutoRound"
 BASELINE_MODEL = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
@@ -29,7 +29,7 @@ BASELINE_MODEL = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
 QUANTIZED_MODEL = os.environ.get("QWEN3_OMNI_AUTOROUND_MODEL", QUANTIZED_MODEL)
 BASELINE_MODEL = os.environ.get("QWEN3_OMNI_BASELINE_MODEL", BASELINE_MODEL)
 
-_DEPLOY = get_deploy_config_path("qwen3_omni_moe.yaml")
+_DEPLOY = QWEN3_OMNI_MOE_DEPLOY
 
 
 @pytest.fixture(scope="module", autouse=True)

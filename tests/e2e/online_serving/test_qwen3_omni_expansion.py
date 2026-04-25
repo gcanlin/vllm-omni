@@ -11,7 +11,7 @@ import pytest
 from tests.helpers.mark import hardware_test
 from tests.helpers.media import generate_synthetic_audio, generate_synthetic_image, generate_synthetic_video
 from tests.helpers.runtime import OmniServerParams, dummy_messages_from_mix_data
-from tests.helpers.stage_config import get_deploy_config_path, modify_stage_config
+from tests.helpers.stage_config import QWEN3_OMNI_MOE_DEPLOY, modify_stage_config
 
 pytestmark = [pytest.mark.full_model, pytest.mark.omni]
 
@@ -68,7 +68,7 @@ def get_async_chunk_config(default_path):
 
 # Qwen3-Omni uses the default deploy YAML. The sync variant disables async
 # chunk through CLI so both parametrizations share the same config source.
-default_path = get_deploy_config_path("qwen3_omni_moe.yaml")
+default_path = QWEN3_OMNI_MOE_DEPLOY
 
 test_params = [
     pytest.param(

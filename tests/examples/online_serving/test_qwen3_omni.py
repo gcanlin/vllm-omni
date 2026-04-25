@@ -16,7 +16,7 @@ from tests.examples.helpers import (
 from tests.helpers.mark import hardware_test
 from tests.helpers.media import convert_audio_file_to_text, cosine_similarity_text
 from tests.helpers.runtime import OmniServerParams
-from tests.helpers.stage_config import get_deploy_config_path
+from tests.helpers.stage_config import QWEN3_OMNI_MOE_DEPLOY
 
 pytestmark = [pytest.mark.full_model, pytest.mark.example, pytest.mark.omni]
 
@@ -25,7 +25,7 @@ os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 models = ["Qwen/Qwen3-Omni-30B-A3B-Instruct"]
 
 
-stage_configs = [get_deploy_config_path("qwen3_omni_moe.yaml")]
+stage_configs = [QWEN3_OMNI_MOE_DEPLOY]
 
 
 example_dir = str(Path(__file__).parent.parent.parent.parent / "examples" / "online_serving")

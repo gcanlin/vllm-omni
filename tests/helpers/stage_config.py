@@ -456,7 +456,10 @@ def get_deploy_config_path(rel_path: str) -> str:
     return str(_DEPLOY_DIR / rel_path)
 
 
+QWEN3_OMNI_MOE_DEPLOY = get_deploy_config_path("qwen3_omni_moe.yaml")
+
 __all__ = [
     "modify_stage_config",
     "get_deploy_config_path",
+    "QWEN3_OMNI_MOE_DEPLOY",
 ]

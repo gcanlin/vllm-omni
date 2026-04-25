@@ -51,7 +51,7 @@ from tests.e2e.accuracy.qwen3_omni.qwen3_omni_acc_bench_core import (
 )
 from tests.helpers.mark import hardware_test
 from tests.helpers.runtime import OmniServerParams
-from tests.helpers.stage_config import get_deploy_config_path
+from tests.helpers.stage_config import QWEN3_OMNI_MOE_DEPLOY
 
 _E2E_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -59,7 +59,7 @@ models = ["Qwen/Qwen3-Omni-30B-A3B-Instruct"]
 
 pytestmark = [pytest.mark.full_model, pytest.mark.omni]
 
-_DEPLOY = get_deploy_config_path("qwen3_omni_moe.yaml")
+_DEPLOY = QWEN3_OMNI_MOE_DEPLOY
 
 
 stage_configs = [_DEPLOY]

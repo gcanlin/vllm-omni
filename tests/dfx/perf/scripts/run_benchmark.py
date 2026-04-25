@@ -51,8 +51,7 @@ BENCHMARK_CONFIGS = load_configs(CONFIG_FILE_PATH)
 OMNI_RESULT_TEMPLATE_PATH = Path(__file__).parent / "result_omni_template.json"
 
 
-DEPLOY_CONFIGS_DIR = Path(__file__).resolve().parents[4] / "vllm_omni" / "deploy"
-test_params = create_unique_server_params(BENCHMARK_CONFIGS, DEPLOY_CONFIGS_DIR)
+test_params = create_unique_server_params(BENCHMARK_CONFIGS)
 server_to_benchmark_mapping = create_test_parameter_mapping(BENCHMARK_CONFIGS)
 
 _omni_server_lock = threading.Lock()

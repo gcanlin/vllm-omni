@@ -23,7 +23,7 @@ from tests.helpers.media import (
     generate_synthetic_audio,
 )
 from tests.helpers.runtime import OmniServerParams
-from tests.helpers.stage_config import get_deploy_config_path
+from tests.helpers.stage_config import QWEN3_OMNI_MOE_DEPLOY
 
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
@@ -34,7 +34,7 @@ REALTIME_SYNTH_PHRASE_TEXT = "Translate into Chinese: Beijing is the Capital of 
 
 # Use the default deploy config; the sync realtime path disables async chunk
 # through CLI.
-default_stage_config = get_deploy_config_path("qwen3_omni_moe.yaml")
+default_stage_config = QWEN3_OMNI_MOE_DEPLOY
 
 realtime_server_params = [
     pytest.param(

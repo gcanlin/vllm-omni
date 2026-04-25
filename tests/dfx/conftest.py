@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from tests.helpers.stage_config import modify_stage_config
+from tests.helpers.stage_config import get_deploy_config_path, modify_stage_config
 
 
 def load_configs(config_path: str) -> list[dict[str, Any]]:
@@ -67,7 +67,7 @@ def _build_serve_args(serve_args: Any) -> list[str]:
 
 def create_unique_server_params(
     configs: list[dict[str, Any]],
-    stage_configs_dir: Path,
+    stage_configs_dir: Path | None = None,
 ) -> list[tuple[str, str, str | None, str | None, tuple[str, ...]]]:
     """Return one row per unique server configuration (same 5-tuple shape as upstream).
 
@@ -85,7 +85,11 @@ def create_unique_server_params(
         model = server_params["model"]
         stage_config_name = server_params.get("stage_config_name")
         if stage_config_name:
-            stage_config_path = str(stage_configs_dir / stage_config_name)
+            stage_config_path = (
+                str(stage_configs_dir / stage_config_name)
+                if stage_configs_dir is not None
+                else get_deploy_config_path(stage_config_name)
+            )
             delete = server_params.get("delete", None)
             update = server_params.get("update", None)
             stage_config_path = modify_stage(stage_config_path, update, delete)
