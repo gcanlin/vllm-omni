@@ -35,7 +35,7 @@ from tests.dfx.perf.scripts.run_benchmark import run_benchmark
 from tests.helpers.runtime import OmniServer
 
 STABILITY_DIR = Path(__file__).resolve().parent.parent
-DEPLOY_CONFIGS_DIR = STABILITY_DIR / "deploy"
+DEPLOY_CONFIGS_DIR = Path(__file__).resolve().parents[4] / "vllm_omni" / "deploy"
 CONFIG_FILE_PATH = str(STABILITY_DIR / "tests" / "test.json")
 DEFAULT_NUM_PROMPTS_PER_BATCH = 20
 

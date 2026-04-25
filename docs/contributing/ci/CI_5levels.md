@@ -597,7 +597,7 @@ When you want to add L5-level stability test cases, you can refer to the followi
     "test_name": "test_qwen3_omni_stability",
     "server_params": {
         "model": "Qwen/Qwen3-Omni-30B-A3B-Instruct",
-        "stage_config_name": "qwen3_omni.yaml"
+        "stage_config_name": "qwen3_omni_moe.yaml"
     },
     "benchmark_params": [
         {
@@ -633,7 +633,7 @@ When you want to add L5-level stability test cases, you can refer to the followi
 | Parameter         | Required | Example                            | Description                         |
 | ----------------- | -------- | ---------------------------------- | ----------------------------------- |
 | model             | Yes      | "Qwen/Qwen3-Omni-30B-A3B-Instruct" | Model name or path                  |
-| stage_config_name | Yes      | "qwen3_omni.yaml"                  | Stage configuration file name       |
+| stage_config_name | Yes      | "qwen3_omni_moe.yaml"              | Stage configuration file name       |
 
 ##### Dynamic Configuration (update/delete)
 

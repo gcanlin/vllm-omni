@@ -3,6 +3,7 @@
         "test_name": "test_qwen3_omni_stability",
         "server_params": {
             "model": "Qwen/Qwen3-Omni-30B-A3B-Instruct",
+            "stage_config_name": "qwen3_omni_moe.yaml",
             "stage_overrides": {
                 "2": {
                     "max_num_batched_tokens": 1000000
@@ -40,6 +41,7 @@
         "test_name": "test_qwen3_omni_stability_async_chunk",
         "server_params": {
             "model": "Qwen/Qwen3-Omni-30B-A3B-Instruct",
+            "stage_config_name": "qwen3_omni_moe.yaml",
             "stage_overrides": {
                 "2": {
                     "max_num_batched_tokens": 1000000

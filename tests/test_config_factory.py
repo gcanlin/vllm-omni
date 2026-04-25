@@ -135,6 +135,15 @@ class TestStageConfig:
             assert len(deprecation_warnings) == 1
             assert "max_batch_size" in str(deprecation_warnings[0].message)
 
+    def test_to_omegaconf_leaves_max_num_seqs_unset_by_default(self):
+        """Let vLLM choose its default max_num_seqs when stage config omits it."""
+        config = StageConfig(
+            stage_id=0,
+            model_stage="thinker",
+        )
+        omega_config = config.to_omegaconf()
+        assert "max_num_seqs" not in omega_config.engine_args
+
     def test_to_omegaconf_max_num_seqs_in_engine_args(self):
         """Test that max_num_seqs in yaml_engine_args takes precedence."""
         config = StageConfig(
@@ -974,41 +983,30 @@ class TestQwen3TTSPipeline:
 class TestBaseConfigInheritance:
     """Test deploy YAML base_config inheritance."""
 
-    def test_ci_inherits_from_main(self):
-        from tests.helpers.stage_config import get_deploy_config_path
+    def test_qwen3_omni_deploy_config(self):
         from vllm_omni.config.stage_config import load_deploy_config
 
-        ci_path = Path(get_deploy_config_path("ci/qwen3_omni_moe.yaml"))
-        if not ci_path.exists():
-            pytest.skip("CI deploy config not found")
+        deploy_path = Path(__file__).parent.parent / "vllm_omni" / "deploy" / "qwen3_omni_moe.yaml"
+        if not deploy_path.exists():
+            pytest.skip("Qwen3-Omni deploy config not found")
 
-        deploy = load_deploy_config(ci_path)
+        deploy = load_deploy_config(deploy_path)
         assert len(deploy.stages) == 3
-        # CI overrides
-        assert deploy.stages[0].engine_extras.get("load_format") == "dummy"
-        assert deploy.stages[0].max_num_seqs == 5
-        # Inherited from base (gpu_memory_utilization now in engine_extras)
         assert deploy.stages[0].engine_extras.get("gpu_memory_utilization") == 0.9
         assert deploy.connectors is not None
         assert "connector_of_shared_memory" in deploy.connectors
-        # CI overlay explicitly sets async_chunk: False (see
-        # tests.helpers.stage_config._CI_OVERLAYS and PR #2383 discussion). Overlay
-        # bool overrides base even when the base yaml has async_chunk: true.
-        assert deploy.async_chunk is False
+        assert deploy.async_chunk is True
 
-    def test_ci_sampling_merge(self):
-        from tests.helpers.stage_config import get_deploy_config_path
+    def test_qwen3_omni_deploy_sampling_params(self):
         from vllm_omni.config.stage_config import load_deploy_config
 
-        ci_path = Path(get_deploy_config_path("ci/qwen3_omni_moe.yaml"))
-        if not ci_path.exists():
-            pytest.skip("CI deploy config not found")
+        deploy_path = Path(__file__).parent.parent / "vllm_omni" / "deploy" / "qwen3_omni_moe.yaml"
+        if not deploy_path.exists():
+            pytest.skip("Qwen3-Omni deploy config not found")
 
-        deploy = load_deploy_config(ci_path)
+        deploy = load_deploy_config(deploy_path)
         s0 = deploy.stages[0].default_sampling_params
-        # CI overrides max_tokens
-        assert s0["max_tokens"] == 150
-        # Inherited from base
+        assert s0["max_tokens"] == 2048
         assert s0["temperature"] == 0.4
         assert s0["seed"] == 42
 
