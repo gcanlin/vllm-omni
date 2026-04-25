@@ -876,8 +876,6 @@ class StageConfig:
             effective_mbs = int(cli_mbs or legacy_mbs or 1)
             engine_args.setdefault("max_num_seqs", effective_mbs)
 
-        engine_args.setdefault("max_num_seqs", 1)
-
         # Build full config dict
         config_dict: dict[str, Any] = {
             "stage_id": self.stage_id,

@@ -66,11 +66,9 @@ def get_async_chunk_config(default_path):
     )
 
 
-# CI deploy YAML (single file; xpu deltas applied via ``platforms:`` section).
-# The overlay explicitly sets ``async_chunk: False``, so ``default`` tests the
-# sync path and ``async_chunk`` tests the streaming path with a longer thinker
-# output — two distinct scenarios, kept as separate parametrizations.
-default_path = get_deploy_config_path("ci/qwen3_omni_moe.yaml")
+# Qwen3-Omni uses the default deploy YAML. The sync variant disables async
+# chunk through CLI so both parametrizations share the same config source.
+default_path = get_deploy_config_path("qwen3_omni_moe.yaml")
 
 test_params = [
     pytest.param(

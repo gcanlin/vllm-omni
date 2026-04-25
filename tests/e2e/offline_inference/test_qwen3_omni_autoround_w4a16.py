@@ -29,7 +29,7 @@ BASELINE_MODEL = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
 QUANTIZED_MODEL = os.environ.get("QWEN3_OMNI_AUTOROUND_MODEL", QUANTIZED_MODEL)
 BASELINE_MODEL = os.environ.get("QWEN3_OMNI_BASELINE_MODEL", BASELINE_MODEL)
 
-_CI_DEPLOY = get_deploy_config_path("ci/qwen3_omni_moe.yaml")
+_DEPLOY = get_deploy_config_path("qwen3_omni_moe.yaml")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -48,7 +48,7 @@ def _qwen3_omni_env():
 def _get_stage_config():
     """Build a CI-friendly stage config with eager mode."""
     return modify_stage_config(
-        _CI_DEPLOY,
+        _DEPLOY,
         updates={
             "stages": {
                 0: {"enforce_eager": True},
