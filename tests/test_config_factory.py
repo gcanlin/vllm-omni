@@ -987,8 +987,8 @@ class TestBaseConfigInheritance:
         # CI overrides
         assert deploy.stages[0].engine_extras.get("load_format") == "dummy"
         assert deploy.stages[0].max_num_seqs == 5
-        # Inherited from base
-        assert deploy.stages[0].gpu_memory_utilization == 0.9
+        # Inherited from base (gpu_memory_utilization now in engine_extras)
+        assert deploy.stages[0].engine_extras.get("gpu_memory_utilization") == 0.9
         assert deploy.connectors is not None
         assert "connector_of_shared_memory" in deploy.connectors
         # CI overlay explicitly sets async_chunk: False (see
@@ -1025,7 +1025,7 @@ class TestBaseConfigInheritance:
 
         deploy = load_deploy_config(overlay)
         assert len(deploy.stages) == 3
-        assert deploy.stages[0].gpu_memory_utilization == 0.9
+        assert deploy.stages[0].engine_extras.get("gpu_memory_utilization") == 0.9
 
     def test_single_field_overlay(self, tmp_path):
         """An overlay overriding one stage field merges with the base."""
@@ -1039,9 +1039,10 @@ class TestBaseConfigInheritance:
         overlay.write_text(f"base_config: {base}\nstages:\n  - stage_id: 2\n    max_num_batched_tokens: 1000000\n")
 
         deploy = load_deploy_config(overlay)
-        assert deploy.stages[2].max_num_batched_tokens == 1000000
-        # Rest inherited
-        assert deploy.stages[0].gpu_memory_utilization == 0.9
+        # max_num_batched_tokens goes into engine_extras (not a StageDeployConfig field)
+        assert deploy.stages[2].engine_extras.get("max_num_batched_tokens") == 1000000
+        # Rest inherited - max_num_seqs is a StageDeployConfig field with default 64
+        assert deploy.stages[0].max_num_seqs == 64
 
 
 class TestPlatformOverrides:
@@ -1059,11 +1060,11 @@ class TestPlatformOverrides:
         deploy = load_deploy_config(deploy_path)
         deploy = _apply_platform_overrides(deploy, platform="npu")
 
-        assert deploy.stages[0].gpu_memory_utilization == 0.6
-        assert deploy.stages[0].tensor_parallel_size == 2
+        assert deploy.stages[0].engine_extras.get("gpu_memory_utilization") == 0.6
+        assert deploy.stages[0].engine_extras.get("tensor_parallel_size") == 2
         assert deploy.stages[0].devices == "0,1"
         # Stage 2 unaffected fields stay at base
-        assert deploy.stages[2].enforce_eager is True
+        assert deploy.stages[2].engine_extras.get("enforce_eager") is True
 
     def test_xpu_overrides(self):
         from pathlib import Path
@@ -1077,7 +1078,7 @@ class TestPlatformOverrides:
         deploy = load_deploy_config(deploy_path)
         deploy = _apply_platform_overrides(deploy, platform="xpu")
 
-        assert deploy.stages[0].tensor_parallel_size == 4
+        assert deploy.stages[0].engine_extras.get("tensor_parallel_size") == 4
         assert deploy.stages[0].devices == "0,1,2,3"
         assert deploy.stages[0].engine_extras.get("max_cudagraph_capture_size") == 0
 
@@ -1091,9 +1092,9 @@ class TestPlatformOverrides:
             pytest.skip("Deploy config not found")
 
         deploy = load_deploy_config(deploy_path)
-        original_mem = deploy.stages[0].gpu_memory_utilization
+        original_mem = deploy.stages[0].engine_extras.get("gpu_memory_utilization")
         deploy = _apply_platform_overrides(deploy, platform="unknown_hw")
-        assert deploy.stages[0].gpu_memory_utilization == original_mem
+        assert deploy.stages[0].engine_extras.get("gpu_memory_utilization") == original_mem
 
     def test_platforms_deep_merge_inheritance(self, tmp_path):
         """Overlay's platforms: block layers onto base's, per-stage."""
@@ -1123,10 +1124,10 @@ class TestPlatformOverrides:
         deploy = load_deploy_config(overlay)
         deploy = _apply_platform_overrides(deploy, platform="rocm")
         # Both base's enforce_eager and overlay's max_num_seqs should apply.
-        assert deploy.stages[0].enforce_eager is True
+        assert deploy.stages[0].engine_extras.get("enforce_eager") is True
         assert deploy.stages[0].max_num_seqs == 1
         # Inherited stage default not touched by overlay platforms section.
-        assert deploy.stages[0].gpu_memory_utilization == 0.9
+        assert deploy.stages[0].engine_extras.get("gpu_memory_utilization") == 0.9
 
 
 class TestCLIOverrideFlow:

@@ -393,13 +393,6 @@ class StageDeployConfig:
     """
 
     stage_id: int
-    max_num_seqs: int = 64
-    gpu_memory_utilization: float = 0.9
-    tensor_parallel_size: int = 1
-    enforce_eager: bool = False
-    max_num_batched_tokens: int = 32768
-    max_model_len: int | None = None
-    async_scheduling: bool | None = None
     devices: str = "0"
     output_connectors: dict[str, str] | None = None
     input_connectors: dict[str, str] | None = None
@@ -446,6 +439,7 @@ _STAGE_NON_ENGINE_KEYS = frozenset(
         "output_connectors",
         "input_connectors",
         "default_sampling_params",
+        "subtalker_sampling_params",
         "engine_extras",
     }
 )

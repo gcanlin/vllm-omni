@@ -3,10 +3,9 @@
 # flashinfer; the autotune dummy run OOMs the shared cuda:0 device otherwise.
 #
 # Fields omitted from a stage fall back to StageDeployConfig dataclass
-# defaults (see vllm_omni/config/stage_config.py). For instance, every
-# stage here uses vLLM's default max_num_batched_tokens=32768 because
-# chat-sized prefill comfortably fits; only models with codec prefill
-# (Qwen3-Omni, Qwen3-TTS) need to bump it above 32k.
+# defaults (see vllm_omni/config/stage_config.py). Omitting
+# max_num_batched_tokens inherits vLLM's hardware-specific default
+# (e.g., 16384 for H100, 8192 for others).
 #
 # enforce_eager policy across the three deploy YAMLs:
 #   * code2wav / generation stages:  always true (cudagraph incompatible with
