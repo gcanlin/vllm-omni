@@ -117,7 +117,7 @@ RUN source /usr/local/Ascend/ascend-toolkit/set_env.sh && \
     python3 -m pip install -v -e /vllm-workspace/vllm-ascend/  \
                            --index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple \
                            --trusted-host cache-service.nginx-pypi-cache.svc.cluster.local \
-                           --default-timeout=60
+                           --default-timeout=60 \
                            --extra-index https://download.pytorch.org/whl/cpu/ && \
     python3 -m pip uninstall -y triton triton-ascend && \
     python3 -m pip install -v triton-ascend==3.2.0 && \
