@@ -1399,7 +1399,8 @@ class AsyncOmniEngine:
         stage_configs_path = kwargs.get("stage_configs_path", None)
         deploy_config_path = kwargs.pop("deploy_config", None)
         stage_overrides_json = kwargs.pop("stage_overrides", None)
-        kwargs.pop("_cli_explicit_keys", None)
+        # Keep _explicit_cli_keys in kwargs so it flows to
+        # load_stage_configs_from_model where it filters cli_overrides.
         explicit_stage_configs = kwargs.pop("stage_configs", None)
         if explicit_stage_configs is not None:
             logger.warning(

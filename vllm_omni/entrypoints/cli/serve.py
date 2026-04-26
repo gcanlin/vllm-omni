@@ -19,7 +19,6 @@ from vllm.entrypoints.utils import VLLM_SUBCMD_PARSER_EPILOG
 from vllm.logger import init_logger
 from vllm.utils.argparse_utils import FlexibleArgumentParser
 
-from vllm_omni.engine.arg_utils import nullify_stage_engine_defaults
 from vllm_omni.entrypoints.cli.logo import log_logo
 from vllm_omni.entrypoints.openai.api_server import omni_run_server
 
@@ -485,8 +484,6 @@ class OmniServeCommand(CLISubcommand):
         # Stash via type(self) so the docs hook (which execs this function in a
         # sandboxed globals dict via ``DummySelf``) doesn't fail on a NameError.
         type(self)._parser = serve_parser
-
-        nullify_stage_engine_defaults(serve_parser)
         return serve_parser
 
 
@@ -542,7 +539,6 @@ def run_headless(args: argparse.Namespace) -> None:
         raise ValueError("headless mode requires worker_backend=multi_process")
 
     args_dict = vars(args).copy()
-    args_dict.pop("_cli_explicit_keys", None)
     config_path, stage_configs = load_and_resolve_stage_configs(
         model,
         args_dict.get("stage_configs_path"),

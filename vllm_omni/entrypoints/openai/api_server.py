@@ -11,6 +11,7 @@ import os
 
 # Image generation API imports
 import random
+import sys
 import time
 from argparse import Namespace
 from collections.abc import AsyncIterator
@@ -335,6 +336,14 @@ async def omni_run_server(args, **uvicorn_kwargs) -> None:
     Unified entry point that automatically handles both LLM and Diffusion models
     through AsyncOmni, which manages multi-stage pipelines.
     """
+    # Compute explicit CLI keys once at the unified entry point so that
+    # downstream stage-config merging only treats user-typed flags as
+    # overrides (argparse defaults never shadow deploy YAML values).
+    if not hasattr(args, "_explicit_cli_keys"):
+        from vllm_omni.entrypoints.utils import detect_explicit_cli_keys
+
+        args._explicit_cli_keys = detect_explicit_cli_keys(sys.argv[1:], None)
+
     # Suppress Pydantic serialization warnings globally for multimodal content
     # (e.g., when ChatMessage.content is a list instead of str)
     import warnings as warnings_module
@@ -520,6 +529,10 @@ async def build_async_omni_from_stage_config(
     try:
         kwargs = vars(args).copy()
         kwargs.pop("model", None)
+        # Propagate the set of user-typed CLI flags (computed in
+        # OmniServeCommand.cmd) so that downstream stage-config merging
+        # can distinguish explicit overrides from argparse defaults.
+        kwargs.setdefault("_explicit_cli_keys", None)
         async_omni = AsyncOmni(model=args.model, **kwargs)
 
         # # Don't keep the dummy data in memory
@@ -2881,8 +2894,6 @@ if __name__ == "__main__":
 
     from vllm.entrypoints.openai.cli_args import make_arg_parser
 
-    from vllm_omni.engine.arg_utils import nullify_stage_engine_defaults
-
     parser = argparse.ArgumentParser(description="vLLM-Omni OpenAI-Compatible REST API server")
     parser = make_arg_parser(parser)
     registered_flags = set()
@@ -2894,8 +2905,8 @@ if __name__ == "__main__":
         parser.add_argument(
             "--enable-sleep-mode", action="store_true", default=False, help="Enable GPU memory pool for sleep mode."
         )
-    nullify_stage_engine_defaults(parser)
     args = parser.parse_args()
+    # _explicit_cli_keys will be computed in omni_run_server if not set
     if not hasattr(args, "model_tag"):
         setattr(args, "model_tag", args.model)
     if hasattr(args, "model_tag") and args.model_tag is None:

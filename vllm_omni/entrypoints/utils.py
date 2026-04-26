@@ -383,7 +383,13 @@ def load_stage_configs_from_model(
     if base_engine_args is None:
         base_engine_args = {}
 
+    # Pop the explicit-keys set injected by the CLI entry point.
+    # When present, only user-typed CLI flags become overrides;
+    # argparse defaults are discarded so they never shadow YAML values.
+    explicit_cli_keys: set[str] | None = base_engine_args.pop("_explicit_cli_keys", None)
     cli_overrides = _convert_dataclasses_to_dict(dict(base_engine_args))
+    if explicit_cli_keys is not None:
+        cli_overrides = {k: v for k, v in cli_overrides.items() if k in explicit_cli_keys}
     if stage_overrides:
         for stage_id_str, overrides in stage_overrides.items():
             for key, val in overrides.items():

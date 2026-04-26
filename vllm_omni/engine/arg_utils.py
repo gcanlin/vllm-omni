@@ -174,6 +174,12 @@ class OmniEngineArgs(EngineArgs):
                 self.worker_cls = current_omni_platform.get_omni_ar_worker_cls()
             elif self.worker_type == "generation":
                 self.worker_cls = current_omni_platform.get_omni_generation_worker_cls()
+        # Convert dict profiler_config (from stage YAML) to ProfilerConfig,
+        # mirroring what EngineArgs.__post_init__ does for compilation_config etc.
+        if isinstance(self.profiler_config, dict):
+            from vllm.config import ProfilerConfig
+
+            self.profiler_config = ProfilerConfig(**self.profiler_config)
         load_omni_general_plugins()
         super().__post_init__()
 
@@ -456,33 +462,6 @@ SHARED_FIELDS: frozenset[str] = frozenset(
     }
 )
 
-_DEPLOY_ENGINE_ARG_OVERRIDE_FIELDS: frozenset[str] = frozenset(
-    {
-        # Capacity / scheduling.
-        "async_scheduling",
-        "max_model_len",
-        "max_num_batched_tokens",
-        "max_num_seqs",
-        # Memory / parallelism.
-        "data_parallel_size",
-        "gpu_memory_utilization",
-        "pipeline_parallel_size",
-        "tensor_parallel_size",
-        # Execution / loading.
-        "enforce_eager",
-        "distributed_executor_backend",
-        "dtype",
-        "quantization",
-        "trust_remote_code",
-        # Caching / chunking.
-        "async_chunk",
-        "enable_prefix_caching",
-        "enable_chunked_prefill",
-        # Model-specific engine extras.
-        "subtalker_sampling_params",
-    }
-)
-
 _DEPLOY_RUNTIME_OVERRIDE_FIELDS: frozenset[str] = frozenset(
     {
         "devices",
@@ -496,8 +475,16 @@ def orchestrator_field_names() -> frozenset[str]:
 
 
 def deploy_override_field_names() -> frozenset[str]:
-    """Return kwargs whose parser defaults must not override deploy YAML."""
-    return _DEPLOY_ENGINE_ARG_OVERRIDE_FIELDS | _DEPLOY_RUNTIME_OVERRIDE_FIELDS
+    """Return kwargs whose parser defaults must not override deploy YAML.
+
+    Dynamically computed from all ``OmniEngineArgs`` fields so that newly
+    added engine args (e.g. ``profiler_config``) are automatically covered
+    without maintaining a manual whitelist.
+    """
+    engine_fields = frozenset(f.name for f in fields(OmniEngineArgs))
+    # Orchestrator-only keys are handled separately; shared keys need to
+    # flow to both orchestrator and engine, so exclude them here.
+    return (engine_fields - orchestrator_field_names()) | _DEPLOY_RUNTIME_OVERRIDE_FIELDS
 
 
 def internal_blacklist_keys() -> frozenset[str]:
@@ -647,23 +634,3 @@ def orchestrator_args_from_argparse(args: Any) -> OrchestratorArgs:
             if value is not None or f.default is None:
                 kwargs[f.name] = value
     return OrchestratorArgs(**kwargs)
-
-
-def nullify_stage_engine_defaults(parser: argparse.ArgumentParser) -> None:
-    """Reset stage-level engine flag defaults to ``None``; preserve real
-    default in help text. Only deploy-YAML override fields are touched.
-    Idempotent."""
-    override_dests = deploy_override_field_names()
-
-    for action in parser._actions:
-        if action.dest in ("help", "version") or not action.option_strings:
-            continue
-        if action.dest not in override_dests:
-            continue
-        if action.default is None or action.default is argparse.SUPPRESS:
-            continue
-        if action.help and "(default:" not in action.help and "%(default)" not in action.help:
-            action.help = f"{action.help} (default: {action.default})"
-        action.default = None
-
-    parser._omni_nullified = True  # type: ignore[attr-defined]

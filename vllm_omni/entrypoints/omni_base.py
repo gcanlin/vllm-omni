@@ -95,22 +95,15 @@ class OmniBase(PDDisaggregationMixin):
         parser: argparse.ArgumentParser | None = None,
         **overrides: Any,
     ) -> OmniBase:
-        """Build from argparse. If ``parser`` is passed and not yet nullified,
-        un-typed engine fields are reset to ``None``."""
+        """Build from argparse, injecting ``_explicit_cli_keys`` so that
+        downstream stage-config merging only treats user-typed flags as
+        overrides."""
+        from vllm_omni.entrypoints.utils import detect_explicit_cli_keys
+
         kwargs: dict[str, Any] = {k: v for k, v in vars(args).items() if not k.startswith("_")}
-
-        if parser is not None and not getattr(parser, "_omni_nullified", False):
-            from vllm_omni.engine.arg_utils import (
-                deploy_override_field_names,
-            )
-            from vllm_omni.entrypoints.utils import detect_explicit_cli_keys
-
-            explicit = detect_explicit_cli_keys(sys.argv[1:], parser) or set()
-            override_dests = deploy_override_field_names()
-            for key in list(kwargs):
-                if key in override_dests and key not in explicit:
-                    kwargs[key] = None
-
+        # Inject explicit-keys set; load_stage_configs_from_model will use
+        # it to filter cli_overrides, keeping only user-typed CLI flags.
+        kwargs["_explicit_cli_keys"] = detect_explicit_cli_keys(sys.argv[1:], parser)
         kwargs.update(overrides)
         return cls(**kwargs)
 
