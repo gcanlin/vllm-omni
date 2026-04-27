@@ -539,6 +539,13 @@ def run_headless(args: argparse.Namespace) -> None:
         raise ValueError("headless mode requires worker_backend=multi_process")
 
     args_dict = vars(args).copy()
+    # Propagate explicit CLI keys so load_stage_configs_from_model filters
+    # out argparse defaults, matching the online serving path.
+    if "_explicit_cli_keys" not in args_dict:
+        from vllm_omni.entrypoints.utils import detect_explicit_cli_keys
+        args_dict["_explicit_cli_keys"] = detect_explicit_cli_keys(
+            sys.argv[1:], None
+        )
     config_path, stage_configs = load_and_resolve_stage_configs(
         model,
         args_dict.get("stage_configs_path"),
