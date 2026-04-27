@@ -23,9 +23,9 @@ from vllm_omni.model_executor.stage_input_processors.tts_utils import (
 
 logger = logging.getLogger(__name__)
 
-# Pooling output layer keys: "0" = word embedding, "24" = accept_hidden_layer
-_EMBED_LAYER_KEY = "0"
-_HIDDEN_LAYER_KEY = "24"
+# Pooling output layer keys: 0 = word embedding, 24 = accept_hidden_layer
+_EMBED_LAYER_KEY = 0
+_HIDDEN_LAYER_KEY = 24
 
 
 def _compute_talker_prompt_ids_length(info: OmniPayload, device: torch.device | str = "cuda") -> int:
@@ -130,8 +130,8 @@ def _merge_pd_embeddings(
     """
     try:
         p_layers = prefill_mm.get("hidden_states", {}).get("layers", {})
-        p_emb = p_layers[int(_EMBED_LAYER_KEY)].detach().to(device=device, dtype=torch.float)
-        p_hid = p_layers[int(_HIDDEN_LAYER_KEY)].detach().to(device=device, dtype=torch.float)
+        p_emb = p_layers[_EMBED_LAYER_KEY].detach().to(device=device, dtype=torch.float)
+        p_hid = p_layers[_HIDDEN_LAYER_KEY].detach().to(device=device, dtype=torch.float)
     except (KeyError, AttributeError, TypeError) as exc:
         available_keys = list(prefill_mm.keys()) if isinstance(prefill_mm, dict) else type(prefill_mm).__name__
         logger.error(
@@ -312,13 +312,13 @@ def thinker2talker_async_chunk(
         prompt_token_ids = _ensure_list(prompt_token_ids)
         payload: OmniPayload = {
             "embed": {
-                "prefill": thinker_layers[int(_EMBED_LAYER_KEY)].detach().cpu(),
+                "prefill": thinker_layers[_EMBED_LAYER_KEY].detach().cpu(),
                 # Provide thinker-side TTS token embeddings for talker projection
                 "tts_bos": thinker_embed["tts_bos"].detach().cpu(),
                 "tts_eos": thinker_embed["tts_eos"].detach().cpu(),
                 "tts_pad": thinker_embed["tts_pad"].detach().cpu(),
             },
-            "hidden_states": {"output": thinker_layers[int(_HIDDEN_LAYER_KEY)].detach().cpu()},
+            "hidden_states": {"output": thinker_layers[_HIDDEN_LAYER_KEY].detach().cpu()},
             "ids": {"all": all_token_ids, "prompt": prompt_token_ids},
             "meta": {"finished": torch.tensor(is_finished, dtype=torch.bool)},
         }
@@ -366,12 +366,12 @@ def thinker2talker_async_chunk(
 
         if output_token_ids:
             talker_additional_info["meta"]["override_keys"] = [("embed", "decode"), ("ids", "output")]
-            talker_additional_info["embed"] = {"decode": thinker_layers[int(_EMBED_LAYER_KEY)].detach().cpu()}
+            talker_additional_info["embed"] = {"decode": thinker_layers[_EMBED_LAYER_KEY].detach().cpu()}
             talker_additional_info["ids"] = {"output": output_token_ids}
         else:
             # When prefilling a chunked thinker, thinker_hidden_states needs to be updated.
-            talker_additional_info["embed"] = {"prefill": thinker_layers[0].detach().cpu()}
-            talker_additional_info["hidden_states"] = {"output": thinker_layers[24].detach().cpu()}
+            talker_additional_info["embed"] = {"prefill": thinker_layers[_EMBED_LAYER_KEY].detach().cpu()}
+            talker_additional_info["hidden_states"] = {"output": thinker_layers[_HIDDEN_LAYER_KEY].detach().cpu()}
     return talker_additional_info
 
 
@@ -434,8 +434,8 @@ def thinker2talker(
         thinker_mm: OmniPayload = output.multimodal_output
         mm_hs = thinker_mm.get("hidden_states", {})
         mm_layers = mm_hs.get("layers", {})
-        thinker_emb = mm_layers[int(_EMBED_LAYER_KEY)].detach().to(device=device, dtype=torch.float)[-new_seq_length:]
-        thinker_hid = mm_layers[int(_HIDDEN_LAYER_KEY)].detach().to(device=device, dtype=torch.float)[-new_seq_length:]
+        thinker_emb = mm_layers[_EMBED_LAYER_KEY].detach().to(device=device, dtype=torch.float)[-new_seq_length:]
+        thinker_hid = mm_layers[_HIDDEN_LAYER_KEY].detach().to(device=device, dtype=torch.float)[-new_seq_length:]
 
         prefill_mm: dict[str, Any] | None = None
         if prefill_stage is not None:

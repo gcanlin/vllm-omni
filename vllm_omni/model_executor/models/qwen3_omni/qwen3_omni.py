@@ -368,8 +368,12 @@ class Qwen3OmniMoeForConditionalGeneration(
             captured_layer_dict = None
             if accept_layer is not None and aux_hidden_states is not None:
                 captured_layer_dict = {
-                    str(layer_idx): hidden_state
-                    for layer_idx, hidden_state in zip((0, int(accept_layer)), aux_hidden_states)
+                    "hidden_states": {
+                        "layers": {
+                            layer_idx: hidden_state
+                            for layer_idx, hidden_state in zip((0, int(accept_layer)), aux_hidden_states)
+                        }
+                    }
                 }
             return text_hidden_states, captured_layer_dict
 
