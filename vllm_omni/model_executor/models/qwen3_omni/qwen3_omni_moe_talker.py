@@ -305,13 +305,17 @@ class Qwen3OmniMoeTalkerForConditionalGeneration(
         **kwargs: object,
     ) -> torch.Tensor | IntermediateTensors:
         """Forward pass through the talker model."""
-        talker_hidden_states, _ = self.language_model.model(
+        model_output = self.language_model.model(
             input_ids,
             positions,
             intermediate_tensors,
             inputs_embeds=inputs_embeds,
             **kwargs,
         )
+        if isinstance(model_output, tuple):
+            talker_hidden_states = model_output[0]
+        else:
+            talker_hidden_states = model_output
 
         return talker_hidden_states
 

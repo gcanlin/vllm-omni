@@ -141,6 +141,9 @@ class Qwen3OmniMoeForConditionalGeneration(
                 architectures=["Qwen3OmniMoeThinkerForConditionalGeneration"],
             )
             self.model = self.thinker
+            accept_layer = getattr(talker_config, "accept_hidden_layer", None)
+            if accept_layer is not None:
+                self.thinker.language_model.model._set_aux_hidden_state_layers((0, int(accept_layer)))
             self.talker = None
             self.code2wav = None
             self.tts_tokens = torch.tensor(
@@ -352,25 +355,22 @@ class Qwen3OmniMoeForConditionalGeneration(
             if inputs_embeds is not None and inputs_embeds.device != thinker_dev:
                 inputs_embeds = inputs_embeds.to(thinker_dev)
 
-            # Run thinker forward
-            # If talker expects a specific intermediate layer, capture it here
             accept_layer = getattr(self.talker_config, "accept_hidden_layer", None)
-            capture_kwargs = {}
-            if accept_layer is not None:
-                capture_kwargs = {
-                    "capture_layer_indices": [0, int(accept_layer)],
-                    "return_hidden_states": True,
-                }
 
             # Run thinker
-            text_hidden_states, captured_layer_dict = self.thinker(
+            text_hidden_states, aux_hidden_states = self.thinker(
                 input_ids=input_ids,
                 positions=positions,
                 intermediate_tensors=intermediate_tensors,
                 inputs_embeds=inputs_embeds,
-                **capture_kwargs,
                 **kwargs,
             )
+            captured_layer_dict = None
+            if accept_layer is not None and aux_hidden_states is not None:
+                captured_layer_dict = {
+                    str(layer_idx): hidden_state
+                    for layer_idx, hidden_state in zip((0, int(accept_layer)), aux_hidden_states)
+                }
             return text_hidden_states, captured_layer_dict
 
         # ========== Stage 2.1: Talker ==========
