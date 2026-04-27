@@ -58,8 +58,6 @@
 
 FROM quay.io/ascend/cann:8.5.1-a3-ubuntu22.04-py3.11
 
-RUN git config --global url."https://gh-proxy.test.osinfra.cn/https://github.com/".insteadOf "https://github.com/"
-
 ARG PIP_INDEX_URL="https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -129,4 +127,3 @@ RUN echo "export LD_PRELOAD=/usr/lib/$(uname -m)-linux-gnu/libjemalloc.so.2:$LD_
 RUN echo "export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib" >> ~/.bashrc
 
 CMD ["/bin/bash"]
-
