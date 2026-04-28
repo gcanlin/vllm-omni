@@ -585,14 +585,14 @@ def test_build_engine_args_dict_normalizes_diffusion_attention_config():
     assert diffusion_attention_config.per_role["cross"].backend == "TORCH_SDPA"
 
 
-def test_build_engine_args_dict_maps_legacy_diffusion_attention_config_key():
+def test_build_engine_args_dict_uses_diffusion_attention_config_key():
     from vllm_omni.engine.stage_init_utils import build_engine_args_dict
 
     stage_cfg = types.SimpleNamespace(
         stage_id=0,
         stage_type="diffusion",
         engine_args={
-            "attention_config": {
+            "diffusion_attention_config": {
                 "default": {"backend": "FLASH_ATTN"},
             }
         },

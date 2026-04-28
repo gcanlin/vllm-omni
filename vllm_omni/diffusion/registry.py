@@ -255,7 +255,7 @@ def _prepare_diffusion_quant_config(
     model_class: type[nn.Module],
 ) -> None:
     """Prepare diffusion quant config using vLLM-style model bindings."""
-    quant_config = od_config.quantization_config
+    quant_config = getattr(od_config, "quantization_config", None)
     if quant_config is None:
         return
     if hasattr(quant_config, "maybe_update_config"):
