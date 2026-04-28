@@ -1330,7 +1330,7 @@ class AsyncOmniEngine:
             "enable_multithread_weight_load": kwargs.get("enable_multithread_weight_load", True),
             "num_weight_load_threads": kwargs.get("num_weight_load_threads", 4),
             "quantization": kwargs.get("quantization", None),
-            **({"attention_config": attention_config} if attention_config is not None else {}),
+            **({"diffusion_attention_config": attention_config} if attention_config is not None else {}),
             "enable_diffusion_pipeline_profiler": kwargs.get("enable_diffusion_pipeline_profiler", False),
             "enable_ar_profiler": kwargs.get("enable_ar_profiler", False),
             **(
@@ -1473,10 +1473,11 @@ class AsyncOmniEngine:
                     or kwargs.get("diffusion_attention_backend") is not None
                 ):
                     has_stage_attention = (
-                        hasattr(cfg.engine_args, "attention_config") and cfg.engine_args.attention_config is not None
+                        hasattr(cfg.engine_args, "diffusion_attention_config")
+                        and cfg.engine_args.diffusion_attention_config is not None
                     )
                     if not has_stage_attention:
-                        cfg.engine_args.attention_config = parse_attention_config(
+                        cfg.engine_args.diffusion_attention_config = parse_attention_config(
                             kwargs.get("diffusion_attention_config"),
                             attention_backend=kwargs.get("diffusion_attention_backend"),
                         )

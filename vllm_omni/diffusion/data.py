@@ -768,6 +768,14 @@ class OmniDiffusionConfig:
         else:
             kwargs.pop("quantization", None)
 
+        # Map "diffusion_attention_config" to "attention_config" so the
+        # engine_args key (namespaced to avoid collision with vLLM's own
+        # attention_config) is mapped to the dataclass field.
+        if "diffusion_attention_config" in kwargs and "attention_config" not in kwargs:
+            kwargs["attention_config"] = kwargs.pop("diffusion_attention_config")
+        else:
+            kwargs.pop("diffusion_attention_config", None)
+
         # Check environment variable as fallback for cache_backend
         # Support both old DIFFUSION_CACHE_ADAPTER and new DIFFUSION_CACHE_BACKEND for backwards compatibility
         if "cache_backend" not in kwargs:
