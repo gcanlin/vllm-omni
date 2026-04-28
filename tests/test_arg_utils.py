@@ -353,72 +353,73 @@ def test_ambiguous_field_non_strict_routes_to_orchestrator(caplog):
     assert any("both OrchestratorArgs" in r.message for r in caplog.records)
 
 
-# Sentinel-default precedence invariants (#3035)
+# ============================================================================
+# deploy_override_field_names — dynamic derivation (replaces whitelist).
+# ============================================================================
 
 
-def _build_full_serve_parser():
-    from vllm.utils.argparse_utils import FlexibleArgumentParser
-
+def test_deploy_override_field_names_covers_all_engine_fields():
+    """deploy_override_field_names must dynamically include every OmniEngineArgs
+    field (minus orchestrator-only keys) so that YAML values for any vLLM
+    parameter are never silently overwritten by argparse defaults."""
     try:
-        from vllm.entrypoints.openai.cli_args import make_arg_parser
-    except ImportError:
-        pytest.skip("vllm parser not importable")
-    return make_arg_parser(FlexibleArgumentParser())
+        from vllm_omni.engine.arg_utils import OmniEngineArgs, deploy_override_field_names
+    except Exception as exc:
+        pytest.skip(f"OmniEngineArgs not importable: {exc}")
 
+    override_names = deploy_override_field_names()
+    engine_fields = {f.name for f in fields(OmniEngineArgs)}
+    orch_fields = orchestrator_field_names()
 
-def test_nullify_stage_engine_defaults_resets_inherited_defaults():
-    import argparse
-
-    from vllm_omni.engine.arg_utils import (
-        deploy_override_field_names,
-        nullify_stage_engine_defaults,
+    # Every engine field that is not orchestrator-only should be in the set.
+    missing = (engine_fields - orch_fields) - override_names
+    assert not missing, (
+        f"Engine fields missing from deploy_override_field_names: {sorted(missing)}. "
+        f"These fields' YAML values could be silently overridden by argparse defaults."
     )
 
-    parser = _build_full_serve_parser()
-    nullify_stage_engine_defaults(parser)
 
-    override_dests = deploy_override_field_names()
-    offenders = [
-        (a.dest, a.default)
-        for a in parser._actions
-        if a.dest not in ("help", "version")
-        and a.option_strings
-        and a.dest in override_dests
-        and a.default is not None
-        and a.default is not argparse.SUPPRESS
-    ]
-    assert not offenders, f"Stage flags with non-None defaults after nullify: {offenders}"
+def test_deploy_override_field_names_includes_profiler_config():
+    """Regression: profiler_config must be covered by deploy overrides."""
+    from vllm_omni.engine.arg_utils import deploy_override_field_names
+
+    assert "profiler_config" in deploy_override_field_names()
 
 
-def test_non_override_flags_keep_real_defaults_after_nullify():
-    import argparse
-
-    from vllm_omni.engine.arg_utils import nullify_stage_engine_defaults
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--hsdp-shard-size", type=int, default=-1, help="HSDP shard size.")
-    parser.add_argument("--max-num-seqs", type=int, default=64, help="Max num seqs.")
-    nullify_stage_engine_defaults(parser)
-
-    hsdp = next(a for a in parser._actions if a.dest == "hsdp_shard_size")
-    max_num_seqs = next(a for a in parser._actions if a.dest == "max_num_seqs")
-    assert hsdp.default == -1
-    assert max_num_seqs.default is None
+# ============================================================================
+# OmniEngineArgs.__post_init__ — dict → ProfilerConfig conversion.
+# ============================================================================
 
 
-def test_help_text_preserves_default_after_nullify():
-    # Real defaults must stay visible in --help even though parser stores None.
-    import argparse
+def test_omniengineargs_converts_dict_profiler_config():
+    """profiler_config from YAML arrives as a dict; __post_init__ must convert
+    it to a ProfilerConfig dataclass so downstream code works correctly."""
+    try:
+        from vllm.config import ProfilerConfig
 
-    from vllm_omni.engine.arg_utils import nullify_stage_engine_defaults
+        from vllm_omni.engine.arg_utils import OmniEngineArgs
+    except Exception as exc:
+        pytest.skip(f"Not importable: {exc}")
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--max-num-seqs", type=int, default=42, help="Example knob.")
-    nullify_stage_engine_defaults(parser)
+    ea = OmniEngineArgs(
+        model="fake-model",
+        profiler_config={"profiler": "torch", "torch_profiler_dir": "./test-dir"},
+    )
+    assert isinstance(ea.profiler_config, ProfilerConfig)
+    assert ea.profiler_config.profiler == "torch"
+    assert ea.profiler_config.torch_profiler_dir == "./test-dir"
 
-    action = next(a for a in parser._actions if a.dest == "max_num_seqs")
-    assert action.default is None
-    assert "(default: 42)" in action.help
+
+def test_omniengineargs_preserves_none_profiler_config():
+    """When profiler_config is not set (None), it should remain None."""
+    try:
+        from vllm_omni.engine.arg_utils import OmniEngineArgs
+    except Exception as exc:
+        pytest.skip(f"Not importable: {exc}")
+
+    ea = OmniEngineArgs(model="fake-model")
+    # Default from vLLM — should not be converted or raise
+    assert ea.profiler_config is None or hasattr(ea.profiler_config, "profiler")
 
 
 _OMNIENGINEARGS_USER_INPUT_FIELDS = frozenset(

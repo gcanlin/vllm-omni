@@ -359,6 +359,138 @@ class TestLoadAndResolveStageConfigs:
         assert "dtype" in stage_configs[0]["engine_args"]
 
 
+class TestExplicitCliKeysFiltering:
+    """Tests for _explicit_cli_keys filtering in load_stage_configs_from_model."""
+
+    def test_explicit_cli_keys_filters_overrides(self, mocker: MockerFixture):
+        """Only user-typed CLI flags should survive as cli_overrides;
+        argparse defaults must be discarded."""
+        mock_factory = mocker.patch(
+            "vllm_omni.entrypoints.utils.StageConfigFactory.create_from_model",
+            return_value=None,
+        )
+        mocker.patch(
+            "vllm_omni.entrypoints.utils.resolve_model_config_path",
+            return_value=None,
+        )
+
+        from vllm_omni.entrypoints.utils import load_stage_configs_from_model
+
+        base_engine_args = {
+            "max_num_seqs": 64,  # user typed
+            "dtype": "auto",  # argparse default (not typed)
+            "enforce_eager": False,  # argparse default (not typed)
+            "_explicit_cli_keys": {"max_num_seqs"},
+        }
+
+        load_stage_configs_from_model(
+            model="fake-model",
+            base_engine_args=base_engine_args,
+        )
+
+        # StageConfigFactory.create_from_model receives filtered overrides
+        call_kwargs = mock_factory.call_args
+        cli_overrides = call_kwargs.kwargs.get("cli_overrides") or call_kwargs[1].get("cli_overrides")
+        assert "max_num_seqs" in cli_overrides
+        assert "dtype" not in cli_overrides
+        assert "enforce_eager" not in cli_overrides
+        assert "_explicit_cli_keys" not in cli_overrides
+
+    def test_no_explicit_cli_keys_passes_all_overrides(self, mocker: MockerFixture):
+        """When _explicit_cli_keys is absent (programmatic use), all args
+        pass through as overrides for backward compatibility."""
+        mock_factory = mocker.patch(
+            "vllm_omni.entrypoints.utils.StageConfigFactory.create_from_model",
+            return_value=None,
+        )
+        mocker.patch(
+            "vllm_omni.entrypoints.utils.resolve_model_config_path",
+            return_value=None,
+        )
+
+        from vllm_omni.entrypoints.utils import load_stage_configs_from_model
+
+        base_engine_args = {
+            "max_num_seqs": 64,
+            "dtype": "auto",
+        }
+
+        load_stage_configs_from_model(
+            model="fake-model",
+            base_engine_args=base_engine_args,
+        )
+
+        call_kwargs = mock_factory.call_args
+        cli_overrides = call_kwargs.kwargs.get("cli_overrides") or call_kwargs[1].get("cli_overrides")
+        assert "max_num_seqs" in cli_overrides
+        assert "dtype" in cli_overrides
+
+    def test_explicit_cli_keys_with_stage_overrides(self, mocker: MockerFixture):
+        """Per-stage overrides from --stage-overrides are always included,
+        even when _explicit_cli_keys filters out global defaults."""
+        mock_factory = mocker.patch(
+            "vllm_omni.entrypoints.utils.StageConfigFactory.create_from_model",
+            return_value=None,
+        )
+        mocker.patch(
+            "vllm_omni.entrypoints.utils.resolve_model_config_path",
+            return_value=None,
+        )
+
+        from vllm_omni.entrypoints.utils import load_stage_configs_from_model
+
+        base_engine_args = {
+            "max_num_seqs": 64,
+            "dtype": "auto",  # will be filtered out
+            "_explicit_cli_keys": {"max_num_seqs"},
+        }
+        stage_overrides = {"0": {"gpu_memory_utilization": 0.8}}
+
+        load_stage_configs_from_model(
+            model="fake-model",
+            base_engine_args=base_engine_args,
+            stage_overrides=stage_overrides,
+        )
+
+        call_kwargs = mock_factory.call_args
+        cli_overrides = call_kwargs.kwargs.get("cli_overrides") or call_kwargs[1].get("cli_overrides")
+        assert "max_num_seqs" in cli_overrides
+        assert "dtype" not in cli_overrides
+        assert "stage_0_gpu_memory_utilization" in cli_overrides
+
+    def test_explicit_cli_keys_preserves_dataclass_values(self, mocker: MockerFixture):
+        """Dataclass-typed values (e.g. profiler_config dict) survive
+        filtering when the key is in _explicit_cli_keys."""
+        mock_factory = mocker.patch(
+            "vllm_omni.entrypoints.utils.StageConfigFactory.create_from_model",
+            return_value=None,
+        )
+        mocker.patch(
+            "vllm_omni.entrypoints.utils.resolve_model_config_path",
+            return_value=None,
+        )
+
+        from vllm_omni.entrypoints.utils import load_stage_configs_from_model
+
+        profiler_dict = {"profiler": "torch", "torch_profiler_dir": "./test"}
+        base_engine_args = {
+            "profiler_config": profiler_dict,
+            "dtype": "auto",
+            "_explicit_cli_keys": {"profiler_config"},
+        }
+
+        load_stage_configs_from_model(
+            model="fake-model",
+            base_engine_args=base_engine_args,
+        )
+
+        call_kwargs = mock_factory.call_args
+        cli_overrides = call_kwargs.kwargs.get("cli_overrides") or call_kwargs[1].get("cli_overrides")
+        assert "profiler_config" in cli_overrides
+        assert cli_overrides["profiler_config"]["profiler"] == "torch"
+        assert "dtype" not in cli_overrides
+
+
 class TestLoadStageConfigsFromYaml:
     """Regression tests for stage-config loading and merging."""
 

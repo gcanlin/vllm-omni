@@ -1,4 +1,4 @@
-"""Unit tests for the Omni serve CLI helpers."""
+"""Unit tests for the Omni serve CLI helpers and detect_explicit_cli_keys."""
 
 from __future__ import annotations
 
@@ -11,6 +11,112 @@ from vllm_omni.entrypoints.cli.serve import OmniServeCommand, run_headless
 from vllm_omni.entrypoints.utils import detect_explicit_cli_keys
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
+
+
+# ============================================================================
+# detect_explicit_cli_keys — parser-aware mode
+# ============================================================================
+
+
+def test_detect_explicit_cli_keys_with_parser_basic() -> None:
+    """Parser-aware mode returns correct dest names."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--max-num-seqs", type=int, default=256)
+    parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
+    parser.add_argument("--dtype", type=str, default="auto")
+
+    argv = ["--max-num-seqs", "64", "--dtype", "float16"]
+    explicit = detect_explicit_cli_keys(argv, parser)
+
+    assert explicit == {"max_num_seqs", "dtype"}
+    assert "gpu_memory_utilization" not in explicit
+
+
+def test_detect_explicit_cli_keys_with_parser_equals_syntax() -> None:
+    """Parser-aware mode handles --flag=value syntax."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--max-num-seqs", type=int, default=256)
+
+    explicit = detect_explicit_cli_keys(["--max-num-seqs=64"], parser)
+    assert "max_num_seqs" in explicit
+
+
+def test_detect_explicit_cli_keys_with_parser_alias() -> None:
+    """Parser-aware mode resolves alias flags to the canonical dest."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--usp", "--ulysses-degree", type=int, default=1, dest="ulysses_degree")
+
+    explicit = detect_explicit_cli_keys(["--usp", "4"], parser)
+    assert "ulysses_degree" in explicit
+    assert "usp" not in explicit
+
+
+def test_detect_explicit_cli_keys_with_parser_store_false() -> None:
+    """Parser-aware mode maps --disable-X to its actual dest."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--disable-log-requests", action="store_true", dest="disable_log_requests")
+
+    explicit = detect_explicit_cli_keys(["--disable-log-requests"], parser)
+    assert "disable_log_requests" in explicit
+
+
+def test_detect_explicit_cli_keys_empty_argv() -> None:
+    """No flags typed → empty set."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--max-num-seqs", type=int, default=256)
+
+    assert detect_explicit_cli_keys([], parser) == set()
+
+
+def test_detect_explicit_cli_keys_ignores_positional_args() -> None:
+    """Positional arguments (no -- prefix) are ignored."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dtype", type=str, default="auto")
+
+    explicit = detect_explicit_cli_keys(["serve", "fake-model", "--dtype", "float16"], parser)
+    assert explicit == {"dtype"}
+
+
+# ============================================================================
+# detect_explicit_cli_keys — heuristic fallback (parser=None)
+# ============================================================================
+
+
+def test_detect_explicit_cli_keys_heuristic_basic() -> None:
+    """Heuristic mode converts hyphens to underscores."""
+    explicit = detect_explicit_cli_keys(["--max-num-seqs", "64", "--dtype", "float16"], None)
+    assert "max_num_seqs" in explicit
+    assert "dtype" in explicit
+
+
+def test_detect_explicit_cli_keys_heuristic_no_prefix() -> None:
+    """Heuristic mode strips --no- prefix for BooleanOptionalAction compat."""
+    explicit = detect_explicit_cli_keys(["--no-async-chunk"], None)
+    assert "no_async_chunk" in explicit
+    assert "async_chunk" in explicit  # also adds the stripped form
+
+
+def test_detect_explicit_cli_keys_heuristic_equals() -> None:
+    """Heuristic mode handles --flag=value syntax."""
+    explicit = detect_explicit_cli_keys(["--gpu-memory-utilization=0.8"], None)
+    assert "gpu_memory_utilization" in explicit
+
+
+def test_detect_explicit_cli_keys_user_types_default_value() -> None:
+    """When user explicitly types a value that equals the default, it must
+    still appear in explicit keys — this is the key advantage over the old
+    defaults-comparison approach."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--max-num-seqs", type=int, default=256)
+
+    # User explicitly types the default value
+    explicit = detect_explicit_cli_keys(["--max-num-seqs", "256"], parser)
+    assert "max_num_seqs" in explicit
+
+
+# ============================================================================
+# serve parser integration
+# ============================================================================
 
 
 def test_serve_parser_accepts_no_async_chunk_and_marks_it_explicit() -> None:
