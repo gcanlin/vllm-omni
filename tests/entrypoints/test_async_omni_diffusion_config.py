@@ -85,17 +85,17 @@ def test_default_stage_config_includes_default_sampling_params():
 
 
 def test_default_stage_config_includes_diffusion_attention_backend():
-    """Ensure diffusion attention shorthand lands in engine_args.attention_config."""
+    """Ensure diffusion attention shorthand lands in engine_args.diffusion_attention_config."""
     stage_cfg = AsyncOmniEngine._create_default_diffusion_stage_cfg(
         {
             "diffusion_attention_backend": "FLASH_ATTN",
         }
     )[0]
 
-    attention_config = stage_cfg["engine_args"]["attention_config"]
-    assert isinstance(attention_config, AttentionConfig)
-    assert attention_config.default is not None
-    assert attention_config.default.backend == "FLASH_ATTN"
+    diffusion_attention_config = stage_cfg["engine_args"]["diffusion_attention_config"]
+    assert isinstance(diffusion_attention_config, AttentionConfig)
+    assert diffusion_attention_config.default is not None
+    assert diffusion_attention_config.default.backend == "FLASH_ATTN"
 
 
 def test_default_stage_config_includes_diffusion_attention_config():
@@ -109,11 +109,11 @@ def test_default_stage_config_includes_diffusion_attention_config():
         }
     )[0]
 
-    attention_config = stage_cfg["engine_args"]["attention_config"]
-    assert isinstance(attention_config, AttentionConfig)
-    assert attention_config.default is not None
-    assert attention_config.default.backend == "FLASH_ATTN"
-    assert attention_config.per_role["cross"].backend == "TORCH_SDPA"
+    diffusion_attention_config = stage_cfg["engine_args"]["diffusion_attention_config"]
+    assert isinstance(diffusion_attention_config, AttentionConfig)
+    assert diffusion_attention_config.default is not None
+    assert diffusion_attention_config.default.backend == "FLASH_ATTN"
+    assert diffusion_attention_config.per_role["cross"].backend == "TORCH_SDPA"
 
 
 def test_default_stage_config_rejects_conflicting_diffusion_attention_inputs():
@@ -193,9 +193,9 @@ def test_serve_cli_accepts_diffusion_attention_backend():
     )
 
     stage_cfg = _create_default_diffusion_stage_cfg(args)[0]
-    attention_config = stage_cfg["engine_args"]["attention_config"]
+    diffusion_attention_config = stage_cfg["engine_args"]["diffusion_attention_config"]
 
     assert args.diffusion_attention_backend == "FLASH_ATTN"
-    assert isinstance(attention_config, AttentionConfig)
-    assert attention_config.default is not None
-    assert attention_config.default.backend == "FLASH_ATTN"
+    assert isinstance(diffusion_attention_config, AttentionConfig)
+    assert diffusion_attention_config.default is not None
+    assert diffusion_attention_config.default.backend == "FLASH_ATTN"

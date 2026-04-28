@@ -776,6 +776,16 @@ class OmniDiffusionConfig:
         else:
             kwargs.pop("diffusion_attention_config", None)
 
+        # Handle "diffusion_attention_backend" shorthand: merge into
+        # attention_config before field filtering.
+        diffusion_attn_backend = kwargs.pop("diffusion_attention_backend", None)
+        if diffusion_attn_backend is not None:
+            existing = kwargs.get("attention_config")
+            kwargs["attention_config"] = parse_attention_config(
+                existing,
+                attention_backend=diffusion_attn_backend,
+            )
+
         # Check environment variable as fallback for cache_backend
         # Support both old DIFFUSION_CACHE_ADAPTER and new DIFFUSION_CACHE_BACKEND for backwards compatibility
         if "cache_backend" not in kwargs:

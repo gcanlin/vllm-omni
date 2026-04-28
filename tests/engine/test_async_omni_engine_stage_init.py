@@ -1,6 +1,5 @@
 import importlib
 import os
-import sys
 import threading
 import types
 
@@ -458,7 +457,7 @@ def test_resolve_stage_configs_injects_global_diffusion_attention_when_missing(m
     stage_cfg = types.SimpleNamespace(
         stage_type="diffusion",
         engine_args=types.SimpleNamespace(
-            attention_config=None,
+            diffusion_attention_config=None,
             lora_path=None,
             lora_scale=None,
             enable_sleep_mode=None,
@@ -477,10 +476,10 @@ def test_resolve_stage_configs_injects_global_diffusion_attention_when_missing(m
         kwargs={"diffusion_attention_backend": "FLASH_ATTN"},
     )
 
-    attention_config = stage_configs[0].engine_args.attention_config
-    assert isinstance(attention_config, AttentionConfig)
-    assert attention_config.default is not None
-    assert attention_config.default.backend == "FLASH_ATTN"
+    diffusion_attention_config = stage_configs[0].engine_args.diffusion_attention_config
+    assert isinstance(diffusion_attention_config, AttentionConfig)
+    assert diffusion_attention_config.default is not None
+    assert diffusion_attention_config.default.backend == "FLASH_ATTN"
 
 
 def test_resolve_stage_configs_preserves_stage_diffusion_attention(monkeypatch):
@@ -491,7 +490,7 @@ def test_resolve_stage_configs_preserves_stage_diffusion_attention(monkeypatch):
     stage_cfg = types.SimpleNamespace(
         stage_type="diffusion",
         engine_args=types.SimpleNamespace(
-            attention_config=existing_attention,
+            diffusion_attention_config=existing_attention,
             lora_path=None,
             lora_scale=None,
             enable_sleep_mode=None,
@@ -510,27 +509,40 @@ def test_resolve_stage_configs_preserves_stage_diffusion_attention(monkeypatch):
         kwargs={"diffusion_attention_backend": "FLASH_ATTN"},
     )
 
-    assert stage_configs[0].engine_args.attention_config is existing_attention
+    assert stage_configs[0].engine_args.diffusion_attention_config is existing_attention
 
 
-@pytest.mark.parametrize(
-    ("aiter_enabled", "expected_backend"),
-    [
-        (False, "TRITON_ATTN"),
-        (True, "ROCM_AITER_FA"),
-    ],
-)
-def test_extract_stage_metadata_injects_rocm_diffusion_attention_default(
-    monkeypatch,
-    aiter_enabled: bool,
-    expected_backend: str,
-):
+def test_resolve_stage_configs_does_not_inject_diffusion_attention_into_llm_stage(monkeypatch):
+    import vllm_omni.engine.async_omni_engine as engine_mod
+
+    engine = object.__new__(AsyncOmniEngine)
+    stage_cfg = types.SimpleNamespace(
+        stage_type="llm",
+        engine_args=types.SimpleNamespace(
+            attention_config={"backend": "FLASH_ATTN"},
+            enable_sleep_mode=None,
+        ),
+    )
+
+    monkeypatch.setattr(
+        engine_mod,
+        "load_and_resolve_stage_configs",
+        lambda *args, **kwargs: ("dummy-config", [stage_cfg]),
+    )
+
+    _config_path, stage_configs = engine._resolve_stage_configs(
+        model="dummy-model",
+        kwargs={"diffusion_attention_backend": "TORCH_SDPA"},
+    )
+
+    assert stage_configs[0].engine_args.attention_config == {"backend": "FLASH_ATTN"}
+    assert not hasattr(stage_configs[0].engine_args, "diffusion_attention_config")
+
+
+def test_extract_stage_metadata_rocm_does_not_inject_diffusion_attention(monkeypatch):
+    """ROCm default attention logic only applies to LLM stages, not diffusion."""
     from vllm_omni.engine.stage_init_utils import extract_stage_metadata
 
-    fake_aiter_module = types.SimpleNamespace(
-        rocm_aiter_ops=types.SimpleNamespace(is_enabled=lambda: aiter_enabled),
-    )
-    monkeypatch.setitem(sys.modules, "vllm._aiter_ops", fake_aiter_module)
     monkeypatch.setattr("vllm_omni.engine.stage_init_utils.current_omni_platform.is_rocm", lambda: True)
 
     stage_cfg = types.SimpleNamespace(
@@ -546,7 +558,7 @@ def test_extract_stage_metadata_injects_rocm_diffusion_attention_default(
     metadata = extract_stage_metadata(stage_cfg)
 
     assert metadata.stage_type == "diffusion"
-    assert stage_cfg.engine_args["attention_config"]["default"]["backend"] == expected_backend
+    assert "diffusion_attention_config" not in stage_cfg.engine_args
 
 
 def test_build_engine_args_dict_normalizes_diffusion_attention_config():
@@ -556,7 +568,7 @@ def test_build_engine_args_dict_normalizes_diffusion_attention_config():
         stage_id=0,
         stage_type="diffusion",
         engine_args={
-            "attention_config": {
+            "diffusion_attention_config": {
                 "default": {"backend": "FLASH_ATTN"},
                 "per_role": {"cross": {"backend": "TORCH_SDPA"}},
             }
@@ -566,8 +578,28 @@ def test_build_engine_args_dict_normalizes_diffusion_attention_config():
 
     engine_args_dict = build_engine_args_dict(stage_cfg, model="dummy-model")
 
-    attention_config = engine_args_dict["attention_config"]
-    assert isinstance(attention_config, AttentionConfig)
-    assert attention_config.default is not None
-    assert attention_config.default.backend == "FLASH_ATTN"
-    assert attention_config.per_role["cross"].backend == "TORCH_SDPA"
+    diffusion_attention_config = engine_args_dict["diffusion_attention_config"]
+    assert isinstance(diffusion_attention_config, AttentionConfig)
+    assert diffusion_attention_config.default is not None
+    assert diffusion_attention_config.default.backend == "FLASH_ATTN"
+    assert diffusion_attention_config.per_role["cross"].backend == "TORCH_SDPA"
+
+
+def test_build_engine_args_dict_maps_legacy_diffusion_attention_config_key():
+    from vllm_omni.engine.stage_init_utils import build_engine_args_dict
+
+    stage_cfg = types.SimpleNamespace(
+        stage_id=0,
+        stage_type="diffusion",
+        engine_args={
+            "attention_config": {
+                "default": {"backend": "FLASH_ATTN"},
+            }
+        },
+        runtime={},
+    )
+
+    engine_args_dict = build_engine_args_dict(stage_cfg, model="dummy-model")
+
+    assert "attention_config" not in engine_args_dict
+    assert engine_args_dict["diffusion_attention_config"].default.backend == "FLASH_ATTN"

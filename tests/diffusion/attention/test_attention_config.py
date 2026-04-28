@@ -284,31 +284,31 @@ class TestBuildAttentionConfig:
 class TestOmniDiffusionConfigAttentionParsing:
     """Test OmniDiffusionConfig attention shorthand and structured config."""
 
-    def test_attention_backend_sets_default(self):
+    def test_diffusion_attention_backend_sets_default(self):
         from vllm_omni.diffusion.data import OmniDiffusionConfig
 
-        config = OmniDiffusionConfig(attention_backend="SAGE_ATTN")
+        config = OmniDiffusionConfig.from_kwargs(diffusion_attention_backend="SAGE_ATTN")
         assert isinstance(config.attention_config, AttentionConfig)
         assert config.attention_config.default is not None
         assert config.attention_config.default.backend == "SAGE_ATTN"
 
-    def test_attention_backend_auto_means_platform_default(self):
+    def test_diffusion_attention_backend_auto_means_platform_default(self):
         from vllm_omni.diffusion.data import OmniDiffusionConfig
 
-        config = OmniDiffusionConfig(attention_backend="auto")
+        config = OmniDiffusionConfig.from_kwargs(diffusion_attention_backend="auto")
         assert isinstance(config.attention_config, AttentionConfig)
         assert config.attention_config.default is None
 
-    def test_attention_backend_and_default_are_mutually_exclusive(self):
+    def test_diffusion_attention_backend_and_default_are_mutually_exclusive(self):
         from vllm_omni.diffusion.data import OmniDiffusionConfig
 
         with pytest.raises(ValueError):
-            OmniDiffusionConfig(
-                attention_backend="SAGE_ATTN",
-                attention_config=AttentionConfig(default=AttentionSpec(backend="FLASH_ATTN")),
+            OmniDiffusionConfig.from_kwargs(
+                diffusion_attention_backend="SAGE_ATTN",
+                diffusion_attention_config=AttentionConfig(default=AttentionSpec(backend="FLASH_ATTN")),
             )
 
-    def test_dict_attention_config(self):
+    def test_dict_diffusion_attention_config(self):
         from vllm_omni.diffusion.data import OmniDiffusionConfig
 
         config = OmniDiffusionConfig(
@@ -320,11 +320,15 @@ class TestOmniDiffusionConfigAttentionParsing:
         assert config.attention_config.default.backend == "FLASH_ATTN"
         assert config.attention_config.per_role["self"].backend == "SPARSE_BLOCK"
 
-    def test_old_attention_name_raises(self):
+    def test_legacy_attention_config_name_maps_in_from_kwargs(self):
         from vllm_omni.diffusion.data import OmniDiffusionConfig
 
-        with pytest.raises(TypeError):
-            OmniDiffusionConfig.from_kwargs(attention={})  # type: ignore[call-arg]
+        config = OmniDiffusionConfig.from_kwargs(
+            attention_config={
+                "default": {"backend": "FLASH_ATTN"},
+            }
+        )
+        assert config.attention_config.default.backend == "FLASH_ATTN"
 
     def test_no_attention_config_defaults_to_empty(self):
         from vllm_omni.diffusion.data import OmniDiffusionConfig
@@ -378,7 +382,12 @@ class TestAttentionInitUsesCurrentDiffusionConfig:
 
         captured = {}
 
-        def _fake_get_attn_backend_for_role(role, head_size, attention_config=None, role_category=None):
+        def _fake_get_attn_backend_for_role(
+            role,
+            head_size,
+            attention_config=None,
+            role_category=None,
+        ):
             captured["role"] = role
             captured["head_size"] = head_size
             captured["role_category"] = role_category
