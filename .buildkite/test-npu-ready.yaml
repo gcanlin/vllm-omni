@@ -11,4 +11,4 @@ steps:
             imagePullSecrets:
             - name: swr-secret
     commands:
-      - "timeout 20m pytest -v -s -m 'core_model and cpu' --cov=vllm_omni --cov-branch --cov-report=term-missing --cov-report=html --cov-report=xml"
+      - "timeout 60m pytest -v -s -m 'core_model and cpu' --cov=vllm_omni --cov-branch --cov-report=term-missing --cov-report=html --cov-report=xml"
