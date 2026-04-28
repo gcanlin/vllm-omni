@@ -81,7 +81,7 @@ steps:
   - label: "Upload Ready Pipeline"
     depends_on: image-build
     key: upload-ready-pipeline
-    if: build.branch != "main" && build.pull_request.labels includes "ready"
+    if: build.branch != "main" && build.pull_request.labels includes "npu-test"
     agents:
       queue: "ascend-a2b3"
       resource_class: "npu-2"
