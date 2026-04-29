@@ -2,6 +2,7 @@
 
 import base64
 import concurrent.futures
+import gc
 import io
 import json
 import os
@@ -22,8 +23,11 @@ import torch
 import yaml
 from openai import OpenAI, omit
 from PIL import Image
-from vllm import TextPrompt
-from vllm.distributed.parallel_state import cleanup_dist_env_and_memory
+from vllm import TextPrompt, envs
+from vllm.distributed.parallel_state import (
+    destroy_distributed_environment,
+    destroy_model_parallel,
+)
 from vllm.logger import init_logger
 
 from tests.helpers.assertions import (
@@ -46,12 +50,38 @@ PromptAudioInput = list[tuple[Any, int]] | tuple[Any, int] | None
 PromptImageInput = list[Any] | Any | None
 PromptVideoInput = list[Any] | Any | None
 
-try:
-    from vllm.distributed.parallel_state import cleanup_dist_env_and_memory  # type: ignore
-except Exception:  # pragma: no cover
 
-    def cleanup_dist_env_and_memory() -> None:
-        return None
+def cleanup_dist_env_and_memory(shutdown_ray: bool = False):
+    # Reset environment variable cache
+    envs.disable_envs_cache()
+
+    # Reset rocm_aiter_ops class variables to match current os.environ.
+    # These are class-level attributes that persist across tests and are
+    # NOT restored by monkeypatch (which only restores os.environ).
+    from vllm_omni.platforms import current_omni_platform
+
+    if current_omni_platform.is_rocm():
+        from vllm._aiter_ops import rocm_aiter_ops
+
+        rocm_aiter_ops.refresh_env_variables()
+
+    # Ensure all objects are not frozen before cleanup
+    gc.unfreeze()
+
+    destroy_model_parallel()
+    destroy_distributed_environment()
+    if shutdown_ray:
+        import ray  # Lazy import Ray
+
+        ray.shutdown()
+    gc.collect()
+
+    if not current_omni_platform.is_cpu():
+        current_omni_platform.empty_cache()
+        try:
+            torch._C._host_emptyCache()
+        except AttributeError:
+            logger.warning("torch._C._host_emptyCache() only available in Pytorch >=2.5")
 
 
 def get_open_port() -> int:

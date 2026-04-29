@@ -4,7 +4,6 @@ import torch
 from tests.helpers.mark import hardware_test
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.outputs import OmniRequestOutput
-from vllm_omni.platforms import current_omni_platform
 
 # Match unprefixed HF id even when MODEL_PREFIX is set (omni_runner resolves full path).
 _QWEN_IMAGE_RANDOM_ID = "riverclouds/qwen_image_random"
@@ -17,9 +16,6 @@ def _is_qwen_image_random(model_path: str) -> bool:
 models = ["Tongyi-MAI/Z-Image-Turbo", "riverclouds/qwen_image_random"]
 
 # Modelscope can't find riverclouds/qwen_image_random
-# TODO: When NPU support is ready, remove this branch.
-if current_omni_platform.is_npu():
-    models = ["Tongyi-MAI/Z-Image-Turbo", "Qwen/Qwen-Image"]
 
 # omni_runner expects (model, stage_configs_path); single-stage diffusion has no YAML.
 test_params = [(m, None) for m in models]
