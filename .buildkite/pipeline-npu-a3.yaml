@@ -1,9 +1,9 @@
 steps:
-  - label: ":buildkit: Build and Push NPU Test Image - A2"
-    key: image-build
+  - label: ":buildkit: Build and Push NPU Test Image - A3"
+    key: image-build-a3
     agents:
-      queue: "ascend-a2b3"
-      resource_class: "npu-1"
+      queue: "ascend-a3"
+      resource_class: "npu-2"
     plugins:
       - kubernetes:
           metadata:
@@ -70,7 +70,7 @@ steps:
         --frontend dockerfile.v0 \
         --local context=. \
         --local dockerfile=./docker \
-        --opt filename=Dockerfile.npu \
+        --opt filename=Dockerfile.npu.a3 \
         --secret id=dockerconfig,src=/home/user/.docker/config.json \
         --output type=image,name=$${IMAGE_REGISTRY}/$${IMAGE_NAME}:$${VLLM_IMAGE_TAG},push=true \
         --progress=plain
@@ -79,11 +79,11 @@ steps:
       echo "$${IMAGE_REGISTRY}/$${IMAGE_NAME}:$${VLLM_IMAGE_TAG}"
 
   - label: "Upload Ready Pipeline"
-    depends_on: image-build
-    key: upload-ready-pipeline
+    depends_on: image-build-a3
+    key: upload-ready-pipeline-a3
     if: build.branch != "main" && build.pull_request.labels includes "npu-test"
     agents:
-      queue: "ascend-a2b3"
-      resource_class: "npu-1"
+      queue: "ascend-a3"
+      resource_class: "npu-2"
     command: |
       buildkite-agent pipeline upload .buildkite/test-npu-ready.yaml
