@@ -8,6 +8,20 @@ import torch
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
 
 
+@pytest.fixture(autouse=True)
+def _force_cpu_platform(monkeypatch):
+    """Force CPU platform for tests using CPU tensors.
+
+    CustomOp.dispatch_forward() selects the backend by platform (e.g. forward_npu
+    on NPU machines), not by tensor device. CPU test tensors crash with
+    NotImplementedError on NPU. Set the platform to UnspecifiedOmniPlatform
+    so that forward_native is used."""
+    import vllm_omni.platforms as platforms
+    from vllm_omni.platforms.interface import UnspecifiedOmniPlatform
+
+    monkeypatch.setattr(platforms, "current_omni_platform", UnspecifiedOmniPlatform())
+
+
 # ── Import tests ──
 
 
