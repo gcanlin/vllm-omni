@@ -64,9 +64,28 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /workspace
 
-# Install clang-15 (for triton-ascend)
+# Install clang-15 (for triton-ascend) and media/OpenCV runtime libraries.
 RUN apt-get update -y && \
-    apt-get install -y git vim wget net-tools gcc g++ cmake numactl libnuma-dev libjemalloc2 clang-15 libxcb1 && \
+    apt-get install -y --no-install-recommends \
+        git \
+        vim \
+        wget \
+        net-tools \
+        gcc \
+        g++ \
+        cmake \
+        numactl \
+        libnuma-dev \
+        libjemalloc2 \
+        clang-15 \
+        ffmpeg \
+        libgl1 \
+        libglib2.0-0 \
+        libgomp1 \
+        libsm6 \
+        libxext6 \
+        libxrender1 \
+        libxcb1 && \
     update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 20 && \
     update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-15 20 && \
     rm -rf /var/cache/apt/* && \

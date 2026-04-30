@@ -2,7 +2,17 @@ ARG VLLM_ASCEND_IMAGE=quay.io/ascend/vllm-ascend
 ARG VLLM_ASCEND_TAG=v0.18.0rc1-a3
 FROM ${VLLM_ASCEND_IMAGE}:${VLLM_ASCEND_TAG}
 
-RUN apt-get update -y && apt-get install -y libxcb1 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update -y && \
+    apt-get install -y --no-install-recommends \
+        ffmpeg \
+        libgl1 \
+        libglib2.0-0 \
+        libgomp1 \
+        libsm6 \
+        libxext6 \
+        libxrender1 \
+        libxcb1 && \
+    rm -rf /var/lib/apt/lists/*
 
 RUN git config --global url."https://gh-proxy.test.osinfra.cn/https://github.com/".insteadOf "https://github.com/"
 
