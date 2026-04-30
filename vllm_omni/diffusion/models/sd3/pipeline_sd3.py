@@ -6,7 +6,6 @@ from collections.abc import Iterable
 
 import torch
 from diffusers.image_processor import VaeImageProcessor
-from diffusers.models.autoencoders import AutoencoderKL
 from diffusers.schedulers.scheduling_flow_match_euler_discrete import (
     FlowMatchEulerDiscreteScheduler,
 )
@@ -16,12 +15,15 @@ from transformers import CLIPTextModelWithProjection, CLIPTokenizer, T5EncoderMo
 from vllm.model_executor.models.utils import AutoWeightsLoader
 
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
+from vllm_omni.diffusion.distributed.autoencoders.autoencoder_kl import DistributedAutoencoderKL
 from vllm_omni.diffusion.distributed.cfg_parallel import CFGParallelMixin
 from vllm_omni.diffusion.distributed.utils import get_local_device
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
+from vllm_omni.diffusion.model_loader.hub_prefetch import prefetch_subfolders
 from vllm_omni.diffusion.models.sd3.sd3_transformer import (
     SD3Transformer2DModel,
 )
+from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import DiffusionPipelineProfilerMixin
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.model_executor.model_loader.weight_utils import (
     download_weights_from_hf_specific,
@@ -127,7 +129,7 @@ def retrieve_timesteps(
     return timesteps, num_inference_steps
 
 
-class StableDiffusion3Pipeline(nn.Module, CFGParallelMixin):
+class StableDiffusion3Pipeline(nn.Module, CFGParallelMixin, DiffusionPipelineProfilerMixin):
     def __init__(
         self,
         *,
@@ -151,6 +153,41 @@ class StableDiffusion3Pipeline(nn.Module, CFGParallelMixin):
         # Check if model is a local path
         local_files_only = os.path.exists(model)
 
+        # See ``hub_prefetch.py`` for the transformers v5 subfolder race.
+        # SD3.5 loads six subfolders in a row, each with multi-shard
+        # safetensors - it is the worst-case fan-out for the race window.
+        prefetch_subfolders(
+            model,
+            [
+                "scheduler",
+                "tokenizer",
+                "tokenizer_2",
+                "tokenizer_3",
+                "text_encoder",
+                "text_encoder_2",
+                "text_encoder_3",
+                "vae",
+            ],
+            local_files_only=local_files_only,
+        )
+
+        # ``transformers`` v5 changed ``from_pretrained``'s default
+        # ``torch_dtype`` from fp32 to whatever ``config.torch_dtype`` is
+        # baked into the checkpoint (fp16 for ``stabilityai/stable-
+        # diffusion-3.5-medium``). Without an explicit override the text
+        # encoders + VAE end up in fp16 while the rest of the pipeline
+        # (transformer, ``CombinedTimestepTextProjEmbeddings``,
+        # ``PatchEmbed``) is materialised in ``od_config.dtype`` (bf16
+        # by default). The first time latents flow through the
+        # transformer this surfaces as ``RuntimeError: Input type
+        # (c10::Half) and bias type (c10::BFloat16) should be the same``
+        # inside ``SD3Transformer2DModel.pos_embed`` (Buildkite #8418
+        # ``test_sd3_medium``). Pin every weight-loading
+        # ``from_pretrained`` to ``od_config.dtype`` so the whole
+        # pipeline is dtype-consistent. Tokenizers and the scheduler
+        # don't carry weights and therefore don't take ``torch_dtype``.
+        dtype = od_config.dtype
+
         self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
             model, subfolder="scheduler", local_files_only=local_files_only
         )
@@ -162,21 +199,31 @@ class StableDiffusion3Pipeline(nn.Module, CFGParallelMixin):
             model, subfolder="tokenizer_3", local_files_only=local_files_only
         )
         self.text_encoder = CLIPTextModelWithProjection.from_pretrained(
-            model, subfolder="text_encoder", local_files_only=local_files_only
+            model,
+            subfolder="text_encoder",
+            torch_dtype=dtype,
+            local_files_only=local_files_only,
         )
         self.text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(
-            model, subfolder="text_encoder_2", local_files_only=local_files_only
+            model,
+            subfolder="text_encoder_2",
+            torch_dtype=dtype,
+            local_files_only=local_files_only,
         )
         self.text_encoder_3 = T5EncoderModel.from_pretrained(
             model,
             subfolder="text_encoder_3",
+            torch_dtype=dtype,
             local_files_only=local_files_only,
         )
         self.transformer = SD3Transformer2DModel(od_config=od_config)
 
-        self.vae = AutoencoderKL.from_pretrained(model, subfolder="vae", local_files_only=local_files_only).to(
-            self.device
-        )
+        self.vae = DistributedAutoencoderKL.from_pretrained(
+            model,
+            subfolder="vae",
+            torch_dtype=dtype,
+            local_files_only=local_files_only,
+        ).to(self.device)
 
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1) if getattr(self, "vae", None) else 8
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
@@ -187,6 +234,9 @@ class StableDiffusion3Pipeline(nn.Module, CFGParallelMixin):
         self.default_sample_size = 128
         self.patch_size = 2
         self.output_type = self.od_config.output_type
+        self.setup_diffusion_pipeline_profiler(
+            enable_diffusion_pipeline_profiler=self.od_config.enable_diffusion_pipeline_profiler
+        )
 
     def check_inputs(
         self,
@@ -692,7 +742,9 @@ class StableDiffusion3Pipeline(nn.Module, CFGParallelMixin):
 
             image = self.vae.decode(latents, return_dict=False)[0]
 
-        return DiffusionOutput(output=image)
+        return DiffusionOutput(
+            output=image, stage_durations=self.stage_durations if hasattr(self, "stage_durations") else None
+        )
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         loader = AutoWeightsLoader(self)

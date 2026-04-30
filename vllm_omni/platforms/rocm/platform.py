@@ -16,6 +16,34 @@ class RocmOmniPlatform(OmniPlatform, RocmPlatform):
 
     Inherits all ROCm-specific implementations from vLLM's RocmPlatform,
     and adds Omni-specific interfaces from OmniPlatform.
+
+
+    NOTE: AR Attention Backend Overriding Logic:
+    ------------------------------------------
+    Since vLLM v0.19.0, the default attention backend is ROCM_ATTN for ROCm.
+    However, the compatibility of ROCM_ATTN with Omni is not guaranteed.
+    Therefore, we still use TRITON_ATTN as the default attention backend,
+    when the selected_backend is not specified.
+
+    So the behaviour of the attention backend overriding logic currently lives in
+    extract_stage_metadata in `vllm_omni/engine/stage_init_utils.py`
+
+    ```
+    if current_omni_platform.is_rocm():
+        print(f"engine_args: {str(engine_args)}")
+        if engine_args.get("attention_backend") is None:
+            from vllm._aiter_ops import rocm_aiter_ops
+
+            if rocm_aiter_ops.is_enabled():
+                engine_args["attention_backend"] = "ROCM_AITER_FA"
+            # Before vLLM v0.19.0, the default attention backend is TRITON_ATTN for ROCm.
+            # Since vLLM v0.19.0, the default attention backend is ROCM_ATTN for ROCm.
+            # However, the compatibility of ROCM_ATTN with Omni is not guaranteed.
+            # Therefore, we still use TRITON_ATTN as the default attention backend,
+            # when the selected_backend is not specified.
+            engine_args["attention_backend"] = "TRITON_ATTN"
+    ```
+
     """
 
     _omni_enum = OmniPlatformEnum.ROCM
@@ -27,6 +55,12 @@ class RocmOmniPlatform(OmniPlatform, RocmPlatform):
     @classmethod
     def get_omni_generation_worker_cls(cls) -> str:
         return "vllm_omni.worker.gpu_generation_worker.GPUGenerationWorker"
+
+    @classmethod
+    def has_flash_attn_package(cls) -> bool:
+        from vllm_omni.diffusion.attention.backends.utils.fa import is_flash_attn_installed
+
+        return is_flash_attn_installed()
 
     @classmethod
     def get_diffusion_attn_backend_cls(
@@ -99,3 +133,17 @@ class RocmOmniPlatform(OmniPlatform, RocmPlatform):
     def get_free_memory(cls, device: torch.device | None = None) -> int:
         free, _ = torch.cuda.mem_get_info(device)
         return free
+
+    @classmethod
+    def set_device_control_env_var(cls, devices: str | int | None) -> None:
+        import os
+
+        os.environ["HIP_VISIBLE_DEVICES"] = devices
+        os.environ["CUDA_VISIBLE_DEVICES"] = devices
+
+    @classmethod
+    def unset_device_control_env_var(cls) -> None:
+        import os
+
+        os.environ.pop("HIP_VISIBLE_DEVICES", None)
+        os.environ.pop("CUDA_VISIBLE_DEVICES", None)
