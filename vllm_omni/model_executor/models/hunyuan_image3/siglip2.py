@@ -40,7 +40,6 @@ from collections.abc import Iterable
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from vllm.distributed import divide, get_tensor_model_parallel_world_size
 from vllm.model_executor.layers.activation import get_act_fn
 from vllm.model_executor.layers.attention import MMEncoderAttention
@@ -164,9 +163,7 @@ class Siglip2Attention(nn.Module):
             disable_tp=use_data_parallel,
         )
 
-        self.tp_size = (
-            1 if use_data_parallel else get_tensor_model_parallel_world_size()
-        )
+        self.tp_size = 1 if use_data_parallel else get_tensor_model_parallel_world_size()
         self.num_heads_per_partition = divide(self.num_heads, self.tp_size)
 
         self.attn = MMEncoderAttention(
@@ -203,9 +200,7 @@ class Siglip2Attention(nn.Module):
             cu_seqlens=cu_seqlens,
             max_seqlen=max_seqlen,
         )
-        attn_output = attn_output.reshape(
-            seq_length, self.num_heads_per_partition * self.head_dim
-        )
+        attn_output = attn_output.reshape(seq_length, self.num_heads_per_partition * self.head_dim)
 
         attn_output, _ = self.out_proj(attn_output)
         return attn_output
@@ -341,9 +336,7 @@ class Siglip2VisionTransformer(nn.Module):
             quant_config=quant_config,
             prefix=f"{prefix}.encoder" if prefix else "encoder",
         )
-        self.post_layernorm = nn.LayerNorm(
-            self.embed_dim, eps=config.layer_norm_eps
-        )
+        self.post_layernorm = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_eps)
 
     def forward(
         self,
@@ -369,9 +362,7 @@ class Siglip2VisionTransformer(nn.Module):
 
         # Compute cu_seqlens from spatial_shapes (h * w per image)
         seq_lens = (spatial_shapes[:, 0] * spatial_shapes[:, 1]).to(torch.int32)
-        cu_seqlens = torch.zeros(
-            batch_size + 1, dtype=torch.int32, device=pixel_values.device
-        )
+        cu_seqlens = torch.zeros(batch_size + 1, dtype=torch.int32, device=pixel_values.device)
         cu_seqlens[1:] = seq_lens.cumsum(0)
 
         # Embeddings (packed)
@@ -395,9 +386,7 @@ class Siglip2VisionTransformer(nn.Module):
 
         return output
 
-    def load_weights(
-        self, weights: Iterable[tuple[str, torch.Tensor]]
-    ) -> set[str]:
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
             ("qkv_proj", "q_proj", "q"),
@@ -421,9 +410,7 @@ class Siglip2VisionTransformer(nn.Module):
                     # Skip weights for removed modules (e.g., pooling head)
                     continue
                 param = params_dict[name]
-                weight_loader = getattr(
-                    param, "weight_loader", default_weight_loader
-                )
+                weight_loader = getattr(param, "weight_loader", default_weight_loader)
                 weight_loader(param, loaded_weight)
             loaded_params.add(name)
         return loaded_params
