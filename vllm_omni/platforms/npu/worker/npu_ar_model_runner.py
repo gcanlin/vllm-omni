@@ -74,6 +74,7 @@ class NPUARModelRunner(OmniNPUModelRunner):
         self.inputs_embeds = self._make_buffer(self.max_num_tokens, self.hidden_size, dtype=self.dtype, numpy=False)
         # Initialize KV cache manager (preserve vllm_config fallback behavior)
         self.kv_transfer_manager = OmniKVTransferManager.from_vllm_config(self.vllm_config, self.model_config)
+        self._downstream_payload_cache: dict[str, bool] = {}
 
     def _make_buffer(self, *size, dtype, numpy=True):
         # Prevent ray from pinning the buffer due to large size
@@ -203,6 +204,35 @@ class NPUARModelRunner(OmniNPUModelRunner):
                 raise RuntimeError("Request IDs in the batch are missing from the merged states!")
             return combined_hidden_states[rid]
         return hidden_states_cpu[start:end]
+
+    def _request_final_stage_id(self, req_id: str) -> int | None:
+        info = self.model_intermediate_buffer.get(req_id)
+        if not isinstance(info, dict):
+            req_state = self.requests.get(req_id)
+            info = getattr(req_state, "additional_information_cpu", None)
+        if not isinstance(info, dict):
+            return None
+        val = info.get("omni_final_stage_id")
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            return None
+
+    def _request_needs_downstream_stage_payload(self, req_id: str) -> bool:
+        cached = self._downstream_payload_cache.get(req_id)
+        if cached is not None:
+            return cached
+        final_stage_id = self._request_final_stage_id(req_id)
+        needs_payload = final_stage_id is None or final_stage_id > 0
+        self._downstream_payload_cache[req_id] = needs_payload
+        return needs_payload
+
+    def _resolve_pooler_payload_req_ids(self, req_ids_output_copy: list[str]) -> tuple[str, list[str]]:
+        downstream_req_ids = [rid for rid in req_ids_output_copy if self._request_needs_downstream_stage_payload(rid)]
+        engine_output_type = (self.vllm_config.model_config.engine_output_type or "").lower()
+        if engine_output_type == "audio" and not downstream_req_ids:
+            downstream_req_ids = req_ids_output_copy
+        return engine_output_type, downstream_req_ids
     #  -------------------------------------- Omni-new -------------------------------------------------
 
     @torch.inference_mode()
@@ -799,7 +829,20 @@ class NPUARModelRunner(OmniNPUModelRunner):
                 logger.warning("RoutedExpertsCapturer is not initialized.")
 
         #  -------------------------------------- Omni-new -------------------------------------------------
-        hidden_states_cpu = hidden_states.detach().to("cpu").contiguous()
+        engine_output_type, downstream_req_ids = self._resolve_pooler_payload_req_ids(req_ids_output_copy)
+        needs_pooler_payload = len(downstream_req_ids) > 0
+        downstream_req_id_set = set(downstream_req_ids)
+        hidden_states_cpu = None
+        req_hidden_states_cpu: dict[str, torch.Tensor] | None = None
+        if needs_pooler_payload:
+            num_valid_tokens = min(
+                int(scheduler_output.total_num_scheduled_tokens),
+                int(hidden_states.shape[0]),
+            )
+            if len(downstream_req_ids) == len(req_ids_output_copy):
+                hidden_states_cpu = hidden_states[:num_valid_tokens].detach().to("cpu").contiguous()
+            else:
+                req_hidden_states_cpu = {}
         num_scheduled_tokens_np = getattr(self, "_omni_num_scheduled_tokens_np", None)
         if num_scheduled_tokens_np is None:
             req_ids = self.input_batch.req_ids
@@ -807,63 +850,81 @@ class NPUARModelRunner(OmniNPUModelRunner):
                 [scheduler_output.num_scheduled_tokens[rid] for rid in req_ids],
                 dtype=np.int32,
             )
+        query_start_loc_cpu = self.query_start_loc.cpu
 
-        if self.omni_prefix_cache is not None:
-            (
-                combined_hidden_states,
-                combined_multimodal_outputs,
-            ) = self._maybe_get_combined_prefix_cache_tensors(
+        pooler_output: list[dict[str, object]] | None = None
+        if needs_pooler_payload:
+            if self.omni_prefix_cache is not None:
+                (
+                    combined_hidden_states,
+                    combined_multimodal_outputs,
+                ) = self._maybe_get_combined_prefix_cache_tensors(
+                    hidden_states,
+                    multimodal_outputs,
+                    scheduler_output.num_scheduled_tokens,
+                )
+            else:
+                mm_cpu = build_mm_cpu(flatten_payload(multimodal_outputs))
+
+            self._process_additional_information_updates(
                 hidden_states,
                 multimodal_outputs,
-                scheduler_output.num_scheduled_tokens,
-            )
-        else:
-            mm_cpu = build_mm_cpu(flatten_payload(multimodal_outputs))
-
-        self._process_additional_information_updates(
-            hidden_states,
-            multimodal_outputs,
-            num_scheduled_tokens_np,
-            scheduler_output,
-            combined_hidden_states,
-            combined_multimodal_outputs,
-        )
-
-        pooler_output: list[dict[str, object]] = []
-        for rid in req_ids_output_copy:
-            idx = req_id_to_index_output_copy[rid]
-            start = int(self.query_start_loc.cpu[idx])
-            sched = int(num_scheduled_tokens_np[idx])
-            end = start + sched
-            req_hidden_states = self._resolve_req_hidden_states(
-                hidden_states_cpu,
+                num_scheduled_tokens_np,
+                scheduler_output,
                 combined_hidden_states,
-                rid,
-                start,
-                end,
+                combined_multimodal_outputs,
+                req_ids_filter=downstream_req_id_set,
             )
-            payload: dict[str, object] = {"hidden": req_hidden_states}
-            mm_payload: dict[str, object] = {}
-            if combined_multimodal_outputs or mm_cpu:
-                if combined_multimodal_outputs:
-                    for mm_key in combined_multimodal_outputs.keys():
-                        value = combined_multimodal_outputs[mm_key][rid]
-                        if isinstance(value, list):
-                            mm_payload[mm_key] = value[idx] if idx < len(value) else value[0]
-                        else:
-                            mm_payload[mm_key] = value
+
+            if req_hidden_states_cpu is not None and combined_hidden_states is None:
+                for rid in downstream_req_ids:
+                    idx = req_id_to_index_output_copy[rid]
+                    start = int(query_start_loc_cpu[idx])
+                    sched = int(num_scheduled_tokens_np[idx])
+                    end = start + sched
+                    req_hidden_states_cpu[rid] = hidden_states[start:end].detach().to("cpu").contiguous()
+
+            pooler_output = []
+            for rid in req_ids_output_copy:
+                if rid not in downstream_req_id_set:
+                    pooler_output.append({})
+                    continue
+                idx = req_id_to_index_output_copy[rid]
+                start = int(query_start_loc_cpu[idx])
+                sched = int(num_scheduled_tokens_np[idx])
+                end = start + sched
+                if req_hidden_states_cpu is not None and combined_hidden_states is None:
+                    req_hidden_states = req_hidden_states_cpu[rid]
                 else:
-                    for mm_key, mm_val in mm_cpu.items():
-                        mm_payload[mm_key] = to_payload_element(
-                            element=mm_val,
-                            idx=idx,
-                            start=start,
-                            end=end,
-                            pass_lists_through=False,
-                            seq_len=seq_len,
-                        )
-                payload.update(mm_payload)
-            pooler_output.append(flatten_payload(payload))
+                    req_hidden_states = self._resolve_req_hidden_states(
+                        hidden_states_cpu,
+                        combined_hidden_states,
+                        rid,
+                        start,
+                        end,
+                    )
+                payload: dict[str, object] = {"hidden": req_hidden_states}
+                mm_payload: dict[str, object] = {}
+                if combined_multimodal_outputs or mm_cpu:
+                    if combined_multimodal_outputs:
+                        for mm_key in combined_multimodal_outputs.keys():
+                            value = combined_multimodal_outputs[mm_key][rid]
+                            if isinstance(value, list):
+                                mm_payload[mm_key] = value[idx] if idx < len(value) else value[0]
+                            else:
+                                mm_payload[mm_key] = value
+                    else:
+                        for mm_key, mm_val in mm_cpu.items():
+                            mm_payload[mm_key] = to_payload_element(
+                                element=mm_val,
+                                idx=idx,
+                                start=start,
+                                end=end,
+                                pass_lists_through=False,
+                                seq_len=seq_len,
+                            )
+                    payload.update(mm_payload)
+                pooler_output.append(flatten_payload(payload))
 
         model_runner_output = OmniModelRunnerOutput(
             req_ids=req_ids_output_copy,
@@ -871,7 +932,7 @@ class NPUARModelRunner(OmniNPUModelRunner):
             sampled_token_ids=valid_sampled_token_ids,
             logprobs=logprobs_lists,
             prompt_logprobs_dict=prompt_logprobs_dict,
-            pooler_output=(pooler_output if self.vllm_config.model_config.engine_output_type != "text" else None),
+            pooler_output=(pooler_output if engine_output_type != "text" and needs_pooler_payload else None),
             kv_connector_output=kv_connector_output,
         )
         model_runner_output.kv_extracted_req_ids = kv_extracted_req_ids
