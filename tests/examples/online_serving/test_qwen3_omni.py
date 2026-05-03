@@ -21,7 +21,7 @@ from tests.examples.helpers import (
 from tests.helpers.mark import hardware_test
 from tests.helpers.media import convert_audio_file_to_text, cosine_similarity_text
 from tests.helpers.runtime import OmniServerParams
-from tests.helpers.stage_config import QWEN3_OMNI_MOE_DEPLOY
+from tests.helpers.stage_config import QWEN3_OMNI_MOE_DEPLOY, modify_stage_config
 
 pytestmark = [pytest.mark.full_model, pytest.mark.example, pytest.mark.omni]
 
@@ -30,6 +30,16 @@ models = ["Qwen/Qwen3-Omni-30B-A3B-Instruct"]
 
 stage_configs = [QWEN3_OMNI_MOE_DEPLOY]
 
+# Streaming tests check the last audio chunk's ASR output.  Limit the thinker's
+# max_tokens so the full response fits in a single streaming audio chunk,
+# matching the behavior of the removed qwen3_omni_moe CI overlay.
+_STREAM_CI_DEPLOY = modify_stage_config(
+    QWEN3_OMNI_MOE_DEPLOY,
+    updates={"stages": {0: {"default_sampling_params.max_tokens": 128}}},
+)
+streaming_test_params = [
+    OmniServerParams(model=model, port=8091, stage_config_path=_STREAM_CI_DEPLOY) for model in models
+]
 
 example_dir = str(Path(__file__).parent.parent.parent.parent / "examples" / "online_serving")
 # Create parameter combinations for model and stage config
@@ -190,7 +200,7 @@ def test_modality_control_003(omni_server) -> None:
 
 
 @hardware_test(res={"cuda": "H100", "rocm": "MI325"}, num_cards=2)
-@pytest.mark.parametrize("omni_server", test_params, indirect=True)
+@pytest.mark.parametrize("omni_server", streaming_test_params, indirect=True)
 def test_stream_001(omni_server) -> None:
     command = common_args + [
         "--model",

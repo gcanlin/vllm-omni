@@ -1221,8 +1221,8 @@ class TestBaseConfigInheritance:
         deploy = load_deploy_config(overlay)
         # max_num_batched_tokens goes into engine_extras (not a StageDeployConfig field)
         assert deploy.stages[2].engine_extras.get("max_num_batched_tokens") == 1000000
-        # Rest inherited - max_num_seqs is a StageDeployConfig field with default 64
-        assert deploy.stages[0].max_num_seqs == 64
+        # max_num_seqs is in engine_extras (no longer a direct StageDeployConfig field)
+        assert deploy.stages[0].engine_extras.get("max_num_seqs") == 64
 
 
 class TestPlatformOverrides:
@@ -1305,7 +1305,7 @@ class TestPlatformOverrides:
         deploy = _apply_platform_overrides(deploy, platform="rocm")
         # Both base's enforce_eager and overlay's max_num_seqs should apply.
         assert deploy.stages[0].engine_extras.get("enforce_eager") is True
-        assert deploy.stages[0].max_num_seqs == 1
+        assert deploy.stages[0].engine_extras.get("max_num_seqs") == 1
         # Inherited stage default not touched by overlay platforms section.
         assert deploy.stages[0].engine_extras.get("gpu_memory_utilization") == 0.9
 
