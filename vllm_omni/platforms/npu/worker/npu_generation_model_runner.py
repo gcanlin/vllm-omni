@@ -91,7 +91,7 @@ class NPUGenerationModelRunner(OmniNPUModelRunner):
         # scheduler_output in engine core process.
         # TODO(Ronald1995): deepcopy is expensive when there is a large
         # number of requests, optimize it later.
-        if ((
+        if (
             self.use_async_scheduling and self.num_spec_tokens and self._draft_token_ids is None  # type: ignore[has-type]
         ) or (
             # NOTE: This branch specifically triggers a deepcopy during the prefill phase
@@ -102,7 +102,7 @@ class NPUGenerationModelRunner(OmniNPUModelRunner):
             and self.supports_mm_inputs
             and get_pp_group().is_first_rank
             and not self.model_config.is_encoder_decoder
-        )):
+        ):
             scheduler_output = deepcopy(scheduler_output)
 
         if has_kv_transfer_group():
@@ -346,9 +346,7 @@ class NPUGenerationModelRunner(OmniNPUModelRunner):
             ),
             self.maybe_get_kv_connector_output(
                 scheduler_output,
-                **(
-                    {"defer_finalize": not clear_kv_metadata}
-                ),
+                **({"defer_finalize": not clear_kv_metadata}),
             ) as kv_connector_output,
         ):
             #  -------------------------------------- Omni-new -------------------------------------------------
@@ -808,13 +806,12 @@ class NPUGenerationModelRunner(OmniNPUModelRunner):
                 batch_descriptor=batch_desc,
                 model_instance=self.model,
             ):
-                outputs = self._model_forward(
-                    num_tokens_padded,
-                    input_ids,
-                    positions,
-                    intermediate_tensors,
-                    inputs_embeds,
-                    **model_kwargs,
+                outputs = self.model(
+                    input_ids=input_ids,
+                    positions=positions,
+                    intermediate_tensors=intermediate_tensors,
+                    inputs_embeds=inputs_embeds,
+                    **model_kwargs,  # Omni-specific
                 )
             if self.use_aux_hidden_state_outputs:
                 hidden_states, _ = outputs

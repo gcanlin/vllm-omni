@@ -307,14 +307,14 @@ class OmniNPUModelRunner(OmniGPUModelRunner, NPUModelRunner):
                         self.text_step.gpu[:num_tokens_padded_talker_mtp],
                     )
                     self.compilation_config.cache_dir = None
-                # ---------------------------------------Omni-new----------------------------------------------
-                outputs = self._model_forward(
-                    num_tokens_padded,
-                    input_ids,
-                    positions,
-                    intermediate_tensors,
-                    inputs_embeds,
+                # Call self.model() directly (like GPU) to avoid make_omni_output during dummy_run
+                outputs = self.model(
+                    input_ids=input_ids,
+                    positions=positions,
+                    intermediate_tensors=intermediate_tensors,
+                    inputs_embeds=inputs_embeds,
                 )
+                # ---------------------------------------Omni-new----------------------------------------------
             if self.use_aux_hidden_state_outputs:
                 hidden_states, _ = outputs
             else:
