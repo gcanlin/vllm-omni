@@ -39,6 +39,7 @@ from vllm_ascend.worker.model_runner_v1 import graph_capture
 from vllm_ascend.ops.rotary_embedding import update_cos_sin
 from vllm_ascend.utils import enable_sp, global_stream
 
+from vllm_omni.data_entry_keys import flatten_payload
 from vllm_omni.distributed.omni_connectors.kv_transfer_manager import OmniKVTransferManager
 from vllm_omni.outputs import OmniModelRunnerOutput
 from vllm_omni.platforms.npu.worker.npu_model_runner import OmniNPUModelRunner
@@ -817,7 +818,7 @@ class NPUARModelRunner(OmniNPUModelRunner):
                 scheduler_output.num_scheduled_tokens,
             )
         else:
-            mm_cpu = build_mm_cpu(multimodal_outputs)
+            mm_cpu = build_mm_cpu(flatten_payload(multimodal_outputs))
 
         self._process_additional_information_updates(
             hidden_states,
@@ -862,7 +863,7 @@ class NPUARModelRunner(OmniNPUModelRunner):
                             seq_len=seq_len,
                         )
                 payload.update(mm_payload)
-            pooler_output.append(payload)
+            pooler_output.append(flatten_payload(payload))
 
         model_runner_output = OmniModelRunnerOutput(
             req_ids=req_ids_output_copy,
