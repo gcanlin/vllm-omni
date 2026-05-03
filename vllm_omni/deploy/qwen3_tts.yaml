@@ -32,6 +32,7 @@ stages:
     max_num_seqs: 10
     gpu_memory_utilization: 0.3
     async_scheduling: true
+    enforce_eager: true
     max_num_batched_tokens: 512
     max_model_len: 4096
     devices: "0"
