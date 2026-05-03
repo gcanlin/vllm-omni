@@ -93,9 +93,10 @@ class NPUARModelRunner(OmniNPUModelRunner):
             return super()._make_buffer(*size, dtype=dtype, numpy=numpy)
 
     #  -------------------------------------- Omni-new -------------------------------------------------
-    def capture_model(self) -> None:
-        super().capture_model()
+    def capture_model(self) -> int:
+        npugraph_memory_bytes = super().capture_model()
         self._capture_talker_mtp_graphs()
+        return npugraph_memory_bytes
 
     def _capture_talker_mtp_graphs(self) -> None:
         if not self.has_talker_mtp or not isinstance(self.talker_mtp, ACLGraphWrapper):
