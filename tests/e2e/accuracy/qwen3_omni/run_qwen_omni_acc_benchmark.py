@@ -297,8 +297,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--daily-omni-input-mode", choices=("all", "visual", "audio"), default="all")
     p.add_argument(
         "--daily-extra-body-json",
-        default='{"modalities":["text"]}',
-        help="JSON merged into each chat request for Daily-Omni (default matches common L4 / text-output runs).",
+        default='{"modalities":["text"],"max_tokens":8192}',
+        help="JSON merged into each chat request for Daily-Omni. max_tokens:8192 gives the thinker "
+        "enough room to complete its reasoning trace before producing the final MCQ answer "
+        "(the production server default of 2048 can be insufficient for complex multimodal questions).",
     )
     p.add_argument(
         "--daily-omni-save-eval-items",

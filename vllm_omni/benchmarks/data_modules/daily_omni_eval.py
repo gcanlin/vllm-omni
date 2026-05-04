@@ -47,6 +47,11 @@ def extract_choice_letter_official(text: str | None) -> str | None:
         return None
     match = re.search(r"assistant\s*([\s\S]*)$", raw, flags=re.IGNORECASE)
     candidate = match.group(1).strip() if match else raw
+    # Strip <think>...</think> reasoning traces (Qwen3-Omni thinking model output) so we look
+    # only at the final answer, not option letters mentioned inside the thinking trace.
+    post_think = re.sub(r"<think>[\s\S]*?</think>", "", candidate, flags=re.IGNORECASE).strip()
+    if post_think:
+        candidate = post_think
     direct = re.match(r"(?i)^\s*([A-D])(?:[\s\.\):：]|$)", candidate)
     if direct:
         return direct.group(1).upper()
