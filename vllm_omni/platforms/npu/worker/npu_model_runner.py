@@ -360,6 +360,7 @@ class OmniNPUModelRunner(OmniGPUModelRunner, NPUModelRunner):
         3. Caches model output for multimodal results
         4. Handles NPU-specific post-forward logic (graph params update, SP all-gather)
         """
+        # Omni-specific: build and inject extra model kwargs
         model_kwargs_extra = self._build_model_kwargs_extra()
         assert self.model is not None
 
