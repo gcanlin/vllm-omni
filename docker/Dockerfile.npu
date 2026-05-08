@@ -109,7 +109,7 @@ RUN VLLM_TARGET_DEVICE="empty" python3 -m pip install -v -e /vllm-workspace/vllm
     python3 -m pip cache purge
 
 # Install vllm-ascend
-ARG SOC_VERSION="ascend910_9391"
+ARG SOC_VERSION="ascend910b1"
 ENV DEBIAN_FRONTEND=noninteractive
 ENV SOC_VERSION=$SOC_VERSION \
     TASK_QUEUE_ENABLE=1 \
