@@ -88,7 +88,6 @@ steps:
     commands:
       - |
         timeout 20m bash -c '
-        
           export LD_LIBRARY_PATH=/usr/local/lib:$$LD_LIBRARY_PATH
           export VLLM_LOGGING_LEVEL=DEBUG
           export VLLM_ALLOW_LONG_MAX_MODEL_LEN="1"
