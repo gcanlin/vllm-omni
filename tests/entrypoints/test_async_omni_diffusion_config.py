@@ -4,8 +4,8 @@
 import pytest
 from vllm.utils.argparse_utils import FlexibleArgumentParser
 
-from vllm_omni.diffusion.data import AttentionConfig
 from vllm_omni.config.stage_config import deploy_override_field_names
+from vllm_omni.diffusion.data import AttentionConfig
 from vllm_omni.engine.async_omni_engine import AsyncOmniEngine
 from vllm_omni.entrypoints.cli.serve import OmniServeCommand, _create_default_diffusion_stage_cfg
 
@@ -175,6 +175,8 @@ def test_default_stage_config_rejects_conflicting_diffusion_attention_inputs():
                 },
             }
         )
+
+
 def test_default_stage_config_engine_args():
     """Ensure default diffusion-stage builder sets and propagates engine_args."""
     stage_cfg = AsyncOmniEngine._create_default_diffusion_stage_cfg(

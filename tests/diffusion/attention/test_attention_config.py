@@ -95,10 +95,10 @@ class TestAttentionConfig:
                 "cross": AttentionSpec(backend="SAGE_ATTN"),
             },
         )
-        spec = config.resolve(role="self")
+        spec, _ = config.resolve_with_source(role="self")
         assert spec.backend == "SPARSE_BLOCK"
 
-        spec = config.resolve(role="cross")
+        spec, _ = config.resolve_with_source(role="cross")
         assert spec.backend == "SAGE_ATTN"
 
     def test_resolve_with_source_reports_match_origin(self):
@@ -133,7 +133,7 @@ class TestAttentionConfig:
             },
         )
         # "ltx2.audio_to_video" falls back to category "cross"
-        spec = config.resolve(role="ltx2.audio_to_video", role_category="cross")
+        spec, _ = config.resolve_with_source(role="ltx2.audio_to_video", role_category="cross")
         assert spec.backend == "SAGE_ATTN"
 
     def test_resolve_exact_overrides_category(self):
@@ -144,22 +144,22 @@ class TestAttentionConfig:
             },
         )
         # Exact match wins over category
-        spec = config.resolve(role="ltx2.audio_to_video", role_category="cross")
+        spec, _ = config.resolve_with_source(role="ltx2.audio_to_video", role_category="cross")
         assert spec.backend == "FLASH_ATTN"
 
     def test_resolve_default_fallback(self):
         config = AttentionConfig(
             default=AttentionSpec(backend="FLASH_ATTN"),
         )
-        spec = config.resolve(role="self")
+        spec, _ = config.resolve_with_source(role="self")
         assert spec.backend == "FLASH_ATTN"
 
-        spec = config.resolve(role="joint")
+        spec, _ = config.resolve_with_source(role="joint")
         assert spec.backend == "FLASH_ATTN"
 
     def test_resolve_returns_none_when_empty(self):
         config = AttentionConfig()
-        spec = config.resolve(role="self")
+        spec, _ = config.resolve_with_source(role="self")
         assert spec is None
 
     def test_resolve_no_category_no_default(self):
@@ -167,7 +167,7 @@ class TestAttentionConfig:
             per_role={"self": AttentionSpec(backend="SPARSE_BLOCK")},
         )
         # Unknown role with no category and no default
-        spec = config.resolve(role="joint")
+        spec, _ = config.resolve_with_source(role="joint")
         assert spec is None
 
     def test_full_ltx2_scenario(self):
@@ -183,24 +183,24 @@ class TestAttentionConfig:
         )
 
         # video self → exact match "self"
-        assert config.resolve("self").backend == "SPARSE_BLOCK"
+        assert config.resolve_with_source("self")[0].backend == "SPARSE_BLOCK"
 
         # audio self → exact match "ltx2.audio_self"
-        assert config.resolve("ltx2.audio_self", "self").backend == "FLASH_ATTN"
+        assert config.resolve_with_source("ltx2.audio_self", "self")[0].backend == "FLASH_ATTN"
 
         # video-text cross → exact match "cross"
-        assert config.resolve("cross").backend == "SAGE_ATTN"
+        assert config.resolve_with_source("cross")[0].backend == "SAGE_ATTN"
 
         # audio-text cross → category fallback to "cross"
-        assert config.resolve("ltx2.audio_text_cross", "cross").backend == "SAGE_ATTN"
+        assert config.resolve_with_source("ltx2.audio_text_cross", "cross")[0].backend == "SAGE_ATTN"
 
         # audio-to-video → exact match
-        spec = config.resolve("ltx2.audio_to_video", "cross")
+        spec, _ = config.resolve_with_source("ltx2.audio_to_video", "cross")
         assert spec.backend == "FLASH_ATTN"
         assert spec.extra == {"causal_window": 64}
 
         # video-to-audio → category fallback to "cross"
-        assert config.resolve("ltx2.video_to_audio", "cross").backend == "SAGE_ATTN"
+        assert config.resolve_with_source("ltx2.video_to_audio", "cross")[0].backend == "SAGE_ATTN"
 
 
 class TestAttentionMetadataExtra:

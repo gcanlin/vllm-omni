@@ -979,18 +979,6 @@ class AttentionConfig:
         for child_key, child_value in node_dict.items():
             cls._flatten_per_role_entry([*path, child_key], child_value, normalized)
 
-    def resolve(
-        self,
-        role: str = "self",
-        role_category: str | None = None,
-    ) -> AttentionSpec | None:
-        """Resolve the AttentionSpec for a given role with category fallback.
-
-        Returns None if no spec is configured (caller should fall back to platform default).
-        """
-        spec, _ = self.resolve_with_source(role=role, role_category=role_category)
-        return spec
-
     def resolve_with_source(
         self,
         role: str = "self",
