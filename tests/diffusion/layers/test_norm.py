@@ -15,11 +15,19 @@ def _force_cpu_platform(monkeypatch):
     CustomOp.dispatch_forward() selects the backend by platform (e.g. forward_npu
     on NPU machines), not by tensor device. CPU test tensors crash with
     NotImplementedError on NPU. Set the platform to UnspecifiedOmniPlatform
-    so that forward_native is used."""
+    so that forward_native is used.
+
+    custom_op.py does `from vllm_omni.platforms import current_omni_platform`,
+    which creates a separate name binding in the custom_op module — patching
+    only `vllm_omni.platforms.current_omni_platform` would miss it, so we
+    patch both."""
     import vllm_omni.platforms as platforms
+    from vllm_omni.diffusion.layers import custom_op
     from vllm_omni.platforms.interface import UnspecifiedOmniPlatform
 
-    monkeypatch.setattr(platforms, "current_omni_platform", UnspecifiedOmniPlatform())
+    unspecified = UnspecifiedOmniPlatform()
+    monkeypatch.setattr(platforms, "current_omni_platform", unspecified)
+    monkeypatch.setattr(custom_op, "current_omni_platform", unspecified)
 
 
 # ── Import tests ──
