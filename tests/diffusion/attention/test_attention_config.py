@@ -13,7 +13,9 @@ Tests cover:
 from types import SimpleNamespace
 
 import pytest
+import torch
 
+import vllm_omni.diffusion.attention.layer as layer_mod
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.layer import Attention
 from vllm_omni.diffusion.config import (
@@ -24,6 +26,7 @@ from vllm_omni.diffusion.config import (
 from vllm_omni.diffusion.data import (
     AttentionConfig,
     AttentionSpec,
+    OmniDiffusionConfig,
     build_attention_config,
     parse_attention_config,
 )
@@ -209,16 +212,12 @@ class TestAttentionMetadataExtra:
         assert meta.extra == {}
 
     def test_extra_passthrough(self):
-        import torch
-
         block_mask = torch.ones(4, 4)
         meta = AttentionMetadata(extra={"block_mask": block_mask, "kv_indices": [0, 1, 2]})
         assert torch.equal(meta.extra["block_mask"], block_mask)
         assert meta.extra["kv_indices"] == [0, 1, 2]
 
     def test_extra_does_not_affect_existing_fields(self):
-        import torch
-
         mask = torch.ones(2, 8)
         meta = AttentionMetadata(attn_mask=mask, extra={"foo": "bar"})
         assert meta.attn_mask is mask
@@ -285,23 +284,17 @@ class TestOmniDiffusionConfigAttentionParsing:
     """Test OmniDiffusionConfig attention shorthand and structured config."""
 
     def test_diffusion_attention_backend_sets_default(self):
-        from vllm_omni.diffusion.data import OmniDiffusionConfig
-
         config = OmniDiffusionConfig.from_kwargs(diffusion_attention_backend="SAGE_ATTN")
         assert isinstance(config.attention_config, AttentionConfig)
         assert config.attention_config.default is not None
         assert config.attention_config.default.backend == "SAGE_ATTN"
 
     def test_diffusion_attention_backend_auto_means_platform_default(self):
-        from vllm_omni.diffusion.data import OmniDiffusionConfig
-
         config = OmniDiffusionConfig.from_kwargs(diffusion_attention_backend="auto")
         assert isinstance(config.attention_config, AttentionConfig)
         assert config.attention_config.default is None
 
     def test_diffusion_attention_backend_and_default_are_mutually_exclusive(self):
-        from vllm_omni.diffusion.data import OmniDiffusionConfig
-
         with pytest.raises(ValueError):
             OmniDiffusionConfig.from_kwargs(
                 diffusion_attention_backend="SAGE_ATTN",
@@ -309,8 +302,6 @@ class TestOmniDiffusionConfigAttentionParsing:
             )
 
     def test_dict_diffusion_attention_config(self):
-        from vllm_omni.diffusion.data import OmniDiffusionConfig
-
         config = OmniDiffusionConfig(
             attention_config={
                 "default": {"backend": "FLASH_ATTN"},
@@ -321,8 +312,6 @@ class TestOmniDiffusionConfigAttentionParsing:
         assert config.attention_config.per_role["self"].backend == "SPARSE_BLOCK"
 
     def test_legacy_attention_config_name_maps_in_from_kwargs(self):
-        from vllm_omni.diffusion.data import OmniDiffusionConfig
-
         config = OmniDiffusionConfig.from_kwargs(
             attention_config={
                 "default": {"backend": "FLASH_ATTN"},
@@ -331,8 +320,6 @@ class TestOmniDiffusionConfigAttentionParsing:
         assert config.attention_config.default.backend == "FLASH_ATTN"
 
     def test_no_attention_config_defaults_to_empty(self):
-        from vllm_omni.diffusion.data import OmniDiffusionConfig
-
         config = OmniDiffusionConfig()
         assert isinstance(config.attention_config, AttentionConfig)
         assert config.attention_config.default is None
@@ -362,8 +349,6 @@ class TestCurrentDiffusionConfig:
 
 class TestAttentionInitUsesCurrentDiffusionConfig:
     def test_attention_init_uses_current_diffusion_config_without_forward_context(self, monkeypatch):
-        import vllm_omni.diffusion.attention.layer as layer_mod
-
         class _FakeAttentionImpl:
             def __init__(self, **kwargs):
                 self.kwargs = kwargs
