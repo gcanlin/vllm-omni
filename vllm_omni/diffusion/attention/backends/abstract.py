@@ -84,7 +84,7 @@ class AttentionMetadata:
     # Runtime metadata used by selective KV-cache quantization gating.
     denoise_step_idx: int | None = None
     layer_idx: int | None = None
-    attn_kind: str | None = None  # "self-attention" | "cross-attention"
+    attn_kind: str | None = None  # "self-attn" | "cross-attn"
 
 
 T = TypeVar("T", bound=AttentionMetadata)
