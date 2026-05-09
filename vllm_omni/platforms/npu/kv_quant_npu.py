@@ -69,7 +69,9 @@ def fp8_rotate_quant_fa(
     """Run NPU fused attention with dynamic FP8 Q/K/V and optional QuaRot preprocess.
 
     Args:
-        query, key, value: Tensors in ``layout`` order (default BNSD: batch, heads, seq, dim).
+        query: Query tensor in ``layout`` order (default BNSD: batch, heads, seq, dim).
+        key: Key tensor in ``layout`` order (default BNSD: batch, heads, seq, dim).
+        value: Value tensor in ``layout`` order (default BNSD: batch, heads, seq, dim).
         layout: ``BNSD`` or ``BSND`` for ``npu_fused_infer_attention_score_v2``.
         softmax_scale: If None, uses ``1 / sqrt(head_dim)``.
 
