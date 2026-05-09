@@ -207,7 +207,7 @@ class FlashAttentionImpl(AttentionImpl):
         """NPU attention implementation using mindiesd."""
 
         # case1: cross-attention, normal fa
-        if attn_metadata.attn_kind == "cross-attn":
+        if attn_metadata and attn_metadata.attn_kind == "cross-attn":
             return self.forward_fa_npu(query, key, value, attn_metadata, "BSND")
         # case2: dynamic fa quant
         kv_cache_dtype = attn_metadata.kv_cache_dtype if attn_metadata else None
@@ -223,7 +223,7 @@ class FlashAttentionImpl(AttentionImpl):
         value: torch.Tensor,
         attn_metadata: AttentionMetadata = None,
     ) -> torch.Tensor:
-        from vllm_omni.quantization.kv_quant_npu import fp8_rotate_quant_fa
+        from vllm_omni.platforms.npu.kv_quant_npu import fp8_rotate_quant_fa
 
         # Models pass (B, S, H, D); NPU fused op expects (B, N, S, D).
         out = fp8_rotate_quant_fa(

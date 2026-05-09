@@ -15,8 +15,9 @@ from functools import lru_cache
 
 import torch
 
-# Hadamard rotation matrix for QuaRot-style preprocessing (head_dim must match).
-_ROT_MATRIXS: dict[tuple[torch.device, int], torch.Tensor] = {}
+# Hadamard rotation matrix for QuaRot-style preprocessing
+# keyed by (device, dtype, head_dim) to avoid matmul dtype mismatch.
+_ROT_MATRIXS: dict[tuple[torch.device, torch.dtype, int], torch.Tensor] = {}
 _ROT_MATRIX_LOCK = threading.Lock()
 
 _FP8_KV_LABELS = frozenset({"fp8"})
@@ -41,12 +42,18 @@ def _load_quant_ops():
     return torch_npu, fa_block_quant_preprocess, QuaRotMode, create_rot
 
 
-def _get_rot_matrix(device: torch.device, head_dim: int, qua_rot_mode, create_rot) -> torch.Tensor:
-    key = (device, head_dim)
+def _get_rot_matrix(
+    device: torch.device,
+    dtype: torch.dtype,
+    head_dim: int,
+    qua_rot_mode,
+    create_rot,
+) -> torch.Tensor:
+    key = (device, dtype, head_dim)
     with _ROT_MATRIX_LOCK:
         rot = _ROT_MATRIXS.get(key)
         if rot is None:
-            rot = create_rot(qua_rot_mode.HADAMARD, head_dim, seed=425500).to(device)
+            rot = create_rot(qua_rot_mode.HADAMARD, head_dim, seed=425500).to(device=device, dtype=dtype)
             _ROT_MATRIXS[key] = rot
     return rot
 
@@ -81,7 +88,7 @@ def fp8_rotate_quant_fa(
     else:
         raise ValueError(f"fp8_rotate_quant_fa: unsupported layout {layout!r}, expected BNSD or BSND")
 
-    rot = _get_rot_matrix(device, d, qua_rot_mode, create_rot)
+    rot = _get_rot_matrix(device, query.dtype, d, qua_rot_mode, create_rot)
     q_f = torch.matmul(query, rot)
     k_f = torch.matmul(key, rot)
 
@@ -100,7 +107,7 @@ def fp8_rotate_quant_fa(
         softmax_scale=scale,
         pre_tokens=2147483647,  # INT32_MAX: no left-context truncation.
         next_tokens=2147483647,  # INT32_MAX: no right-context truncation.
-        query_quant_mode=7,  # MindIE NPU mode id for block FP8 dequant path.
+        query_quant_mode=7,  # NPU mode id for block FP8 dequant path.
         key_quant_mode=7,  # Same quant mode as query branch.
         value_quant_mode=7,  # Same quant mode as key/query branches.
         dequant_scale_query=q_scale,

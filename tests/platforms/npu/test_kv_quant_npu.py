@@ -10,7 +10,7 @@ import pytest
 import torch
 
 from vllm_omni.platforms import current_omni_platform
-from vllm_omni.quantization import kv_quant_npu
+from vllm_omni.platforms.npu import kv_quant_npu
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion]
 
@@ -28,7 +28,7 @@ class TestKVQuantNPUUnit:
     def clear_rot_cache(self):
         kv_quant_npu._ROT_MATRIXS.clear()
 
-    def test_get_rot_matrix_caches_by_device_and_head_dim(self) -> None:
+    def test_get_rot_matrix_caches_by_device_dtype_and_head_dim(self) -> None:
         calls = {"count": 0}
 
         class FakeQuaRotMode:
@@ -41,13 +41,15 @@ class TestKVQuantNPUUnit:
             return torch.eye(head_dim, dtype=torch.float32)
 
         device = torch.device("cpu")
-        rot_1 = kv_quant_npu._get_rot_matrix(device, 8, FakeQuaRotMode, fake_create_rot)
-        rot_2 = kv_quant_npu._get_rot_matrix(device, 8, FakeQuaRotMode, fake_create_rot)
-        rot_3 = kv_quant_npu._get_rot_matrix(device, 16, FakeQuaRotMode, fake_create_rot)
+        rot_1 = kv_quant_npu._get_rot_matrix(device, torch.float16, 8, FakeQuaRotMode, fake_create_rot)
+        rot_2 = kv_quant_npu._get_rot_matrix(device, torch.float16, 8, FakeQuaRotMode, fake_create_rot)
+        rot_3 = kv_quant_npu._get_rot_matrix(device, torch.bfloat16, 8, FakeQuaRotMode, fake_create_rot)
+        rot_4 = kv_quant_npu._get_rot_matrix(device, torch.float16, 16, FakeQuaRotMode, fake_create_rot)
 
-        assert calls["count"] == 2
+        assert calls["count"] == 3
         assert rot_1 is rot_2
-        assert rot_3.shape == (16, 16)
+        assert rot_3.dtype == torch.bfloat16
+        assert rot_4.shape == (16, 16)
 
     @pytest.fixture
     def fake_quant_ops(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
