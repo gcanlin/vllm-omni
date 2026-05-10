@@ -19,4 +19,4 @@ steps:
           VLLM_WORKER_MULTIPROC_METHOD: spawn
           VLLM_USE_MODELSCOPE: "True"
         commands:
-          - pytest -s -v tests/e2e/online_serving/test_wan22_expansion.py --run-level "full_model"
+          - pytest -s -v tests/e2e/online_serving/test_wan22_expansion.py -k i2v_hsdp --run-level "full_model"

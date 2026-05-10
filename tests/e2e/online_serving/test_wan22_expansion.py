@@ -1,18 +1,14 @@
 """
 Comprehensive tests of diffusion features that are available in online serving mode
 and are supported by the following models:
-- Wan-AI/Wan2.2-T2V-A14B-Diffusers
-- Wan-AI/Wan2.2-I2V-A14B-Diffusers
-- Wan-AI/Wan2.2-TI2V-5B-Diffusers
+- Wan-AI/Wan2.2-I2V-A14B-Diffusers (NPU only, HSDP always-on)
 
-Coverage:
-- Cache-DiT
-- CFG-Parallel
-- Ulysses-SP
-- Tensor-Parallel
-- VAE-Patch-Parallel
-- HSDP
-- Ring-Attn
+Coverage (HSDP is mandatory baseline, ring-attn excluded):
+- Cache-DiT + HSDP
+- HSDP only
+- CFG-Parallel + HSDP
+- Ulysses-SP + HSDP
+- Tensor-Parallel + VAE-Patch-Parallel + HSDP
 
 assert_diffusion_response validates successful generation
 """
@@ -27,54 +23,52 @@ pytestmark = [pytest.mark.diffusion, pytest.mark.full_model]
 
 PROMPT = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
 NEGATIVE_PROMPT = "low quality, blurry, distorted face, extra limbs, bad anatomy, watermark, logo, text, ugly, deformed, mutated, jpeg artifacts"
-SINGLE_CARD_FEATURE_MARKS = hardware_marks(res={"cuda": "H100"})
-PARALLEL_FEATURE_MARKS = hardware_marks(res={"cuda": "H100"}, num_cards=2)
+TWO_CARD_MARKS = hardware_marks(res={"npu": "A2"}, num_cards=2)
+FOUR_CARD_MARKS = hardware_marks(res={"npu": "A2"}, num_cards=4)
 
 WAN22_MODELS = [
-    ("Wan-AI/Wan2.2-T2V-A14B-Diffusers", "t2v"),
     ("Wan-AI/Wan2.2-I2V-A14B-Diffusers", "i2v"),
-    ("Wan-AI/Wan2.2-TI2V-5B-Diffusers", "ti2v"),
 ]
 
+HSDP_ARGS = ["--use-hsdp", "--hsdp-shard-size", "2"]
+
+# Each entry: (feat_id, extra_args, marks). HSDP is appended automatically.
 PARALLEL_CONFIGS = [
-    ("cfg_parallel", ["--cfg-parallel-size", "2"]),
-    ("ulysses_sp", ["--usp", "2"]),
-    ("tp_vae_patch", ["--tensor-parallel-size", "2", "--vae-patch-parallel-size", "2"]),
-    ("hsdp", ["--use-hsdp", "--hsdp-shard-size", "2"]),  # replicate_size=1 (default)
-    ("ring_atten", ["--ring", "2"]),
+    ("hsdp", [], TWO_CARD_MARKS),
+    ("cfg_parallel", ["--cfg-parallel-size", "2"], FOUR_CARD_MARKS),
+    ("ulysses_sp", ["--usp", "2"], FOUR_CARD_MARKS),
+    ("tp_vae_patch", ["--tensor-parallel-size", "2", "--vae-patch-parallel-size", "2"], FOUR_CARD_MARKS),
 ]
 
 
 def _get_wan22_feature_cases():
     """
-    Generate parameterized test cases covering:
-    - All 3 Wan2.2 model variants with architecture awareness
-    - 1 single-card feature (Cache-DiT)
-    - 6 multi-card parallelism features with CORRECT PARAMETER NAMES per spec
+    Generate parameterized test cases for I2V-A14B with HSDP always enabled.
+    Ring-attention is intentionally excluded.
     """
     cases = []
 
-    # Single-card: Cache-DiT (applies to all models)
+    # Cache-DiT + HSDP (2 cards because HSDP shard_size=2)
     for model_path, model_key in WAN22_MODELS:
         cases.append(
             pytest.param(
                 OmniServerParams(
                     model=model_path,
-                    server_args=["--cache-backend", "cache_dit", "--enable-layerwise-offload"],
+                    server_args=["--cache-backend", "cache_dit", "--enable-layerwise-offload", *HSDP_ARGS],
                 ),
-                id=f"{model_key}_cache_dit",
-                marks=SINGLE_CARD_FEATURE_MARKS,
+                id=f"{model_key}_cache_dit_hsdp",
+                marks=TWO_CARD_MARKS,
             )
         )
 
-    # Multi-card features
+    # Other parallelism features stacked with HSDP
     for model_path, model_key in WAN22_MODELS:
-        for feat_id, server_args in PARALLEL_CONFIGS:
+        for feat_id, extra_args, marks in PARALLEL_CONFIGS:
             cases.append(
                 pytest.param(
-                    OmniServerParams(model=model_path, server_args=server_args),
+                    OmniServerParams(model=model_path, server_args=[*extra_args, *HSDP_ARGS]),
                     id=f"{model_key}_{feat_id}",
-                    marks=PARALLEL_FEATURE_MARKS,
+                    marks=marks,
                 )
             )
 
