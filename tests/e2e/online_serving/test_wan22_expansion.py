@@ -1,14 +1,16 @@
 """
-Comprehensive tests of diffusion features that are available in online serving mode
-and are supported by the following models:
-- Wan-AI/Wan2.2-I2V-A14B-Diffusers (NPU only, HSDP always-on)
+Comprehensive tests of diffusion features that are available in online serving mode.
 
-Coverage (HSDP is mandatory baseline, ring-attn excluded):
-- Cache-DiT + HSDP
-- HSDP only
-- CFG-Parallel + HSDP
-- Ulysses-SP + HSDP
-- Tensor-Parallel + VAE-Patch-Parallel + HSDP
+CUDA coverage (3 models × 6 features):
+- Wan-AI/Wan2.2-T2V-A14B-Diffusers
+- Wan-AI/Wan2.2-I2V-A14B-Diffusers
+- Wan-AI/Wan2.2-TI2V-5B-Diffusers
+Features: Cache-DiT, CFG-Parallel, Ulysses-SP, Tensor-Parallel + VAE-Patch-Parallel,
+HSDP, Ring-Attn.
+
+NPU coverage (Wan-AI/Wan2.2-I2V-A14B-Diffusers only):
+HSDP is always-on (NPU memory is tight) and stacked onto every other feature.
+Ring-Attn is excluded.
 
 assert_diffusion_response validates successful generation
 """
@@ -23,51 +25,90 @@ pytestmark = [pytest.mark.diffusion, pytest.mark.full_model]
 
 PROMPT = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
 NEGATIVE_PROMPT = "low quality, blurry, distorted face, extra limbs, bad anatomy, watermark, logo, text, ugly, deformed, mutated, jpeg artifacts"
-TWO_CARD_MARKS = hardware_marks(res={"npu": "A2"}, num_cards=2)
-FOUR_CARD_MARKS = hardware_marks(res={"npu": "A2"}, num_cards=4)
+
+# CUDA marks (original matrix, unchanged)
+CUDA_SINGLE_CARD_MARKS = hardware_marks(res={"cuda": "H100"})
+CUDA_PARALLEL_MARKS = hardware_marks(res={"cuda": "H100"}, num_cards=2)
+
+# NPU marks (HSDP always-on; parallel dims share the same 2-rank world, not multiplicative)
+NPU_TWO_CARD_MARKS = hardware_marks(res={"npu": "A2"}, num_cards=2)
 
 WAN22_MODELS = [
+    ("Wan-AI/Wan2.2-T2V-A14B-Diffusers", "t2v"),
     ("Wan-AI/Wan2.2-I2V-A14B-Diffusers", "i2v"),
+    ("Wan-AI/Wan2.2-TI2V-5B-Diffusers", "ti2v"),
 ]
+NPU_MODELS = [("Wan-AI/Wan2.2-I2V-A14B-Diffusers", "i2v")]
 
+CACHE_DIT_ARGS = ["--cache-backend", "cache_dit", "--enable-layerwise-offload"]
 HSDP_ARGS = ["--use-hsdp", "--hsdp-shard-size", "2"]
 
-# Each entry: (feat_id, extra_args, marks). HSDP is appended automatically.
 PARALLEL_CONFIGS = [
-    ("hsdp", [], TWO_CARD_MARKS),
-    ("cfg_parallel", ["--cfg-parallel-size", "2"], FOUR_CARD_MARKS),
-    ("ulysses_sp", ["--usp", "2"], FOUR_CARD_MARKS),
-    ("tp_vae_patch", ["--tensor-parallel-size", "2", "--vae-patch-parallel-size", "2"], FOUR_CARD_MARKS),
+    ("cfg_parallel", ["--cfg-parallel-size", "2"]),
+    ("ulysses_sp", ["--usp", "2"]),
+    ("tp_vae_patch", ["--tensor-parallel-size", "2", "--vae-patch-parallel-size", "2"]),
+    ("hsdp", ["--use-hsdp", "--hsdp-shard-size", "2"]),  # replicate_size=1 (default)
+    ("ring_atten", ["--ring", "2"]),
+]
+
+# NPU: ring_atten excluded; HSDP gets appended to non-HSDP entries below.
+NPU_PARALLEL_CONFIGS = [
+    ("cfg_parallel_hsdp", ["--cfg-parallel-size", "2", *HSDP_ARGS], NPU_TWO_CARD_MARKS),
+    ("ulysses_sp_hsdp", ["--usp", "2", *HSDP_ARGS], NPU_TWO_CARD_MARKS),
+    (
+        "tp_vae_patch_hsdp",
+        ["--tensor-parallel-size", "2", "--vae-patch-parallel-size", "2", *HSDP_ARGS],
+        NPU_TWO_CARD_MARKS,
+    ),
+    ("hsdp", HSDP_ARGS, NPU_TWO_CARD_MARKS),
 ]
 
 
 def _get_wan22_feature_cases():
     """
-    Generate parameterized test cases for I2V-A14B with HSDP always enabled.
-    Ring-attention is intentionally excluded.
+    Generate parameterized test cases:
+    - CUDA: 3 models × (Cache-DiT + 5 parallel features), original matrix.
+    - NPU: I2V-A14B only, HSDP always-on, ring-attn excluded.
     """
     cases = []
 
-    # Cache-DiT + HSDP (2 cards because HSDP shard_size=2)
+    # ---- CUDA cases (unchanged) ----
     for model_path, model_key in WAN22_MODELS:
+        cases.append(
+            pytest.param(
+                OmniServerParams(model=model_path, server_args=CACHE_DIT_ARGS),
+                id=f"cuda_{model_key}_cache_dit",
+                marks=CUDA_SINGLE_CARD_MARKS,
+            )
+        )
+    for model_path, model_key in WAN22_MODELS:
+        for feat_id, server_args in PARALLEL_CONFIGS:
+            cases.append(
+                pytest.param(
+                    OmniServerParams(model=model_path, server_args=server_args),
+                    id=f"cuda_{model_key}_{feat_id}",
+                    marks=CUDA_PARALLEL_MARKS,
+                )
+            )
+
+    # ---- NPU cases (I2V-A14B, HSDP always-on, no ring-attn) ----
+    for model_path, model_key in NPU_MODELS:
         cases.append(
             pytest.param(
                 OmniServerParams(
                     model=model_path,
-                    server_args=["--cache-backend", "cache_dit", "--enable-layerwise-offload", *HSDP_ARGS],
+                    server_args=[*CACHE_DIT_ARGS, *HSDP_ARGS],
                 ),
-                id=f"{model_key}_cache_dit_hsdp",
-                marks=TWO_CARD_MARKS,
+                id=f"npu_{model_key}_cache_dit_hsdp",
+                marks=NPU_TWO_CARD_MARKS,
             )
         )
-
-    # Other parallelism features stacked with HSDP
-    for model_path, model_key in WAN22_MODELS:
-        for feat_id, extra_args, marks in PARALLEL_CONFIGS:
+    for model_path, model_key in NPU_MODELS:
+        for feat_id, server_args, marks in NPU_PARALLEL_CONFIGS:
             cases.append(
                 pytest.param(
-                    OmniServerParams(model=model_path, server_args=[*extra_args, *HSDP_ARGS]),
-                    id=f"{model_key}_{feat_id}",
+                    OmniServerParams(model=model_path, server_args=server_args),
+                    id=f"npu_{model_key}_{feat_id}",
                     marks=marks,
                 )
             )
