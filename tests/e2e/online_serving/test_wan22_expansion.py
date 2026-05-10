@@ -31,6 +31,7 @@ CUDA_SINGLE_CARD_MARKS = hardware_marks(res={"cuda": "H100"})
 CUDA_PARALLEL_MARKS = hardware_marks(res={"cuda": "H100"}, num_cards=2)
 
 # NPU marks (HSDP always-on; parallel dims share the same 2-rank world, not multiplicative)
+NPU_SINGLE_CARD_MARKS = hardware_marks(res={"npu": "A2"})
 NPU_TWO_CARD_MARKS = hardware_marks(res={"npu": "A2"}, num_cards=2)
 
 WAN22_MODELS = [
@@ -51,15 +52,12 @@ PARALLEL_CONFIGS = [
     ("ring_atten", ["--ring", "2"]),
 ]
 
-# NPU: ring_atten excluded; HSDP gets appended to non-HSDP entries below.
+# NPU: ring_atten excluded. HSDP is the default-on baseline, except for TP which is
+# mutually exclusive with HSDP (DiffusionParallelConfig validation) so it runs standalone.
 NPU_PARALLEL_CONFIGS = [
     ("cfg_parallel_hsdp", ["--cfg-parallel-size", "2", *HSDP_ARGS], NPU_TWO_CARD_MARKS),
     ("ulysses_sp_hsdp", ["--usp", "2", *HSDP_ARGS], NPU_TWO_CARD_MARKS),
-    (
-        "tp_vae_patch_hsdp",
-        ["--tensor-parallel-size", "2", "--vae-patch-parallel-size", "2", *HSDP_ARGS],
-        NPU_TWO_CARD_MARKS,
-    ),
+    ("tp_vae_patch", ["--tensor-parallel-size", "2", "--vae-patch-parallel-size", "2"], NPU_TWO_CARD_MARKS),
     ("hsdp", HSDP_ARGS, NPU_TWO_CARD_MARKS),
 ]
 
@@ -92,15 +90,28 @@ def _get_wan22_feature_cases():
             )
 
     # ---- NPU cases (I2V-A14B, HSDP always-on, no ring-attn) ----
+    # Cache-DiT + HSDP: drop --enable-layerwise-offload because HSDP + offload OOMs on NPU.
     for model_path, model_key in NPU_MODELS:
         cases.append(
             pytest.param(
                 OmniServerParams(
                     model=model_path,
-                    server_args=[*CACHE_DIT_ARGS, *HSDP_ARGS],
+                    server_args=["--cache-backend", "cache_dit", *HSDP_ARGS],
                 ),
                 id=f"npu_{model_key}_cache_dit_hsdp",
                 marks=NPU_TWO_CARD_MARKS,
+            )
+        )
+    # Layerwise offload standalone (single card, no HSDP — they're incompatible on NPU).
+    for model_path, model_key in NPU_MODELS:
+        cases.append(
+            pytest.param(
+                OmniServerParams(
+                    model=model_path,
+                    server_args=["--enable-layerwise-offload"],
+                ),
+                id=f"npu_{model_key}_layerwise_offload",
+                marks=NPU_SINGLE_CARD_MARKS,
             )
         )
     for model_path, model_key in NPU_MODELS:
