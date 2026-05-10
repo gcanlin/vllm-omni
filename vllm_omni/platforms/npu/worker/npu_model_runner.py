@@ -373,4 +373,3 @@ class OmniNPUModelRunner(OmniGPUModelRunner, NPUModelRunner):
             model_output = self._all_gather_hidden_states_and_aux(model_output)
 
         return model_output
-
