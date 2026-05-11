@@ -1,13 +1,13 @@
 steps:
   - group: ":card_index_dividers: Diffusion X2V Model Test"
     key: nightly-diffusion-x2v-group
-    depends_on: upload-nightly-pipeline-a3
+    depends_on: upload-nightly-pipeline
     if:
       build.pull_request.labels includes "npu-test"
     steps:
       - label: ":full_moon: Diffusion X2V · Function Test"
         agents:
-          queue: "ascend-a3"
+          queue: "ascend-a2b3"
           resource_class: "npu-2"
         image: "swr.cn-southwest-2.myhuaweicloud.com/modelfoundry/vllm-omni-ci-npu:${BUILDKITE_COMMIT}"
         plugins:
