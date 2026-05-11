@@ -661,7 +661,6 @@ class WanTransformerBlock(nn.Module):
         self_attn_metadata = AttentionMetadata(
             denoise_step_idx=denoise_step_idx,
             layer_idx=layer_idx,
-            attn_kind="self-attn",
             attn_mask=hidden_states_mask,
         )
         attn_output = self.attn1(norm_hidden_states, rotary_emb, self_attn_metadata)
@@ -672,7 +671,6 @@ class WanTransformerBlock(nn.Module):
         cross_attn_metadata = AttentionMetadata(
             denoise_step_idx=denoise_step_idx,
             layer_idx=layer_idx,
-            attn_kind="cross-attn",
             attn_mask=None,
         )
         attn_output = self.attn2(norm_hidden_states, encoder_hidden_states, cross_attn_metadata)

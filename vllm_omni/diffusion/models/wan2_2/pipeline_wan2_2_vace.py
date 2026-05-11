@@ -188,6 +188,8 @@ class Wan22VACEPipeline(Wan22Pipeline, SupportImageInput):
         vace_context: torch.Tensor | None,
         vace_context_scale: float,
     ) -> torch.Tensor:
+        if attention_kwargs is None:
+            attention_kwargs = {}
         with self.progress_bar(total=len(timesteps)) as pbar:
             for step_idx, t in enumerate(timesteps):
                 self._current_timestep = t

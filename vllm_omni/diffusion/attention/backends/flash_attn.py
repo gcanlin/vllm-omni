@@ -66,12 +66,14 @@ class FlashAttentionImpl(AttentionImpl):
         prefix: str = "",
         qkv_layout: str | None = None,
         backend_kwargs: dict | None = None,
+        role: str = "self",
         **extra_impl_args,
     ) -> None:
         self.num_heads = num_heads
         self.causal = causal
         self.softmax_scale = softmax_scale
         self.qkv_layout = qkv_layout
+        self.role = role
         if backend_kwargs:
             logger.warning("FlashAttentionImpl ignoring backend_kwargs: %s", list(backend_kwargs.keys()))
 
@@ -269,7 +271,7 @@ class FlashAttentionImpl(AttentionImpl):
         """NPU attention implementation using mindiesd."""
 
         # case1: cross-attention, normal fa
-        if attn_metadata and attn_metadata.attn_kind == "cross-attn":
+        if self.role == "cross":
             return self.forward_fa_npu(query, key, value, attn_metadata, layout="BSND")
         # case2: dynamic fa quant
         kv_cache_dtype = attn_metadata.kv_cache_dtype if attn_metadata else None

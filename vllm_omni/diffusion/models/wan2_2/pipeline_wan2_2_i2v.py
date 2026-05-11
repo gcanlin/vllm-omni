@@ -282,6 +282,8 @@ class Wan22I2VPipeline(
         condition: torch.Tensor,
         first_frame_mask: torch.Tensor,
     ) -> torch.Tensor:
+        if attention_kwargs is None:
+            attention_kwargs = {}
         with self.progress_bar(total=len(timesteps)) as pbar:
             for step_idx, t in enumerate(timesteps):
                 self._current_timestep = t
