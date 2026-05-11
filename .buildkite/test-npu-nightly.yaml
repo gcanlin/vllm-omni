@@ -14,8 +14,17 @@ steps:
           - kubernetes:
               podSpecPatch:
                 imagePullSecrets:
-                - name: swr-secret
+                  - name: swr-secret
+                containers:
+                  - name: container-0
+                    env:
+                      - name: HF_TOKEN
+                        valueFrom:
+                          secretKeyRef:
+                            name: hf-token-secret
+                            key: token
         env:
           VLLM_WORKER_MULTIPROC_METHOD: spawn
+          HF_HUB_OFFLINE: 1
         commands:
           - pytest -s -v tests/e2e/online_serving/test_wan22_expansion.py -k npu_i2v --run-level "full_model"
