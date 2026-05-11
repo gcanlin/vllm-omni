@@ -181,14 +181,12 @@ class FlashAttentionImpl(AttentionImpl):
             )
 
         attention_mask = attn_metadata.attn_mask if attn_metadata is not None else None
-        full_attn_spans = (
-            getattr(attn_metadata, "full_attn_spans", None) if attn_metadata is not None else None
-        )
+        full_attn_spans = attn_metadata.full_attn_spans if attn_metadata is not None else None
 
         # Try piecewise attention
         if full_attn_spans is not None:
             logger.debug("Using piecewise Flash Attention for mixed causal/full mask")
-            attn_func_wrapped = partial(
+            attn_func = partial(
                 FlashAttentionImpl._flash_wrapper,
                 attn_func=flash_attn_func,
             )
@@ -199,7 +197,7 @@ class FlashAttentionImpl(AttentionImpl):
                 value,
                 full_attn_spans,
                 self.softmax_scale,
-                attn_func_wrapped,
+                attn_func,
             )
 
         if attention_mask is not None and torch.any(~attention_mask):
