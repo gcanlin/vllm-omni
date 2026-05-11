@@ -272,13 +272,13 @@ class FlashAttentionImpl(AttentionImpl):
 
         # case1: cross-attention, normal fa
         if self.role == "cross":
-            return self.forward_fa_npu(query, key, value, attn_metadata, layout="BSND")
+            return self.forward_fa_npu(query, key, value, attn_metadata)
         # case2: dynamic fa quant
         kv_cache_dtype = attn_metadata.kv_cache_dtype if attn_metadata else None
         if kv_cache_dtype is not None:
             return self.forward_fa_quant_npu(query, key, value, attn_metadata)
         # other: normal fa
-        return self.forward_fa_npu(query, key, value, attn_metadata, layout=self.qkv_layout or "BNSD")
+        return self.forward_fa_npu(query, key, value, attn_metadata)
 
     def forward_fa_quant_npu(
         self,
@@ -289,12 +289,13 @@ class FlashAttentionImpl(AttentionImpl):
     ) -> torch.Tensor:
         from vllm_omni.platforms.npu.kv_quant_npu import fp8_rotate_quant_fa
 
+        layout = self.qkv_layout or "BNSD"
         # Models pass (B, S, H, D); NPU fused op expects (B, N, S, D).
         out = fp8_rotate_quant_fa(
             query.transpose(1, 2),
             key.transpose(1, 2),
             value.transpose(1, 2),
-            layout="BNSD",
+            layout=layout,
             softmax_scale=self.softmax_scale,
         )
         return out.transpose(1, 2)
@@ -305,8 +306,6 @@ class FlashAttentionImpl(AttentionImpl):
         key: torch.Tensor,
         value: torch.Tensor,
         attn_metadata: AttentionMetadata = None,
-        *,
-        layout: str | None = None,
     ) -> torch.Tensor:
         try:
             from mindiesd import attention_forward
@@ -318,14 +317,13 @@ class FlashAttentionImpl(AttentionImpl):
                 "Otherwise, use SDPA backend by setting DIFFUSION_ATTENTION_BACKEND=TORCH_SDPA"
             )
         attention_mask = attn_metadata.attn_mask if attn_metadata else None
-        effective_layout = layout if layout is not None else (self.qkv_layout or "BNSD")
-        output = attention_forward(
+        layout = self.qkv_layout or ("BSND" if self.role == "cross" else "BNSD")
+        return attention_forward(
             query,
             key,
             value,
             attn_mask=attention_mask,
             opt_mode="manual",
             op_type="fused_attn_score",
-            layout=effective_layout,
+            layout=layout,
         )
-        return output
