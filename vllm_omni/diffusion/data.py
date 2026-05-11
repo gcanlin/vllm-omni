@@ -519,6 +519,17 @@ class OmniDiffusionConfig:
     # has already resolved to vLLM's ModelOpt FP8 linear method.
     force_cutlass_fp8: bool = False
 
+    # KV cache dtype for attention. Aligned with upstream vLLM's --kv-cache-dtype.
+    # None = native dtype (no quantization).
+    # "fp8" = dynamic FP8 (float8_e4m3fn) quantization per forward pass.
+    # On Hopper+FA3: native FP8 attention (memory + compute savings).
+    # On other backends: no benefit, backends skip quantization.
+    kv_cache_dtype: str | None = None
+    # Optional skip selectors for KV-cache quantization. Format: "0-9,20,25-30".
+    # Listed steps/layers skip quantization; others keep quantized execution.
+    kv_cache_skip_steps: str | None = None
+    kv_cache_skip_layers: str | None = None
+
     # Diffusion pipeline Profiling config
     enable_diffusion_pipeline_profiler: bool = False
 

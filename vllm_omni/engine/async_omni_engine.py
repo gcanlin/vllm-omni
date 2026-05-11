@@ -1451,16 +1451,6 @@ class AsyncOmniEngine:
                 attention_backend=kwargs.get("diffusion_attention_backend"),
             )
 
-        attention_config = None
-        if (
-            kwargs.get("diffusion_attention_config") is not None
-            or kwargs.get("diffusion_attention_backend") is not None
-        ):
-            attention_config = parse_attention_config(
-                kwargs.get("diffusion_attention_config"),
-                attention_backend=kwargs.get("diffusion_attention_backend"),
-            )
-
         stage_engine_args = {
             "max_num_seqs": kwargs.get("max_num_seqs") or 1,
             "parallel_config": parallel_config,
@@ -1642,10 +1632,7 @@ class AsyncOmniEngine:
                             kwargs.get("diffusion_attention_config"),
                             attention_backend=kwargs.get("diffusion_attention_backend"),
                         )
-                # Prefer explicit quantization_config; fallback to legacy --quantization.
                 quantization_config = kwargs.get("quantization_config")
-                if quantization_config is None:
-                    quantization_config = kwargs.get("quantization")
                 if quantization_config is not None:
                     if (
                         not hasattr(cfg.engine_args, "quantization_config")
