@@ -75,12 +75,12 @@ steps:
         --opt filename=Dockerfile.npu.a3 \
         --secret id=dockerconfig,src=/home/user/.docker/config.json \
         --output type=image,name=$${IMAGE_REGISTRY}/$${IMAGE_NAME}:$${VLLM_IMAGE_TAG},push=true \
-        --progress=plain        
+        --progress=plain
 
       echo "--- Image pushed successfully"
       echo "$${IMAGE_REGISTRY}/$${IMAGE_NAME}:$${VLLM_IMAGE_TAG}"
 
-  - label: "Upload Ready Pipeline A3"
+  - label: "Upload Ready Pipeline - A3"
     depends_on: image-build-a3
     key: upload-ready-pipeline-a3
     if: build.branch != "main" && build.pull_request.labels includes "npu-test"
@@ -91,7 +91,7 @@ steps:
       buildkite-agent pipeline upload .buildkite/test-npu-ready.yaml
 
   # L4 Test — main+NIGHTLY=1 (scheduled), or PR with specific label (e.g. add label then Rebuild)
-  - label: "Upload Nightly Pipeline"
+  - label: "Upload Nightly Pipeline - A3"
     depends_on: image-build-a3
     key: upload-nightly-pipeline-a3
     if:
