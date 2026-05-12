@@ -1,20 +1,64 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Unit tests for NPU FP8 KV quantization helpers."""
+"""Unit tests for NPU FP8 KV quantization helpers.
 
+These tests load ``kv_quant_npu`` from its source file via ``importlib`` so
+the test module itself does not ``import vllm_omni`` (which would pull
+``patch`` → ``aenum``, vLLM, etc.).
+"""
+
+from __future__ import annotations
+
+import importlib.util
 import math
-from types import SimpleNamespace
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
 import torch
 
-from vllm_omni.platforms import current_omni_platform
-from vllm_omni.platforms.npu.quant import kv_quant_npu
-
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion]
 
-npu_available = pytest.mark.skipif(not current_omni_platform.is_npu(), reason="NPU platform not available.")
+
+def _repo_root() -> Path:
+    """Resolve checkout root (parent of ``vllm_omni/``), not ``tests/``."""
+    here = Path(__file__).resolve()
+    marker = Path("vllm_omni") / "platforms" / "npu" / "quant" / "kv_quant_npu.py"
+    for parent in here.parents:
+        if (parent / marker).is_file():
+            return parent
+    msg = f"could not locate repo root (no {marker}) starting from {here}"
+    raise FileNotFoundError(msg)
+
+
+def _load_kv_quant_npu() -> ModuleType:
+    path = _repo_root() / "vllm_omni" / "platforms" / "npu" / "quant" / "kv_quant_npu.py"
+    if not path.is_file():
+        msg = f"kv_quant_npu source not found: {path}"
+        raise FileNotFoundError(msg)
+    name = "vllm_omni_test_kv_quant_npu_standalone"
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        msg = f"cannot load import spec for {path}"
+        raise RuntimeError(msg)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+kv_quant_npu = _load_kv_quant_npu()
+
+
+def _npu_smoke_available() -> bool:
+    try:
+        import torch_npu  # noqa: F401
+    except ImportError:
+        return False
+    return bool(hasattr(torch, "npu") and torch.npu.is_available())
+
+
+npu_smoke = pytest.mark.skipif(not _npu_smoke_available(), reason="NPU device or torch_npu not available.")
 
 
 def test_is_quantized_kv_cache() -> None:
@@ -143,7 +187,7 @@ class TestKVQuantNPUUnit:
             kv_quant_npu.fp8_rotate_quant_fa(query, key, value, layout="INVALID")
 
 
-@npu_available
+@npu_smoke
 class TestKVQuantNPUSmoke:
     """Smoke tests using real torch_npu/mindiesd stack, only on NPU."""
 
