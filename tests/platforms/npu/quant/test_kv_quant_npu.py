@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 import torch
 
-pytestmark = [pytest.mark.core_model, pytest.mark.diffusion]
+pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
 
 
 def _repo_root() -> Path:
