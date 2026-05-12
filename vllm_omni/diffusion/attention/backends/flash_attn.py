@@ -287,7 +287,7 @@ class FlashAttentionImpl(AttentionImpl):
         value: torch.Tensor,
         attn_metadata: AttentionMetadata = None,
     ) -> torch.Tensor:
-        from vllm_omni.platforms.npu.kv_quant_npu import fp8_rotate_quant_fa
+        from vllm_omni.platforms.npu.quant.kv_quant_npu import fp8_rotate_quant_fa
 
         layout = self.qkv_layout or "BNSD"
         # Models pass (B, S, H, D); NPU fused op expects (B, N, S, D).

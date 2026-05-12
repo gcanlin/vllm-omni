@@ -10,7 +10,7 @@ import pytest
 import torch
 
 from vllm_omni.platforms import current_omni_platform
-from vllm_omni.platforms.npu import kv_quant_npu
+from vllm_omni.platforms.npu.quant import kv_quant_npu
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion]
 
