@@ -238,9 +238,7 @@ class Attention(nn.Module):
         skip_steps = self._kv_cache_skip_steps
         skip_layers = self._kv_cache_skip_layers
         if skip_steps is not None:
-            step_idx = (
-                attn_metadata.extra.get("denoise_step_idx") if attn_metadata is not None else None
-            )
+            step_idx = attn_metadata.extra.get("denoise_step_idx") if attn_metadata is not None else None
             if step_idx is not None and step_idx in skip_steps:
                 return False
         if skip_layers is not None:

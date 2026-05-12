@@ -274,9 +274,7 @@ class FlashAttentionImpl(AttentionImpl):
         if self.role == "cross":
             return self.forward_fa_npu(query, key, value, attn_metadata)
         # case2: dynamic fa quant
-        kv_cache_dtype = (
-            attn_metadata.extra.get("kv_cache_dtype") if attn_metadata else None
-        )
+        kv_cache_dtype = attn_metadata.extra.get("kv_cache_dtype") if attn_metadata else None
         if kv_cache_dtype is not None:
             return self.forward_fa_quant_npu(query, key, value, attn_metadata)
         # other: normal fa
