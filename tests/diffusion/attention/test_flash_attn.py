@@ -23,6 +23,31 @@ HAS_FLASH_ATTN = fa.HAS_FLASH_ATTN
 flash_attn_func = fa.flash_attn_func  # noqa: N813
 
 
+@pytest.mark.core_model
+@pytest.mark.diffusion
+@pytest.mark.cpu
+def test_npu_cross_attention_with_kv_cache_dtype_uses_quant_path(monkeypatch):
+    fa_impl = FlashAttentionImpl(num_heads=8, head_size=64, softmax_scale=1.0, causal=False, role="cross")
+    attn_metadata = AttentionMetadata(extra={"kv_cache_dtype": "fp8"})
+    calls = []
+
+    def fake_quant(query, key, value, metadata):
+        calls.append(("quant", query, key, value, metadata))
+        return "quant-output"
+
+    def fake_normal(query, key, value, metadata):
+        calls.append(("normal", query, key, value, metadata))
+        return "normal-output"
+
+    monkeypatch.setattr(fa_impl, "forward_fa_quant_npu", fake_quant)
+    monkeypatch.setattr(fa_impl, "forward_fa_npu", fake_normal)
+
+    output = fa_impl.forward_npu("query", "key", "value", attn_metadata)
+
+    assert output == "quant-output"
+    assert calls == [("quant", "query", "key", "value", attn_metadata)]
+
+
 def create_attention_mask(batch_size: int, seq_len: int, valid_len: int, device: torch.device) -> torch.Tensor:
     """
     Create attention mask where first valid_len tokens are valid (1) and rest are padding (0).
