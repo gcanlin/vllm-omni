@@ -474,7 +474,7 @@ class OmniServeCommand(CLISubcommand):
         )
         # vLLM already registers --kv-cache-dtype for the serve parser. Keep
         # this fallback only for older vLLM versions where the option is absent.
-        if "--kv-cache-dtype" not in subparser._option_string_actions:
+        if "--kv-cache-dtype" not in serve_parser._option_string_actions:
             omni_config_group.add_argument(
                 "--kv-cache-dtype",
                 type=str,
