@@ -174,12 +174,8 @@ def run_pre_test_cleanup() -> None:
             print(f"Pre-test cleanup note: {e}")
 
 
-def run_post_test_cleanup(enable_force: bool = False) -> None:
-    if os.getenv("VLLM_TEST_CLEAN_GPU_MEMORY", "0") != "1" and not enable_force:
-        print(_SKIPPED_GPU_CLEANUP_MSG)
-        return
-
-    if current_omni_platform.device_count() > 0:
+def run_post_test_cleanup() -> None:
+    if current_omni_platform.is_available():
         gc.collect()
         current_omni_platform.empty_cache()
 
