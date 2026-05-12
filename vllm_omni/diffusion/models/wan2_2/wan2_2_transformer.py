@@ -659,9 +659,11 @@ class WanTransformerBlock(nn.Module):
         # 1. Self-attention
         norm_hidden_states = self.norm1(hidden_states, scale_msa, shift_msa).type_as(hidden_states)
         self_attn_metadata = AttentionMetadata(
-            denoise_step_idx=denoise_step_idx,
-            layer_idx=layer_idx,
             attn_mask=hidden_states_mask,
+            extra={
+                "denoise_step_idx": denoise_step_idx,
+                "layer_idx": layer_idx,
+            },
         )
         attn_output = self.attn1(norm_hidden_states, rotary_emb, self_attn_metadata)
         hidden_states = (hidden_states + attn_output * gate_msa).type_as(hidden_states)
@@ -669,9 +671,11 @@ class WanTransformerBlock(nn.Module):
         # 2. Cross-attention
         norm_hidden_states = self.norm2(hidden_states).type_as(hidden_states)
         cross_attn_metadata = AttentionMetadata(
-            denoise_step_idx=denoise_step_idx,
-            layer_idx=layer_idx,
             attn_mask=None,
+            extra={
+                "denoise_step_idx": denoise_step_idx,
+                "layer_idx": layer_idx,
+            },
         )
         attn_output = self.attn2(norm_hidden_states, encoder_hidden_states, cross_attn_metadata)
         hidden_states = hidden_states + attn_output
@@ -936,10 +940,7 @@ class WanTransformer3DModel(nn.Module):
             hidden_states_mask = None
 
         # Transformer blocks
-        if attention_kwargs is not None and attention_kwargs["step_idx"] is not None:
-            denoise_step_idx = attention_kwargs["step_idx"]
-        else:
-            denoise_step_idx = None
+        denoise_step_idx = attention_kwargs.get("step_idx") if attention_kwargs is not None else None
 
         for layer_idx, block in enumerate(self.blocks):
             hidden_states = block(

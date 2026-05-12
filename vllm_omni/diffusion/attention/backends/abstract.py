@@ -79,18 +79,16 @@ class AttentionMetadata:
     extra: dict[str, Any] = field(default_factory=dict)
     # Opaque backend-specific per-forward parameters (e.g. block masks, KV indices).
     # Backends MUST silently ignore unknown keys.
+    #
+    # Well-known optional keys (convention, not required on all forwards):
+    #   "kv_cache_dtype": str | None — quantized KV dtype (e.g. "fp8"); backends
+    #     decide whether/how to apply; AttentionImpl may clear unsupported values.
+    #   "denoise_step_idx", "layer_idx": int | None — selective KV-quant gating
+    #     (see diffusion attention layer skip selectors).
 
     # Piecewise attention metadata (mixed causal/full masks).
     # full_attn_spans: per-sample [start, end) spans in global coordinates using full attention.
     full_attn_spans: list[list[tuple[int, int]]] | None = None
-
-    # KV cache dtype for quantization (e.g. "fp8"). Each backend decides
-    # whether and how to quantize Q/K/V based on this field.
-    kv_cache_dtype: str | None = None
-
-    # Runtime metadata used by selective KV-cache quantization gating.
-    denoise_step_idx: int | None = None
-    layer_idx: int | None = None
 
 
 T = TypeVar("T", bound=AttentionMetadata)
@@ -143,7 +141,7 @@ class AttentionImpl(ABC, Generic[T]):
         """
         if attn_metadata is None:
             return
-        kv_cache_dtype = attn_metadata.kv_cache_dtype
+        kv_cache_dtype = attn_metadata.extra.get("kv_cache_dtype")
         if kv_cache_dtype is None:
             return
         supported = self._supported_kv_cache_dtypes.get(platform_key, set())
@@ -154,7 +152,7 @@ class AttentionImpl(ABC, Generic[T]):
                 type(self).__name__,
                 platform_key,
             )
-            attn_metadata.kv_cache_dtype = None
+            attn_metadata.extra["kv_cache_dtype"] = None
 
     def forward(
         self,

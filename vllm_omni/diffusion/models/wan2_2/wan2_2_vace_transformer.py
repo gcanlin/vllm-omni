@@ -218,10 +218,7 @@ class WanVACETransformer3DModel(WanTransformer3DModel):
             )
             hidden_states_mask[:, ctx.sp_original_seq_len :] = False
 
-        if attention_kwargs is not None and attention_kwargs["step_idx"] is not None:
-            denoise_step_idx = attention_kwargs["step_idx"]
-        else:
-            denoise_step_idx = None
+        denoise_step_idx = attention_kwargs.get("step_idx") if attention_kwargs is not None else None
 
         # VACE: embed context and run conditioning blocks
         vace_hints = None

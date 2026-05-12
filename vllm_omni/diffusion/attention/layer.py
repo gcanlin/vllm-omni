@@ -238,11 +238,13 @@ class Attention(nn.Module):
         skip_steps = self._kv_cache_skip_steps
         skip_layers = self._kv_cache_skip_layers
         if skip_steps is not None:
-            step_idx = attn_metadata.denoise_step_idx if attn_metadata is not None else None
+            step_idx = (
+                attn_metadata.extra.get("denoise_step_idx") if attn_metadata is not None else None
+            )
             if step_idx is not None and step_idx in skip_steps:
                 return False
         if skip_layers is not None:
-            layer_idx = attn_metadata.layer_idx if attn_metadata is not None else None
+            layer_idx = attn_metadata.extra.get("layer_idx") if attn_metadata is not None else None
             if layer_idx is not None and layer_idx in skip_layers:
                 return False
         return True
@@ -271,11 +273,10 @@ class Attention(nn.Module):
             self._resolve_kv_cache_skip_selectors_from_config()
         if kv_cache_dtype is not None:
             if attn_metadata is None:
-                attn_metadata = AttentionMetadata()
-                attn_metadata.kv_cache_dtype = kv_cache_dtype
+                attn_metadata = AttentionMetadata(extra={"kv_cache_dtype": kv_cache_dtype})
             else:
                 if self._should_apply_kv_cache_quant(attn_metadata):
-                    attn_metadata.kv_cache_dtype = kv_cache_dtype
+                    attn_metadata.extra["kv_cache_dtype"] = kv_cache_dtype
 
         # 2. Kernel Execution (Computation)
         if self.use_ring and strategy is not self._no_parallel_strategy:
