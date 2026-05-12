@@ -1,18 +1,5 @@
-# Document 1: Buildkite loads only this block on first parse. The bootstrap step resolves docs-only
-# skip-ci from git diff, then uploads document 2 with `__IMAGE_BUILD_IF__` substituted.
-
-# Document 2: appended after `---`; same file, read by upload_pipeline_with_skip_ci.sh
-# (not evaluated as a second pipeline by Buildkite). Child upload includes test-npu-nightly.yaml.
-steps:
-  - label: ":github: Resolve skip-ci & upload NPU pipeline"
-    key: upload-npu-pipeline
-    commands:
-      - "bash .buildkite/scripts/upload_pipeline_with_skip_ci.sh .buildkite/pipeline-npu.yaml"
-    agents:
-      queue: "ascend-a2b3"
-      resource_class: "npu-1"
-
----
+# Uploaded by .buildkite/scripts/upload_pipeline_with_skip_ci.sh from the Buildkite UI init step.
+# The placeholder on `if:` below is substituted by the script (docs-only skip-ci resolution).
 steps:
   - label: ":buildkit: Build and Push NPU Test Image - A2"
     key: image-build

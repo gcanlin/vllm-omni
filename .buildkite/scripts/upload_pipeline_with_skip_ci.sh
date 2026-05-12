@@ -112,12 +112,13 @@ import pathlib
 path = pathlib.Path(os.environ["PIPELINE_YML"])
 text = path.read_text(encoding="utf-8")
 sep = "\n---\n"
-if sep not in text:
-    raise SystemExit(
-        f"upload_pipeline_with_skip_ci: {path} must contain a '\\n---\\n' separator "
-        "(document 1 = bootstrap, document 2 = uploaded steps)"
-    )
-_, continuation = text.split(sep, 1)
+# Two supported layouts:
+#   - multi-doc: doc 1 = bootstrap (loaded by Buildkite), doc 2 (after `---`) = uploaded steps.
+#   - single-doc: whole file is the uploaded steps; caller (UI init step) is the bootstrap.
+if sep in text:
+    _, continuation = text.split(sep, 1)
+else:
+    continuation = text
 
 skip = os.environ.get("SKIP_CI") == "1"
 # When docs-only skip-ci: skip default CI image, but still build for L4 nightly (PR label nightly-test or
