@@ -70,7 +70,7 @@ steps:
         --frontend dockerfile.v0 \
         --local context=. \
         --local dockerfile=./docker \
-        --opt filename=Dockerfile.npu \
+        --opt filename=Dockerfile.npu.ci \
         --secret id=dockerconfig,src=/home/user/.docker/config.json \
         --output type=image,name=$${IMAGE_REGISTRY}/$${IMAGE_NAME}:$${VLLM_IMAGE_TAG},push=true \
         --progress=plain
@@ -92,8 +92,15 @@ steps:
   - label: "Upload Nightly Pipeline"
     depends_on: image-build
     key: upload-nightly-pipeline
-    if:
-      build.pull_request.labels includes "npu-test"
+    if: >-
+      (build.branch == "main" && build.env("NIGHTLY") == "1") ||
+      (build.branch != "main" && (
+        build.pull_request.labels includes "nightly-test" ||
+        build.pull_request.labels includes "omni-test" ||
+        build.pull_request.labels includes "tts-test" ||
+        build.pull_request.labels includes "diffusion-x2iat-test" ||
+        build.pull_request.labels includes "diffusion-x2v-test"
+      ))
     commands:
       - buildkite-agent pipeline upload .buildkite/test-npu-nightly.yaml
     agents:
