@@ -2,8 +2,10 @@ steps:
   - group: ":card_index_dividers: Diffusion X2V Model Test"
     key: nightly-diffusion-x2v-group
     depends_on: upload-nightly-pipeline
-    if:
-      build.pull_request.labels includes "npu-test"
+    if: >-
+      build.env("NIGHTLY") == "1" ||
+      build.pull_request.labels includes "nightly-test" ||
+      build.pull_request.labels includes "diffusion-x2v-test"
     steps:
       - label: ":full_moon: Diffusion X2V · Function Test"
         agents:
