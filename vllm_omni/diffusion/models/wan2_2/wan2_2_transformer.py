@@ -524,6 +524,10 @@ class WanCrossAttention(nn.Module):
             role="cross",
             qkv_layout="BSND",
             skip_sequence_parallel=True,
+            # Wan2.2 cross-attn operates on short text-encoder sequences; per-block
+            # FP8 quant offers no perf win and degrades quality. Opt out until a
+            # dedicated quant backend handles this case.
+            disable_kv_quant=True,
         )
 
     def forward(

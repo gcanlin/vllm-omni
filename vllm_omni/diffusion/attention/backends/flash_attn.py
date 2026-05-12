@@ -52,6 +52,13 @@ class FlashAttentionImpl(AttentionImpl):
     # Per-platform FP8 KV quantization support.
     # To enable FP8 on a new platform, add its OmniPlatformEnum value here
     # and handle kv_cache_dtype in the corresponding forward_{platform}().
+    #
+    # TODO(quant-backend): The FP8 quant path currently lives inside
+    # FlashAttentionImpl gated by ``attn_metadata.extra["kv_cache_dtype"]``.
+    # Eventually extract it into a dedicated FlashAttentionQuantBackend so
+    # backend selection (not metadata) decides quant. Until then, model
+    # authors can opt a specific Attention layer out via
+    # ``Attention(disable_kv_quant=True)``.
     _supported_kv_cache_dtypes = {
         "npu": {"fp8"},
     }
@@ -66,14 +73,12 @@ class FlashAttentionImpl(AttentionImpl):
         prefix: str = "",
         qkv_layout: str | None = None,
         backend_kwargs: dict | None = None,
-        role: str = "self",
         **extra_impl_args,
     ) -> None:
         self.num_heads = num_heads
         self.causal = causal
         self.softmax_scale = softmax_scale
         self.qkv_layout = qkv_layout
-        self.role = role
         if backend_kwargs:
             logger.warning("FlashAttentionImpl ignoring backend_kwargs: %s", list(backend_kwargs.keys()))
 
@@ -312,7 +317,7 @@ class FlashAttentionImpl(AttentionImpl):
                 "Otherwise, use SDPA backend by setting DIFFUSION_ATTENTION_BACKEND=TORCH_SDPA"
             )
         attention_mask = attn_metadata.attn_mask if attn_metadata else None
-        layout = self.qkv_layout or ("BSND" if self.role == "cross" else "BNSD")
+        layout = self.qkv_layout or "BNSD"
         return attention_forward(
             query,
             key,

@@ -88,6 +88,11 @@ class Attention(nn.Module):
         gather_idx: int = 1,
         use_sync: bool = False,
         skip_sequence_parallel: bool = False,
+        # Opt-out for KV-cache quantization at this specific attention layer.
+        # Set by the model author when quant is known to degrade quality or
+        # perf for this layer (e.g. Wan2.2 cross-attn has short sequences and
+        # block-FP8 quant offers no win). Default False = follow global config.
+        disable_kv_quant: bool = False,
     ):
         super().__init__()
 
@@ -127,7 +132,6 @@ class Attention(nn.Module):
             num_kv_heads=num_kv_heads,
             qkv_layout=qkv_layout,
             backend_kwargs=backend_kwargs,
-            role=role,
         )
         # Instantiate fallback backend for float32 support
         self.sdpa_fallback = SDPABackend.get_impl_cls()(
@@ -179,6 +183,8 @@ class Attention(nn.Module):
         self._kv_cache_skip_steps: set[int] | None = None
         self._kv_cache_skip_layers: set[int] | None = None
         self._kv_cache_skip_selectors_resolved: bool = False
+        # Per-layer opt-out from KV-cache quantization (set by model author).
+        self._disable_kv_quant: bool = disable_kv_quant
 
     def _get_active_parallel_strategy(self):
         """Get the parallel strategy based on current SP active state.
@@ -269,12 +275,11 @@ class Attention(nn.Module):
             kv_cache_dtype = self._kv_cache_dtype
         if not self._kv_cache_skip_selectors_resolved:
             self._resolve_kv_cache_skip_selectors_from_config()
-        if kv_cache_dtype is not None:
+        if kv_cache_dtype is not None and not self._disable_kv_quant:
             if attn_metadata is None:
                 attn_metadata = AttentionMetadata(extra={"kv_cache_dtype": kv_cache_dtype})
-            else:
-                if self._should_apply_kv_cache_quant(attn_metadata):
-                    attn_metadata.extra["kv_cache_dtype"] = kv_cache_dtype
+            elif self._should_apply_kv_cache_quant(attn_metadata):
+                attn_metadata.extra["kv_cache_dtype"] = kv_cache_dtype
 
         # 2. Kernel Execution (Computation)
         if self.use_ring and strategy is not self._no_parallel_strategy:
