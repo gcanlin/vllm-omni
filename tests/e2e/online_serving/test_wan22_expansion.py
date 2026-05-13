@@ -56,7 +56,13 @@ PARALLEL_CONFIGS = [
 NPU_PARALLEL_CONFIGS = [
     (
         "combined",
-        ["--cfg-parallel-size", "2", "--usp", "2", "--vae-patch-parallel-size", "2", *HSDP_ARGS],
+        [
+            "--cfg-parallel-size", "2",
+            "--usp", "2",
+            "--vae-patch-parallel-size", "2",
+            "--use-hsdp",
+            "--hsdp-shard-size", "4",
+        ],
         NPU_FOUR_CARD_MARKS,
     ),
     (
