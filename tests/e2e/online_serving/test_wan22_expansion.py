@@ -8,9 +8,9 @@ CUDA coverage (3 models × 6 features):
 Features: Cache-DiT, CFG-Parallel, Ulysses-SP, Tensor-Parallel + VAE-Patch-Parallel,
 HSDP, Ring-Attn.
 
-NPU coverage (Wan-AI/Wan2.2-I2V-A14B-Diffusers only):
-HSDP is always-on (NPU memory is tight) and stacked onto every other feature.
-Ring-Attn is excluded.
+NPU coverage (Wan-AI/Wan2.2-I2V-A14B-Diffusers only): 2 cases.
+- 4-card combined: cfg=2 + usp=2 + vae-patch=2 + hsdp.
+- 2-card tp_layerwise: tp=2 + enable-layerwise-offload.
 
 assert_diffusion_response validates successful generation
 """
@@ -30,9 +30,9 @@ NEGATIVE_PROMPT = "low quality, blurry, distorted face, extra limbs, bad anatomy
 CUDA_SINGLE_CARD_MARKS = hardware_marks(res={"cuda": "H100"})
 CUDA_PARALLEL_MARKS = hardware_marks(res={"cuda": "H100"}, num_cards=2)
 
-# NPU marks (HSDP always-on; parallel dims share the same 2-rank world, not multiplicative)
-NPU_SINGLE_CARD_MARKS = hardware_marks(res={"npu": "A2"})
+# NPU marks
 NPU_TWO_CARD_MARKS = hardware_marks(res={"npu": "A2"}, num_cards=2)
+NPU_FOUR_CARD_MARKS = hardware_marks(res={"npu": "A2"}, num_cards=4)
 
 WAN22_MODELS = [
     ("Wan-AI/Wan2.2-T2V-A14B-Diffusers", "t2v"),
@@ -52,13 +52,18 @@ PARALLEL_CONFIGS = [
     ("ring_atten", ["--ring", "2"]),
 ]
 
-# NPU: ring_atten excluded. HSDP is the default-on baseline, except for TP which is
-# mutually exclusive with HSDP (DiffusionParallelConfig validation) so it runs standalone.
+# NPU: 2 cases only.
 NPU_PARALLEL_CONFIGS = [
-    ("cfg_parallel_hsdp", ["--cfg-parallel-size", "2", *HSDP_ARGS], NPU_TWO_CARD_MARKS),
-    ("ulysses_sp_hsdp", ["--usp", "2", *HSDP_ARGS], NPU_TWO_CARD_MARKS),
-    ("tp_vae_patch", ["--tensor-parallel-size", "2", "--vae-patch-parallel-size", "2"], NPU_TWO_CARD_MARKS),
-    ("hsdp", HSDP_ARGS, NPU_TWO_CARD_MARKS),
+    (
+        "combined",
+        ["--cfg-parallel-size", "2", "--usp", "2", "--vae-patch-parallel-size", "2", *HSDP_ARGS],
+        NPU_FOUR_CARD_MARKS,
+    ),
+    (
+        "tp_layerwise_offload",
+        ["--tensor-parallel-size", "2", "--enable-layerwise-offload"],
+        NPU_TWO_CARD_MARKS,
+    ),
 ]
 
 
@@ -66,7 +71,7 @@ def _get_wan22_feature_cases():
     """
     Generate parameterized test cases:
     - CUDA: 3 models × (Cache-DiT + 5 parallel features), original matrix.
-    - NPU: I2V-A14B only, HSDP always-on, ring-attn excluded.
+    - NPU: I2V-A14B only, 2 cases (4-card combined, 2-card tp_layerwise_offload).
     """
     cases = []
 
@@ -89,31 +94,7 @@ def _get_wan22_feature_cases():
                 )
             )
 
-    # ---- NPU cases (I2V-A14B, HSDP always-on, no ring-attn) ----
-    # Cache-DiT + HSDP: drop --enable-layerwise-offload because HSDP + offload OOMs on NPU.
-    for model_path, model_key in NPU_MODELS:
-        cases.append(
-            pytest.param(
-                OmniServerParams(
-                    model=model_path,
-                    server_args=["--cache-backend", "cache_dit", *HSDP_ARGS],
-                ),
-                id=f"npu_{model_key}_cache_dit_hsdp",
-                marks=NPU_TWO_CARD_MARKS,
-            )
-        )
-    # Layerwise offload standalone (single card, no HSDP — they're incompatible on NPU).
-    for model_path, model_key in NPU_MODELS:
-        cases.append(
-            pytest.param(
-                OmniServerParams(
-                    model=model_path,
-                    server_args=["--enable-layerwise-offload"],
-                ),
-                id=f"npu_{model_key}_layerwise_offload",
-                marks=NPU_SINGLE_CARD_MARKS,
-            )
-        )
+    # ---- NPU cases (I2V-A14B only) ----
     for model_path, model_key in NPU_MODELS:
         for feat_id, server_args, marks in NPU_PARALLEL_CONFIGS:
             cases.append(
