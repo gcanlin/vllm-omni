@@ -3,7 +3,6 @@
 """HunyuanImage3 rotary embedding layers."""
 
 import torch
-
 from vllm.model_executor.layers.rotary_embedding.base import RotaryEmbeddingBase
 
 
@@ -41,13 +40,7 @@ class HunyuanImage3RotaryEmbedding(RotaryEmbeddingBase):
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
     def _compute_inv_freq(self, base: float) -> torch.Tensor:
-        return 1.0 / (
-            base
-            ** (
-                torch.arange(0, self.head_size, 2, dtype=torch.float32)
-                / self.head_size
-            )
-        )
+        return 1.0 / (base ** (torch.arange(0, self.head_size, 2, dtype=torch.float32) / self.head_size))
 
     @staticmethod
     def _rotate_half(x: torch.Tensor) -> torch.Tensor:
