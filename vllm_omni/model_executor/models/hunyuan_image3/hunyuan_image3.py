@@ -1354,6 +1354,79 @@ class HunyuanImage3SparseMoeBlock(HunYuanSparseMoeBlock):
         final_hidden_states = self.experts(hidden_states=hidden_states, router_logits=packed_routing)
         return final_hidden_states.view(orig_shape)
 
+class HunyuanImage3RotaryEmbedding(nn.Module):
+    """Custom interleaved 2D Rotary Embedding for HunyuanImage3.
+
+    The original HunyuanImage3 ``build_2d_rope`` interleaves y (height) and
+    x (width) positions across consecutive frequencies::
+
+        theta = inv_freq.reshape(n_elem // 4, 2)
+        idx_theta[2k]   = y_pos * theta[k, 0]   # even freq -> y
+        idx_theta[2k+1] = x_pos * theta[k, 1]   # odd  freq -> x
+
+    vLLM's standard ``MRotaryEmbedding`` instead assigns *contiguous* blocks
+    of frequencies to each position dimension, producing different encodings
+    for the same positions.  This class re-implements the original interleaved
+    pattern so that pre-trained weights work correctly.
+
+    Reference: https://kexue.fm/archives/10352
+    """
+
+    def __init__(self, head_dim: int, rope_theta: float = 10000.0) -> None:
+        super().__init__()
+        self.head_dim = head_dim
+        assert head_dim % 4 == 0, f"head_dim must be divisible by 4, got {head_dim}"
+        inv_freq = 1.0 / (rope_theta ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+    def forward(
+        self,
+        positions: torch.Tensor,
+        query: torch.Tensor,
+        key: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if positions.dim() == 2 and positions.shape[0] == 3:
+            y_pos = positions[1].float()
+            x_pos = positions[2].float()
+        else:
+            # 1D fallback: both dims get the same position → standard RoPE
+            y_pos = positions.float()
+            x_pos = positions.float()
+
+        num_tokens = y_pos.shape[0]
+        dtype = query.dtype
+        query_shape = query.shape
+        key_shape = key.shape
+
+        inv_freq = self.inv_freq.to(device=y_pos.device, dtype=torch.float32)
+
+        inv_freq_y = inv_freq[0::2]  # even indices -> y
+        inv_freq_x = inv_freq[1::2]  # odd  indices -> x
+
+        y_freqs = y_pos.unsqueeze(-1) * inv_freq_y.unsqueeze(0)
+        x_freqs = x_pos.unsqueeze(-1) * inv_freq_x.unsqueeze(0)
+
+        # Interleave: [y*θ₀, x*θ₁, y*θ₂, x*θ₃, ...]
+        freqs = torch.stack([y_freqs, x_freqs], dim=-1).reshape(num_tokens, -1)
+
+        emb = torch.cat([freqs, freqs], dim=-1)
+        cos = emb.cos().to(dtype).unsqueeze(1)
+        sin = emb.sin().to(dtype).unsqueeze(1)
+
+        query = query.view(num_tokens, -1, self.head_dim)
+        key = key.view(num_tokens, -1, self.head_dim)
+
+        query = query * cos + self._rotate_half(query) * sin
+        key = key * cos + self._rotate_half(key) * sin
+
+        return query.view(query_shape), key.view(key_shape)
+
+    def _rotate_half(self, x: torch.Tensor) -> torch.Tensor:
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
+
+
 
 @MULTIMODAL_REGISTRY.register_processor(
     HunyuanImage3MultiModalProcessor,
