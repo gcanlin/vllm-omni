@@ -1353,6 +1353,7 @@ class HunyuanImage3SparseMoeBlock(HunYuanSparseMoeBlock):
         final_hidden_states = self.experts(hidden_states=hidden_states, router_logits=packed_routing)
         return final_hidden_states.view(orig_shape)
 
+
 class HunyuanImage3RotaryEmbedding(nn.Module):
     """Custom interleaved 2D Rotary Embedding for HunyuanImage3.
 
