@@ -1426,7 +1426,6 @@ class HunyuanImage3RotaryEmbedding(nn.Module):
         return torch.cat((-x2, x1), dim=-1)
 
 
-
 @MULTIMODAL_REGISTRY.register_processor(
     HunyuanImage3MultiModalProcessor,
     info=HunyuanImage3ProcessingInfo,
