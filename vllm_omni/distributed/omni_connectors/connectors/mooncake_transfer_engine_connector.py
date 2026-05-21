@@ -21,11 +21,6 @@ from .base import OmniConnectorBase
 
 logger = get_connector_logger(__name__)
 
-try:
-    from mooncake.engine import TransferEngine
-except ImportError:
-    TransferEngine = None
-
 # Stale buffer TTL: buffers older than this are automatically reclaimed
 # to prevent memory leaks when receiver crashes or gives up.
 _BUFFER_TTL_SECONDS = 300  # 5 minutes
@@ -251,8 +246,23 @@ class MooncakeTransferEngineConnector(OmniConnectorBase):
     supports_raw_data: bool = True
 
     def __init__(self, config: dict[str, Any]):
-        if TransferEngine is None:
-            raise ImportError("Mooncake not available")
+        # Bind the accelerator device to this thread before importing/instantiating
+        # mooncake. On Ascend, importing mooncake.engine without a prior set_device
+        # can core-dump the worker (see kvcache-ai/Mooncake#1008, fixed upstream in
+        # kvcache-ai/Mooncake#1114). Mirrors vLLM upstream mooncake_connector.py.
+        try:
+            from vllm.platforms import current_platform
+
+            current_platform.set_device(torch.accelerator.current_device_index())
+        except Exception as e:
+            logger.warning("Failed to pre-set accelerator device before mooncake import: %s", e)
+
+        try:
+            from mooncake.engine import TransferEngine
+        except ImportError as e:
+            raise ImportError(
+                "Mooncake not available. Install per https://github.com/kvcache-ai/Mooncake/blob/main/doc/en/build.md"
+            ) from e
 
         self._closed = False
         self._bind_error: Exception | None = None  # fatal ZMQ bind error from listener thread

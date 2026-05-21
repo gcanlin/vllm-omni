@@ -431,8 +431,8 @@ class OmniKVTransferManager:
                         c_extra.get("role", "N/A"),
                     )
                     self._connector = OmniConnectorFactory.create_connector(ConnectorSpec(name=c_type, extra=c_extra))
-                except Exception:
-                    logger.exception("Failed to initialize OmniConnector")
+                except Exception as e:
+                    logger.warning("Failed to initialize OmniConnector (%s): %s", c_type, e)
                     self._connector = False
 
         return self._connector if self._connector else None
