@@ -254,10 +254,10 @@ class MooncakeTransferEngineConnector(OmniConnectorBase):
         # bind each ThreadPoolExecutor thread (vllm-project/vllm#39548).
         self._device_id: int | None = None
         try:
-            from vllm.platforms import current_platform
+            from vllm_omni.platforms import current_omni_platform
 
-            self._device_id = current_platform.current_device()
-            current_platform.set_device(self._device_id)
+            self._device_id = current_omni_platform.current_device()
+            current_omni_platform.set_device(self._device_id)
         except Exception as e:
             logger.warning("Failed to pre-set accelerator device before mooncake import: %s", e)
 
@@ -1198,9 +1198,9 @@ class MooncakeTransferEngineConnector(OmniConnectorBase):
         if self._device_id is None:
             return
         try:
-            from vllm.platforms import current_platform
+            from vllm_omni.platforms import current_omni_platform
 
-            current_platform.set_device(self._device_id)
+            current_omni_platform.set_device(self._device_id)
         except Exception as e:
             logger.warning("Failed to bind sender thread to device %s: %s", self._device_id, e)
 
