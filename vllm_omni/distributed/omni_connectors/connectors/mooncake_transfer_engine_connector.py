@@ -250,10 +250,14 @@ class MooncakeTransferEngineConnector(OmniConnectorBase):
         # mooncake. On Ascend, importing mooncake.engine without a prior set_device
         # can core-dump the worker (see kvcache-ai/Mooncake#1008, fixed upstream in
         # kvcache-ai/Mooncake#1114). Mirrors vLLM upstream mooncake_connector.py.
+        # The captured device_id is also reused by _bind_sender_thread_device to
+        # bind each ThreadPoolExecutor thread (vllm-project/vllm#39548).
+        self._device_id: int | None = None
         try:
             from vllm.platforms import current_platform
 
-            current_platform.set_device(torch.accelerator.current_device_index())
+            self._device_id = current_platform.current_device()
+            current_platform.set_device(self._device_id)
         except Exception as e:
             logger.warning("Failed to pre-set accelerator device before mooncake import: %s", e)
 
@@ -373,7 +377,15 @@ class MooncakeTransferEngineConnector(OmniConnectorBase):
         # Most fields already initialized at the top of __init__ for teardown
         # safety.  Only create the real ZMQ context and thread pool here.
         self.zmq_ctx = zmq.Context()
-        self._sender_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mooncake-sender")
+        # initializer runs once per pool thread on first start (not per task),
+        # binding the thread to this worker's device. Required because device
+        # selection is thread-local on NPU/CUDA — without it, pool threads
+        # default to device 0 and Mooncake transfers fail for TP>0 ranks.
+        self._sender_executor = ThreadPoolExecutor(
+            max_workers=4,
+            thread_name_prefix="mooncake-sender",
+            initializer=self._bind_sender_thread_device,
+        )
 
         # Log complete connector configuration for debugging
         logger.info(
@@ -1176,6 +1188,21 @@ class MooncakeTransferEngineConnector(OmniConnectorBase):
                 socket.close(linger=0)
             except Exception:
                 pass  # Best-effort cleanup during listener shutdown
+
+    def _bind_sender_thread_device(self) -> None:
+        """ThreadPoolExecutor initializer — bind each pool thread to the worker's
+        device once on thread startup. Device selection is thread-local on
+        NPU/CUDA, so without this, Mooncake transport calls run with the pool
+        thread's default device (0) instead of the worker's actual device,
+        causing IPC failures or crashes for TP>0 ranks."""
+        if self._device_id is None:
+            return
+        try:
+            from vllm.platforms import current_platform
+
+            current_platform.set_device(self._device_id)
+        except Exception as e:
+            logger.warning("Failed to bind sender thread to device %s: %s", self._device_id, e)
 
     def _handle_pull_request(self, response_queue: queue.Queue, notify_addr: str, identity, payload):
         """
