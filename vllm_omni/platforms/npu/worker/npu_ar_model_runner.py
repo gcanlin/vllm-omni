@@ -733,22 +733,16 @@ class NPUARModelRunner(OmniNPUModelRunner):
     def _sample(
         self,
         logits: torch.Tensor | None,
-        spec_decode_metadata: SpecDecodeMetadata | None,
+        spec_decode_metadata: Any,
     ):
-        """Dispatch to the model's custom sampler when ``prefer_model_sampler``
-        is set; otherwise delegate to the parent ``_sample`` (which handles
-        ``lmhead_tp_enable`` slicing and the spec-decode rejection sampler).
-
-        Mirrors ``GPUARModelRunner._sample`` so models like HunyuanImage3 and
-        CosyVoice3 get the same stage-transition / RAS sampler behavior on NPU.
-        """
+        sampling_metadata = self.input_batch.sampling_metadata
         if spec_decode_metadata is None:
             model_sample = getattr(self.model, "sample", None)
+            self.input_batch.update_async_output_token_ids()
             if logits is not None and callable(model_sample) and getattr(self.model, "prefer_model_sampler", False):
-                sampling_metadata = self.input_batch.sampling_metadata
-                # Apply logit bias (min_tokens, allowed_token_ids) before the
-                # custom model sampler — the standard sampler does this
-                # internally, but prefer_model_sampler bypasses it.
+                # Apply logit bias (min_tokens, allowed_token_ids) before
+                # the custom model sampler — the standard GPU sampler does
+                # this internally, but prefer_model_sampler bypasses it.
                 if hasattr(self.sampler, "logit_bias_state"):
                     self.sampler.logit_bias_state.apply_logit_bias(
                         logits,
@@ -762,6 +756,11 @@ class NPUARModelRunner(OmniNPUModelRunner):
                 )
                 if sampler_output is not None:
                     return sampler_output
+            return self.sampler(
+                logits=logits,
+                sampling_metadata=sampling_metadata,
+            )
+
         return super()._sample(logits, spec_decode_metadata)
 
     @torch.inference_mode()
