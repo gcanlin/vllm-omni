@@ -1,6 +1,6 @@
-from dataclasses import replace
 import contextlib
 from collections.abc import Callable
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
