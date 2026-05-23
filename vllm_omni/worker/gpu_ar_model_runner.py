@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from copy import copy
+from dataclasses import replace
 from typing import Any, NamedTuple
 
 import numpy as np
