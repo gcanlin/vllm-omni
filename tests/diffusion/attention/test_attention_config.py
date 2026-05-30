@@ -285,14 +285,14 @@ class TestOmniDiffusionConfigAttentionParsing:
 
     def test_diffusion_attention_backend_sets_default(self):
         config = OmniDiffusionConfig.from_kwargs(diffusion_attention_backend="SAGE_ATTN")
-        assert isinstance(config.attention_config, AttentionConfig)
-        assert config.attention_config.default is not None
-        assert config.attention_config.default.backend == "SAGE_ATTN"
+        assert isinstance(config.diffusion_attention_config, AttentionConfig)
+        assert config.diffusion_attention_config.default is not None
+        assert config.diffusion_attention_config.default.backend == "SAGE_ATTN"
 
     def test_diffusion_attention_backend_auto_means_platform_default(self):
         config = OmniDiffusionConfig.from_kwargs(diffusion_attention_backend="auto")
-        assert isinstance(config.attention_config, AttentionConfig)
-        assert config.attention_config.default is None
+        assert isinstance(config.diffusion_attention_config, AttentionConfig)
+        assert config.diffusion_attention_config.default is None
 
     def test_diffusion_attention_backend_and_default_are_mutually_exclusive(self):
         with pytest.raises(ValueError):
@@ -303,27 +303,19 @@ class TestOmniDiffusionConfigAttentionParsing:
 
     def test_dict_diffusion_attention_config(self):
         config = OmniDiffusionConfig(
-            attention_config={
+            diffusion_attention_config={
                 "default": {"backend": "FLASH_ATTN"},
                 "per_role": {"self": "SPARSE_BLOCK"},
             }
         )
-        assert config.attention_config.default.backend == "FLASH_ATTN"
-        assert config.attention_config.per_role["self"].backend == "SPARSE_BLOCK"
+        assert config.diffusion_attention_config.default.backend == "FLASH_ATTN"
+        assert config.diffusion_attention_config.per_role["self"].backend == "SPARSE_BLOCK"
 
-    def test_legacy_attention_config_name_maps_in_from_kwargs(self):
-        config = OmniDiffusionConfig.from_kwargs(
-            attention_config={
-                "default": {"backend": "FLASH_ATTN"},
-            }
-        )
-        assert config.attention_config.default.backend == "FLASH_ATTN"
-
-    def test_no_attention_config_defaults_to_empty(self):
+    def test_no_diffusion_attention_config_defaults_to_empty(self):
         config = OmniDiffusionConfig()
-        assert isinstance(config.attention_config, AttentionConfig)
-        assert config.attention_config.default is None
-        assert config.attention_config.per_role == {}
+        assert isinstance(config.diffusion_attention_config, AttentionConfig)
+        assert config.diffusion_attention_config.default is None
+        assert config.diffusion_attention_config.per_role == {}
 
 
 class TestCurrentDiffusionConfig:
@@ -397,11 +389,14 @@ class TestAttentionInitUsesCurrentDiffusionConfig:
         )
 
         od_config = SimpleNamespace(
-            attention_config=AttentionConfig(
+            diffusion_attention_config=AttentionConfig(
                 default=AttentionSpec(backend="FLASH_ATTN"),
                 per_role={"cross": AttentionSpec(backend="TORCH_SDPA", extra={"block_size": 128})},
             ),
             parallel_config=SimpleNamespace(ring_degree=2),
+            diffusion_kv_cache_dtype=None,
+            diffusion_kv_cache_skip_step_indices=None,
+            diffusion_kv_cache_skip_layer_indices=None,
         )
 
         with set_current_diffusion_config(od_config):
@@ -418,10 +413,109 @@ class TestAttentionInitUsesCurrentDiffusionConfig:
         assert captured["role"] == "cross"
         assert captured["role_category"] == "cross"
         assert captured["head_size"] == 64
-        assert captured["attention_config"] is od_config.attention_config
+        assert captured["attention_config"] is od_config.diffusion_attention_config
         assert attn.backend_pref == "TORCH_SDPA"
         assert attn.attention.kwargs["backend_kwargs"] == {"block_size": 128}
         assert attn.attention.kwargs["qkv_layout"] == "BSND"
         assert attn.use_ring is True
         assert attn.ring_runner is not None
         assert attn.ring_runner.attn_backend_pref == "TORCH_SDPA"
+
+
+class TestDiffusionKvCacheQuantization:
+    @staticmethod
+    def _install_attention_init_stubs(monkeypatch):
+        class _FakeAttentionImpl:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def forward(self, query, key, value, attn_metadata=None):
+                return query
+
+        class _FakeBackend:
+            @staticmethod
+            def get_name() -> str:
+                return "FAKE_BACKEND"
+
+            @staticmethod
+            def get_impl_cls():
+                return _FakeAttentionImpl
+
+            @staticmethod
+            def supports_kv_cache_dtype(kv_cache_dtype, platform_key) -> bool:
+                return True
+
+        class _FakeRingParallelAttention:
+            def __init__(self, sp_group, attn_backend_pref=None):
+                self.sp_group = sp_group
+                self.attn_backend_pref = attn_backend_pref
+
+        monkeypatch.setattr(
+            layer_mod,
+            "get_attn_backend_for_role",
+            lambda role, head_size, attention_config=None, role_category=None: (_FakeBackend, None),
+        )
+        monkeypatch.setattr(layer_mod.SDPABackend, "get_impl_cls", staticmethod(lambda: _FakeAttentionImpl))
+        monkeypatch.setattr(layer_mod, "build_parallel_attention_strategy", lambda **kwargs: object())
+        monkeypatch.setattr(layer_mod, "get_sp_group", lambda: SimpleNamespace(ring_group="ring-group"))
+        monkeypatch.setattr(layer_mod, "RingParallelAttention", _FakeRingParallelAttention)
+        monkeypatch.setattr(layer_mod, "is_forward_context_available", lambda: False)
+
+    def test_diffusion_kv_cache_dtype_none_does_not_trigger_ring_quantization_error(self, monkeypatch):
+        self._install_attention_init_stubs(monkeypatch)
+        od_config = SimpleNamespace(
+            diffusion_attention_config=AttentionConfig(),
+            parallel_config=SimpleNamespace(ring_degree=2),
+            diffusion_kv_cache_dtype=None,
+            diffusion_kv_cache_skip_step_indices=None,
+            diffusion_kv_cache_skip_layer_indices=None,
+        )
+
+        with set_current_diffusion_config(od_config):
+            attn = Attention(
+                num_heads=4,
+                head_size=64,
+                causal=False,
+                softmax_scale=1.0,
+            )
+
+        assert attn._kv_cache_dtype is None
+
+    def test_diffusion_kv_cache_dtype_auto_does_not_trigger_ring_quantization_error(self, monkeypatch):
+        self._install_attention_init_stubs(monkeypatch)
+        od_config = SimpleNamespace(
+            diffusion_attention_config=AttentionConfig(),
+            parallel_config=SimpleNamespace(ring_degree=2),
+            diffusion_kv_cache_dtype="auto",
+            diffusion_kv_cache_skip_step_indices=None,
+            diffusion_kv_cache_skip_layer_indices=None,
+        )
+
+        with set_current_diffusion_config(od_config):
+            attn = Attention(
+                num_heads=4,
+                head_size=64,
+                causal=False,
+                softmax_scale=1.0,
+            )
+
+        assert attn._kv_cache_dtype is None
+
+    def test_diffusion_kv_cache_dtype_fp8_raises_with_ring_attention(self, monkeypatch):
+        self._install_attention_init_stubs(monkeypatch)
+        od_config = SimpleNamespace(
+            diffusion_attention_config=AttentionConfig(),
+            parallel_config=SimpleNamespace(ring_degree=2),
+            diffusion_kv_cache_dtype="fp8",
+            diffusion_kv_cache_skip_step_indices=None,
+            diffusion_kv_cache_skip_layer_indices=None,
+        )
+
+        with set_current_diffusion_config(od_config):
+            with pytest.raises(ValueError, match="KV quantization is not compatible with ring attention"):
+                Attention(
+                    num_heads=4,
+                    head_size=64,
+                    causal=False,
+                    softmax_scale=1.0,
+                )
