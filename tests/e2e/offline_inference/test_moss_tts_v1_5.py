@@ -24,9 +24,9 @@ from vllm import SamplingParams
 from tests.helpers.mark import hardware_test
 from vllm_omni import Omni
 
-# H100-gated (8B). Picked up by the nightly H100 omni job
-# (-m "full_model and H100 and omni"); the tts mark keeps it consistent with
-# the other MOSS-TTS tests and any tts-scoped sweeps.
+# H100-gated (8B). Picked up by the nightly "TTS · Function Test with H100"
+# job (-m "full_model and H100 and tts"); the L4 MOSS-TTS tests land in the
+# sibling L4 tts lane instead.
 pytestmark = [pytest.mark.full_model, pytest.mark.tts]
 
 SAMPLE_RATE = 24_000
