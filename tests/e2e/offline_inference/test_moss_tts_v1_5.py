@@ -101,7 +101,6 @@ def _collect_audio(omni: Omni, request: dict) -> tuple[torch.Tensor, int]:
     raise AssertionError("No stage outputs received")
 
 
-@pytest.mark.omni
 @hardware_test(res={"cuda": "H100"})
 def test_moss_tts_v15_voice_clone(v15_engine, ref_audio_path):
     """MOSS-TTS-v1.5 (8B): voice_clone produces non-empty 24 kHz audio."""
