@@ -1248,10 +1248,9 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
         self.audio_assistant_slot_token_id: int = int(self.config.audio_assistant_slot_token_id)
         self.im_end_token_id: int = int(self.config.im_end_token_id)
 
-        # Qwen3 backbone. get_text_config() alone is sufficient for vLLM to
-        # size KV cache / heads correctly (mirrors Delay's simpler pattern --
-        # no config-swap needed). Checkpoint stores this under
-        # ``transformer.*``, remapped in load_weights().
+        # Qwen3 backbone. get_text_config() is sufficient for vLLM to size
+        # KV cache / heads correctly, as long as AutoConfig resolves to the
+        # local MossTTSLocalConfig rather than the HF remote-code class.
         self.model = Qwen3Model(
             vllm_config=vllm_config,
             prefix=_maybe_prefix(prefix, "model"),
