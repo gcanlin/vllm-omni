@@ -65,7 +65,11 @@ from vllm_omni.model_executor.models.ming_flash_omni.pipeline import (
 )
 from vllm_omni.model_executor.models.ming_tts.pipeline import MING_TTS_PIPELINE
 from vllm_omni.model_executor.models.minicpmo_4_5.pipeline import MINICPMO_4_5_PIPELINE
-from vllm_omni.model_executor.models.moss_tts.pipeline import MOSS_TTS_PIPELINE, MOSS_TTS_REALTIME_PIPELINE
+from vllm_omni.model_executor.models.moss_tts.pipeline import (
+    MOSS_TTS_LOCAL_PIPELINE,
+    MOSS_TTS_PIPELINE,
+    MOSS_TTS_REALTIME_PIPELINE,
+)
 from vllm_omni.model_executor.models.moss_tts_nano.pipeline import MOSS_TTS_NANO_PIPELINE
 from vllm_omni.model_executor.models.qwen2_5_omni.pipeline import (
     QWEN2_5_OMNI_PIPELINE,
