@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 import torch
@@ -38,6 +38,40 @@ logger = init_logger(__name__)
 
 def _maybe_prefix(prefix: str, name: str) -> str:
     return f"{prefix}.{name}" if prefix else name
+
+
+def _iter_state_row_spans(
+    states: Sequence[dict[str, Any]],
+    spans: Sequence[tuple[int, int]] | None,
+    num_rows: int,
+) -> Iterable[tuple[dict[str, Any], int, int]]:
+    """Yield state/logit-row ranges without assuming equal request row counts."""
+    if num_rows <= 0 or not states:
+        return
+
+    if spans is not None:
+        if len(spans) != len(states):
+            raise RuntimeError(f"request_token_spans has {len(spans)} entries for {len(states)} request states")
+        if all(row_end <= num_rows for _, row_end in spans):
+            for state, (row_start, row_end) in zip(states, spans, strict=False):
+                if row_start < row_end:
+                    yield state, int(row_start), int(row_end)
+            return
+        if num_rows != len(states):
+            raise RuntimeError(
+                "request_token_spans describe full hidden rows, but current logits "
+                f"have {num_rows} rows for {len(states)} states and are not one-row-per-request"
+            )
+
+    if num_rows == len(states):
+        for i, state in enumerate(states):
+            yield state, i, i + 1
+        return
+
+    raise RuntimeError(
+        "MOSS-TTS compute_logits requires request_token_spans or one-row-per-request logits; "
+        f"got {num_rows} rows for {len(states)} request states"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -213,14 +247,13 @@ class MossTTSDelayTalkerForGeneration(nn.Module):
         n_vq = self.n_vq
         device = logits.device
         vocab_size = logits.shape[-1]
-        rows_per_state = max(1, logits.shape[0] // max(1, len(states)))
 
-        for i, state in enumerate(states):
-            if not isinstance(state, dict):
-                continue
-            row_start = i * rows_per_state
-            row_end = min(row_start + rows_per_state, logits.shape[0])
-            if row_start >= row_end:
+        for state, row_start, row_end in _iter_state_row_spans(
+            states,
+            getattr(self, "_batch_state_spans", None),
+            logits.shape[0],
+        ):
+            if state is None:
                 continue
             row = logits[row_start:row_end]
 
@@ -573,6 +606,7 @@ class MossTTSDelayTalkerForGeneration(nn.Module):
         """
         if isinstance(model_outputs, OmniOutput):
             self._batch_state = None
+            self._batch_state_spans = None
             return model_outputs
 
         hidden = model_outputs  # (S, H)
@@ -594,11 +628,11 @@ class MossTTSDelayTalkerForGeneration(nn.Module):
         # Stash the per-row state for compute_logits to apply masks. logits
         # rows align with hidden rows, which align with info_dicts in order.
         self._batch_state = [(info["audio_state"] if isinstance(info, dict) else {}) for info in info_dicts]
+        self._batch_state_spans = kwargs.get("request_token_spans")
 
         # Per-request (start, end) hidden-row spans from the runner. In mixed
         # prefill+decode steps the per-request token counts differ, so an equal
-        # rows-per-request split would sample codes from the wrong rows; fall
-        # back to that split only when spans are unavailable.
+        # rows-per-request split would sample codes from the wrong rows.
         spans = kwargs.get("request_token_spans")
 
         # One accumulated-codes tensor per request, in batch order. The generic
@@ -611,18 +645,18 @@ class MossTTSDelayTalkerForGeneration(nn.Module):
 
         if hidden.numel() > 0:
             num_rows = hidden.shape[0]
-            rows_per_req = max(1, num_rows // max(1, len(info_dicts) or 1))
+            if spans is None or len(spans) != len(info_dicts):
+                raise RuntimeError(
+                    "MOSS-TTS make_omni_output requires request_token_spans "
+                    f"for {len(info_dicts)} request infos, got {0 if spans is None else len(spans)}"
+                )
 
             for i, info in enumerate(info_dicts):
                 if not isinstance(info, dict):
                     per_req_codes.append(hidden.new_empty((0, self.n_vq), dtype=torch.long))
                     continue
-                if spans is not None and i < len(spans):
-                    row_start, row_end = spans[i]
-                    row_end = min(int(row_end), num_rows)
-                else:
-                    row_start = i * rows_per_req
-                    row_end = min(row_start + rows_per_req, num_rows)
+                row_start, row_end = spans[i]
+                row_end = min(int(row_end), num_rows)
                 if row_start >= row_end:
                     per_req_codes.append(hidden.new_empty((0, self.n_vq), dtype=torch.long))
                     continue
@@ -868,13 +902,12 @@ class MossTTSRealtimeTalkerForGeneration(nn.Module):
         logits = hidden_states.new_full((B, V), float("-inf"))
 
         states = self._batch_state or []
-        rows_per_state = max(1, B // max(1, len(states) or 1))
-        for i, state in enumerate(states):
-            r0 = i * rows_per_state
-            r1 = min(r0 + rows_per_state, B)
-            if r0 >= r1:
-                continue
-            if not isinstance(state, dict):
+        for state, r0, r1 in _iter_state_row_spans(
+            states,
+            getattr(self, "_batch_state_spans", None),
+            B,
+        ):
+            if state is None:
                 logits[r0:r1, self.text_pad_id] = 0.0
                 continue
             if state.get("is_stopping"):
@@ -995,6 +1028,7 @@ class MossTTSRealtimeTalkerForGeneration(nn.Module):
     ) -> OmniOutput:
         if isinstance(model_outputs, OmniOutput):
             self._batch_state = None
+            self._batch_state_spans = None
             return model_outputs
 
         hidden = model_outputs  # (S, H)
@@ -1008,9 +1042,10 @@ class MossTTSRealtimeTalkerForGeneration(nn.Module):
                 info["audio_state"] = {"is_stopping": False, "step": 0}
 
         self._batch_state = [(info["audio_state"] if isinstance(info, dict) else {}) for info in info_dicts]
+        self._batch_state_spans = kwargs.get("request_token_spans")
 
-        # See delay talker: real per-request row spans from the runner, with the
-        # equal-split as fallback when unavailable.
+        # See delay talker: real per-request row spans from the runner are
+        # required because mixed prefill+decode steps have unequal row counts.
         spans = kwargs.get("request_token_spans")
         # Per-request accumulated codes in batch order, pre-filled with empty
         # placeholders so every skip path (stopped / eos / bos / pad) keeps
@@ -1020,16 +1055,16 @@ class MossTTSRealtimeTalkerForGeneration(nn.Module):
         have_codes = False
         if hidden.numel() > 0 and info_dicts:
             num_rows = hidden.shape[0]
-            rows_per_req = max(1, num_rows // max(1, len(info_dicts) or 1))
+            if spans is None or len(spans) != len(info_dicts):
+                raise RuntimeError(
+                    "MOSS-TTS make_omni_output requires request_token_spans "
+                    f"for {len(info_dicts)} request infos, got {0 if spans is None else len(spans)}"
+                )
             for i, info in enumerate(info_dicts):
                 if not isinstance(info, dict):
                     continue
-                if spans is not None and i < len(spans):
-                    row_start, row_end = spans[i]
-                    row_end = min(int(row_end), num_rows)
-                else:
-                    row_start = i * rows_per_req
-                    row_end = min(row_start + rows_per_req, num_rows)
+                row_start, row_end = spans[i]
+                row_end = min(int(row_end), num_rows)
                 if row_start >= row_end:
                     continue
 
@@ -1335,13 +1370,12 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
         logits = hidden_states.new_full((num_rows, self.text_vocab_size), float("-inf"))
 
         states = self._batch_state or []
-        rows_per_state = max(1, num_rows // max(1, len(states) or 1))
-        for i, state in enumerate(states):
-            row_start = i * rows_per_state
-            row_end = min(row_start + rows_per_state, num_rows)
-            if row_start >= row_end:
-                continue
-            if isinstance(state, dict) and state.get("is_stopping"):
+        for state, row_start, row_end in _iter_state_row_spans(
+            states,
+            getattr(self, "_batch_state_spans", None),
+            num_rows,
+        ):
+            if state is not None and state.get("is_stopping"):
                 logits[row_start:row_end, self.im_end_token_id] = 0.0
             else:
                 logits[row_start:row_end, self.audio_assistant_slot_token_id] = 0.0
@@ -1454,6 +1488,7 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
     ) -> OmniOutput:
         if isinstance(model_outputs, OmniOutput):
             self._batch_state = None
+            self._batch_state_spans = None
             return model_outputs
 
         hidden = model_outputs  # (S, H)
@@ -1466,6 +1501,7 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
                 info["audio_state"] = {"is_stopping": False, "step": 0, "max_new_frames": -1}
 
         self._batch_state = [(info["audio_state"] if isinstance(info, dict) else {}) for info in info_dicts]
+        self._batch_state_spans = kwargs.get("request_token_spans")
 
         spans = kwargs.get("request_token_spans")
         per_req_codes: list[torch.Tensor] = [hidden.new_empty((0, self.n_vq), dtype=torch.long) for _ in info_dicts]
@@ -1473,16 +1509,16 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
 
         if hidden.numel() > 0 and info_dicts:
             num_rows = hidden.shape[0]
-            rows_per_req = max(1, num_rows // max(1, len(info_dicts) or 1))
+            if spans is None or len(spans) != len(info_dicts):
+                raise RuntimeError(
+                    "MOSS-TTS make_omni_output requires request_token_spans "
+                    f"for {len(info_dicts)} request infos, got {0 if spans is None else len(spans)}"
+                )
             for i, info in enumerate(info_dicts):
                 if not isinstance(info, dict):
                     continue
-                if spans is not None and i < len(spans):
-                    row_start, row_end = spans[i]
-                    row_end = min(int(row_end), num_rows)
-                else:
-                    row_start = i * rows_per_req
-                    row_end = min(row_start + rows_per_req, num_rows)
+                row_start, row_end = spans[i]
+                row_end = min(int(row_end), num_rows)
                 if row_start >= row_end:
                     continue
 
