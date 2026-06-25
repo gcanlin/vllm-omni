@@ -184,6 +184,18 @@ def _create_wav_header(sample_rate: int, num_channels: int = 1, bits_per_sample:
     return header
 
 
+def _infer_audio_num_channels(audio: np.ndarray) -> int:
+    """Infer channel count before streaming PCM bytes are wrapped as WAV."""
+    if audio.ndim == 3 and audio.shape[0] == 1:
+        audio = audio[0]
+    if audio.ndim == 2:
+        if audio.shape[0] in (1, 2):
+            return int(audio.shape[0])
+        if audio.shape[1] in (1, 2):
+            return int(audio.shape[1])
+    return 1
+
+
 def _sanitize_filename(filename: str) -> str:
     """Sanitize filename to prevent path traversal attacks.
 
@@ -2683,7 +2695,12 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
                         assert sr_raw is not None, (
                             "First audio chunk must include sample rate metadata for WAV streaming"
                         )
-                        wav_header = _create_wav_header(sample_rate=sample_rate_val, num_channels=1, bits_per_sample=16)
+                        num_channels = _infer_audio_num_channels(np.asarray(chunk_np))
+                        wav_header = _create_wav_header(
+                            sample_rate=sample_rate_val,
+                            num_channels=num_channels,
+                            bits_per_sample=16,
+                        )
                         yield wav_header
                         first_chunk = False
 
