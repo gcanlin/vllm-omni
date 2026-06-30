@@ -1809,8 +1809,7 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
 
         v = self._moss_variant
         logger.info(
-            "[MossTTSDebug][build-moss-params-start] variant=%s text_len=%d stream=%s "
-            "ref_audio=%s ref_audio_2=%s",
+            "[MossTTSDebug][build-moss-params-start] variant=%s text_len=%d stream=%s ref_audio=%s ref_audio_2=%s",
             v,
             len(request.input or ""),
             bool(getattr(request, "stream", False)),
@@ -1958,8 +1957,7 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         text_ids: list[int] = unified[:, 0].tolist()
         audio_codes: torch.Tensor = unified[:, 1:].contiguous().to(torch.int64)
         logger.info(
-            "[MossTTSDebug][build-moss-params-done] variant=%s unified_shape=%s "
-            "text_len=%d audio_codes_shape=%s",
+            "[MossTTSDebug][build-moss-params-done] variant=%s unified_shape=%s text_len=%d audio_codes_shape=%s",
             v,
             tuple(unified.shape),
             len(text_ids),
@@ -3754,8 +3752,7 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         if self._tts_model_type == "moss_tts" and self._moss_variant == "local" and sampling_params_list:
             stage0_params = sampling_params_list[0]
             logger.info(
-                "[MossTTSDebug][stage0-sampling] stop_token_ids=%s eos_token_id=%s "
-                "min_tokens=%s max_tokens=%s",
+                "[MossTTSDebug][stage0-sampling] stop_token_ids=%s eos_token_id=%s min_tokens=%s max_tokens=%s",
                 getattr(stage0_params, "stop_token_ids", None),
                 getattr(stage0_params, "eos_token_id", None),
                 getattr(stage0_params, "min_tokens", None),

@@ -31,8 +31,7 @@ class _MossTTSAdapterBase(ARTTSAdapter):
     ) -> PreparedRequest:
         server = self.ctx.server
         logger.info(
-            "[MossTTSDebug][adapter-build-start] model_type=%s variant=%s stream=%s "
-            "ref_audio=%s voice=%s",
+            "[MossTTSDebug][adapter-build-start] model_type=%s variant=%s stream=%s ref_audio=%s voice=%s",
             getattr(server, "_tts_model_type", None),
             getattr(server, "_moss_variant", None),
             bool(getattr(request, "stream", False)),

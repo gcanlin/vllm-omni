@@ -24,11 +24,10 @@ from typing import cast
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from transformers.modeling_utils import PreTrainedAudioTokenizerBase
 from transformers.utils import ModelOutput, auto_docstring, logging
-from .configuration_moss_audio_tokenizer_v2 import MossAudioTokenizerConfig
 
+from .configuration_moss_audio_tokenizer_v2 import MossAudioTokenizerConfig
 
 logger = logging.get_logger(__name__)
 
@@ -951,10 +950,10 @@ class MossAudioTokenizerPatchedPretransform(nn.Module):
         return x, output_lengths
 
     def decode(self, x, input_lengths):
-        b, dh, l = x.shape
+        b, dh, length = x.shape
         h = self.patch_size
         d = dh // h
-        x = x.reshape(b, d, h, l).permute(0, 1, 3, 2).reshape(b, d, l * h)
+        x = x.reshape(b, d, h, length).permute(0, 1, 3, 2).reshape(b, d, length * h)
         output_lengths = input_lengths * self.patch_size
         return x, output_lengths
 
@@ -1123,9 +1122,7 @@ class MossAudioTokenizerResidualVQ(nn.Module):
             WNConv1d(input_dim, self.rvq_dim, kernel_size=1) if input_dim != self.rvq_dim else nn.Identity()
         )
         self.output_proj = (
-            WNConv1d(self.rvq_dim, self.output_dim, kernel_size=1)
-            if self.rvq_dim != self.output_dim
-            else nn.Identity()
+            WNConv1d(self.rvq_dim, self.output_dim, kernel_size=1) if self.rvq_dim != self.output_dim else nn.Identity()
         )
 
         self.quantizers = nn.ModuleList(
@@ -1224,9 +1221,7 @@ class MossAudioTokenizerResidualLFQ(nn.Module):
             WNConv1d(input_dim, self.rvq_dim, kernel_size=1) if input_dim != self.rvq_dim else nn.Identity()
         )
         self.output_proj = (
-            WNConv1d(self.rvq_dim, self.output_dim, kernel_size=1)
-            if self.rvq_dim != self.output_dim
-            else nn.Identity()
+            WNConv1d(self.rvq_dim, self.output_dim, kernel_size=1) if self.rvq_dim != self.output_dim else nn.Identity()
         )
 
         self.quantizers = nn.ModuleList(
@@ -1456,8 +1451,7 @@ class MossAudioTokenizerModel(MossAudioTokenizerPreTrainedModel):
             else:
                 if wav.dim() != 2 or wav.shape[0] != self.number_channels:
                     raise ValueError(
-                        f"Expected wav_list[{i}] to have shape `({self.number_channels}, T)`, "
-                        f"got {tuple(wav.shape)}."
+                        f"Expected wav_list[{i}] to have shape `({self.number_channels}, T)`, got {tuple(wav.shape)}."
                     )
                 wav_i = wav
 

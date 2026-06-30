@@ -236,11 +236,7 @@ def talker2codec_raw_async_chunk(
     de-delay is applied on this path.
     """
     external_req_id = getattr(request, "external_req_id", None)
-    req_id = str(
-        external_req_id
-        if external_req_id is not None
-        else getattr(request, "request_id", id(request))
-    )
+    req_id = str(external_req_id if external_req_id is not None else getattr(request, "request_id", id(request)))
 
     if not hasattr(transfer_manager, "code_prompt_token_ids"):
         transfer_manager.code_prompt_token_ids = defaultdict(list)
@@ -280,8 +276,7 @@ def talker2codec_raw_async_chunk(
 
     if input_shape is not None and not bool(req_payload.get("debug_logged_input")):
         logger.info(
-            "[MossTTSDebug][talker2codec-input] req=%s input_shape=%s valid_rows=%s "
-            "pending_frames=%d finished=%s",
+            "[MossTTSDebug][talker2codec-input] req=%s input_shape=%s valid_rows=%s pending_frames=%d finished=%s",
             req_id,
             input_shape,
             valid_rows_count,

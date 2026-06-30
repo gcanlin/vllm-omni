@@ -160,10 +160,7 @@ class _MossCodecStreamSession:
             cursors = [0] * len(wave)
             chunks: list[list[torch.Tensor]] = [[] for _ in wave]
             while True:
-                remaining = [
-                    int(codes.shape[1]) - cursor
-                    for codes, cursor in zip(wave, cursors)
-                ]
+                remaining = [int(codes.shape[1]) - cursor for codes, cursor in zip(wave, cursors)]
                 positive = [rem for rem in remaining if rem > 0]
                 if not positive:
                     break
@@ -362,12 +359,7 @@ class MossTTSCodecDecoder(nn.Module):
             finished = _meta_bool(meta.get("stream_finished", meta.get("finished", False)))
             streaming_enabled = self._runtime_streaming_enabled(info, meta)
             code_flat_numel = meta.get("code_flat_numel")
-            if (
-                streaming_enabled
-                and finished
-                and code_flat_numel is not None
-                and int(code_flat_numel) == 0
-            ):
+            if streaming_enabled and finished and code_flat_numel is not None and int(code_flat_numel) == 0:
                 for _, wav in self._finish_empty_streaming_requests([info]).items():
                     audios[i] = wav.reshape(-1) if wav.ndim == 1 or int(wav.shape[0]) == 1 else wav
                 continue
@@ -969,8 +961,7 @@ class MossTTSCodecDecoder(nn.Module):
             return codec_cfg, codec
         except Exception:
             logger.exception(
-                "Failed to instantiate vendored MOSS Audio Tokenizer v2; "
-                "falling back to legacy vendored codec."
+                "Failed to instantiate vendored MOSS Audio Tokenizer v2; falling back to legacy vendored codec."
             )
 
         codec_cfg = MossAudioTokenizerConfig.from_pretrained(codec_path)
