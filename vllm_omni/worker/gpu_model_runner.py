@@ -1345,6 +1345,7 @@ class OmniGPUModelRunner(GPUModelRunner):
         nstp = self._omni_num_scheduled_tokens_np
         if nstp is not None and len(nstp) == len(self.input_batch.req_ids):
             try:
+                model_kwargs_extra["seq_token_counts"] = [int(n) for n in nstp.tolist()]
                 model_kwargs_extra["request_token_spans"] = self._compute_request_token_spans(nstp)
             except Exception as e:
                 # Visible on purpose: the fallback is the equal rows-per-request
@@ -1806,7 +1807,19 @@ class OmniGPUModelRunner(GPUModelRunner):
         def _explicit_talker_seed(req_id: str) -> int | None:
             sampling_params = getattr(self.requests[req_id], "sampling_params", None)
             extra_args = getattr(sampling_params, "extra_args", None) if sampling_params is not None else None
-            seed = extra_args.get("qwen3_tts_request_seed") if isinstance(extra_args, dict) else None
+            seed = None
+            if isinstance(extra_args, dict):
+                seed = extra_args.get("qwen3_tts_request_seed")
+                if seed is None:
+                    seed = extra_args.get("moss_tts_request_seed")
+            if seed is None:
+                req_info = self.model_intermediate_buffer.get(req_id, {})
+                if isinstance(req_info, dict):
+                    seed = req_info.get("seed")
+                    if isinstance(seed, (list, tuple)) and seed:
+                        seed = seed[0]
+                    elif isinstance(seed, (list, tuple)):
+                        seed = None
             return int(seed) if seed is not None else None
 
         if decode_batch_size > 1 and any(_explicit_talker_seed(req_id) is not None for req_id in decode_req_ids):
@@ -1854,16 +1867,24 @@ class OmniGPUModelRunner(GPUModelRunner):
         }
         if generator is not None:
             talker_kwargs["generator"] = generator
+        if getattr(self.model, "talker_mtp_accepts_req_infos", False):
+            talker_kwargs["req_ids"] = decode_req_ids
+            talker_kwargs["req_infos"] = [self.model_intermediate_buffer.get(req_id, {}) for req_id in decode_req_ids]
         with current_omni_platform.set_forward_context(
             None, self.vllm_config, cudagraph_runtime_mode=_cudagraph_mode, batch_descriptor=batch_desc
         ):
-            req_embeds, code_predictor_codes = self.talker_mtp(
+            talker_result = self.talker_mtp(
                 req_input_ids,
                 req_embeds,
                 last_talker_hidden,
                 text_step,
                 **talker_kwargs,
             )
+        mtp_updates = None
+        if isinstance(talker_result, tuple) and len(talker_result) == 3:
+            req_embeds, code_predictor_codes, mtp_updates = talker_result
+        else:
+            req_embeds, code_predictor_codes = talker_result
         # update the inputs_embeds and code_predictor_codes
         out_key = getattr(self.model, "talker_mtp_output_key", ("codes", "audio"))
         if not isinstance(out_key, tuple) or len(out_key) != 2:
@@ -1873,8 +1894,12 @@ class OmniGPUModelRunner(GPUModelRunner):
             start_offsets = [int(self.query_start_loc.cpu[id_to_index[req_id]]) for req_id in decode_req_ids]
         for idx, (req_id, start_offset) in enumerate(zip(decode_req_ids, start_offsets, strict=True)):
             inputs_embeds[start_offset : start_offset + 1] = req_embeds[idx : idx + 1]
-            update_dict = {out_key[0]: {out_key[1]: code_predictor_codes[idx : idx + 1]}}
-            self._merge_additional_information_update(req_id, update_dict)
+            if code_predictor_codes is not None:
+                update_dict = {out_key[0]: {out_key[1]: code_predictor_codes[idx : idx + 1]}}
+                self._merge_additional_information_update(req_id, update_dict)
+            if mtp_updates is not None:
+                update_dict = mtp_updates[idx] if isinstance(mtp_updates, list) else mtp_updates
+                self._merge_additional_information_update(req_id, update_dict)
 
     def _model_forward(
         self,
@@ -1886,6 +1911,9 @@ class OmniGPUModelRunner(GPUModelRunner):
     ):
         """Inject omni-specific kwargs into forward and cache model output"""
         model_kwargs_extra = self._build_model_kwargs_extra()
+        for key in tuple(model_kwargs_extra):
+            if key in model_kwargs:
+                model_kwargs_extra.pop(key)
         update_decode_metadata = getattr(self.model, "update_decode_step_metadata", None)
         if getattr(self.model, "supports_omni_decode_step_metadata", False) and callable(update_decode_metadata):
             update_decode_metadata(

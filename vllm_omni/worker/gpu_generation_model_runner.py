@@ -778,6 +778,10 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
             if hasattr(self.model, "get_dummy_runtime_additional_information"):
                 runtime_addi = self.model.get_dummy_runtime_additional_information(num_reqs)
                 model_kwargs["runtime_additional_information"] = runtime_addi
+            # Generation-stage code2wav models split flat input_ids using this
+            # shared contract. Dummy/profile runs use padded synthetic inputs,
+            # so expose one synthetic segment covering the actual tensor length.
+            model_kwargs["seq_token_counts"] = [int(num_tokens_padded)]
 
             if self.uses_mrope:
                 positions = self.mrope_positions.gpu[:, :num_tokens_padded]

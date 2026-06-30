@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
+from collections.abc import Mapping
 from typing import Any
 
 import torch
@@ -14,6 +16,8 @@ from vllm.logger import init_logger
 from vllm_omni.data_entry_keys import CodesStruct, MetaStruct, OmniPayloadStruct
 
 logger = init_logger(__name__)
+
+_MOSS_AUDIO_PAD_CODE = 1024
 
 
 # ---------------------------------------------------------------------------
@@ -90,13 +94,13 @@ def talker2codec(
 # ---------------------------------------------------------------------------
 
 
-def talker2codec_async_chunk(
+def talker2codec_delay_async_chunk(
     transfer_manager: Any,
     multimodal_output: dict[str, Any] | None,
     request: Any,
     is_finished: bool = False,
 ) -> OmniPayloadStruct | None:
-    """Emit accumulated audio codes to Stage 1 as they arrive from Stage 0.
+    """Emit delay-patterned accumulated audio codes to Stage 1.
 
     State is maintained in ``transfer_manager`` keyed by request ID.
     A chunk is forwarded to Stage 1 when either:
@@ -138,14 +142,6 @@ def talker2codec_async_chunk(
                     req_state["accumulated"] = new_rows
                 else:
                     req_state["accumulated"] = torch.cat([req_state["accumulated"], new_rows], dim=0)
-        # Realtime variant emits raw (un-delay-patterned) codes; record that
-        # so the emit step below skips the apply_de_delay_pattern transform.
-        # Realtime sets ``meta.finished`` to a 1-D bool tensor; the delay
-        # variant leaves ``meta`` empty.
-        meta_in = pooling_output.get("meta", {}) or {}
-        flag = meta_in.get("finished")
-        if isinstance(flag, torch.Tensor) and flag.numel() >= 1 and bool(flag.reshape(-1)[0].item()):
-            req_state["skip_dedelay"] = True
 
     acc = req_state["accumulated"]
     if acc is None or acc.numel() == 0:
@@ -181,15 +177,12 @@ def talker2codec_async_chunk(
     #   1. de-delay   ``(T+nq-1, nq)`` → ``(T, nq)``
     #   2. drop rows that are entirely pad (separators between audio segments,
     #      and the leading text-mode rows that precede the first audio_start).
-    # The realtime talker emits raw codes (no delay), so steps 1 is skipped.
     chunk_codes_long = chunk_codes.to(torch.long).cpu().contiguous()  # (T_chunk, NQ)
     nq = int(chunk_codes_long.shape[1])
     t_chunk = int(chunk_codes_long.shape[0])
     audio_pad_code = 1024  # MOSS-TTS audio_pad_code; same value across variants.
 
-    if req_state.get("skip_dedelay"):
-        de_delayed = chunk_codes_long
-    elif t_chunk > nq:
+    if t_chunk > nq:
         de_delayed = chunk_codes_long.new_zeros((t_chunk - nq + 1, nq))
         for i in range(nq):
             de_delayed[:, i] = chunk_codes_long[i : i + de_delayed.shape[0], i]
@@ -229,4 +222,173 @@ def talker2codec_async_chunk(
     )
 
 
-__all__ = ["talker2codec", "talker2codec_async_chunk"]
+def talker2codec_raw_async_chunk(
+    transfer_manager: Any,
+    multimodal_output: dict[str, Any] | None,
+    request: Any,
+    is_finished: bool = False,
+) -> OmniPayloadStruct | None:
+    """Async processor for MOSS-TTS Local/Realtime raw codec rows.
+
+    Stage 0 emits newly generated raw codec rows shaped ``[T, n_vq]`` (normally
+    ``[1, n_vq]`` per decode step). This processor buffers those new rows until
+    a codec chunk is ready, then forwards the chunk to Stage 1. No delay-pattern
+    de-delay is applied on this path.
+    """
+    external_req_id = getattr(request, "external_req_id", None)
+    req_id = str(
+        external_req_id
+        if external_req_id is not None
+        else getattr(request, "request_id", id(request))
+    )
+
+    if not hasattr(transfer_manager, "code_prompt_token_ids"):
+        transfer_manager.code_prompt_token_ids = defaultdict(list)
+    if not hasattr(transfer_manager, "request_payload"):
+        transfer_manager.request_payload = {}
+    if not hasattr(transfer_manager, "put_req_chunk"):
+        transfer_manager.put_req_chunk = defaultdict(int)
+
+    pending_frames = transfer_manager.code_prompt_token_ids[req_id]
+    payload_store = transfer_manager.request_payload
+    req_payload = payload_store.get(req_id)
+    if not isinstance(req_payload, dict):
+        req_payload = {}
+        payload_store[req_id] = req_payload
+
+    input_shape: tuple[int, ...] | None = None
+    valid_rows_count: int | None = None
+    if isinstance(multimodal_output, Mapping):
+        codes_dict = multimodal_output.get("codes", {}) or {}
+        new_frames = codes_dict.get("audio")
+        if isinstance(new_frames, torch.Tensor) and new_frames.numel() > 0:
+            input_shape = tuple(new_frames.shape)
+            frames_cpu = new_frames.detach().to("cpu", torch.long).contiguous()
+            if frames_cpu.ndim == 1:
+                frames_cpu = frames_cpu.reshape(1, -1)
+            if frames_cpu.ndim != 2:
+                raise ValueError(f"MOSS raw codec frames must be 2-D, got {tuple(frames_cpu.shape)}")
+            valid_rows = frames_cpu.ne(_MOSS_AUDIO_PAD_CODE).any(dim=1)
+            valid_rows_count = int(valid_rows.sum().item())
+            for frame in frames_cpu[valid_rows]:
+                pending_frames.append(frame.clone())
+        # Raw/local streaming should mirror the non-streaming path: the codec
+        # decodes only generated audio rows. Reference audio conditions the
+        # talker, but feeding its codes into the codec streaming state adds a
+        # long first-packet prime step and changes the decoder state relative
+        # to non-streaming output.
+
+    if input_shape is not None and not bool(req_payload.get("debug_logged_input")):
+        logger.info(
+            "[MossTTSDebug][talker2codec-input] req=%s input_shape=%s valid_rows=%s "
+            "pending_frames=%d finished=%s",
+            req_id,
+            input_shape,
+            valid_rows_count,
+            len(pending_frames),
+            is_finished,
+        )
+        req_payload["debug_logged_input"] = True
+
+    connector = getattr(transfer_manager, "connector", None)
+    raw_cfg = getattr(connector, "config", {}) or {}
+    cfg = raw_cfg.get("extra", raw_cfg) if isinstance(raw_cfg, dict) else {}
+    cfg = cfg if isinstance(cfg, dict) else {}
+    chunk_frames = int(cfg.get("codec_chunk_frames", 15) or 15)
+    initial_chunk_frames = int(cfg.get("initial_codec_chunk_frames") or 0)
+    if chunk_frames <= 0:
+        raise ValueError(f"codec_chunk_frames must be positive for MOSS raw streaming, got {chunk_frames}")
+    if initial_chunk_frames < 0:
+        raise ValueError(f"initial_codec_chunk_frames must be non-negative, got {initial_chunk_frames}")
+    if initial_chunk_frames > chunk_frames:
+        logger.warning(
+            "initial_codec_chunk_frames=%d > codec_chunk_frames=%d, clamping.",
+            initial_chunk_frames,
+            chunk_frames,
+        )
+        initial_chunk_frames = chunk_frames
+
+    pending = len(pending_frames)
+    emitted_any = int(transfer_manager.put_req_chunk.get(req_id, 0)) > 0
+    threshold = initial_chunk_frames if initial_chunk_frames > 0 and not emitted_any else chunk_frames
+    if pending <= 0:
+        if is_finished:
+            logger.info(
+                "[MossTTSDebug][talker2codec-empty-finish] req=%s pending=0",
+                req_id,
+            )
+            transfer_manager.code_prompt_token_ids.pop(req_id, None)
+            transfer_manager.request_payload.pop(req_id, None)
+            return OmniPayloadStruct(
+                # A non-empty sentinel is required so Stage-1 is scheduled.
+                # ``code_flat_numel=0`` tells the codec this is a control-only
+                # finish packet, not an audio code.
+                codes=CodesStruct(audio=torch.tensor([0], dtype=torch.long)),
+                meta=MetaStruct(
+                    req_id=[req_id],
+                    left_context_size=0,
+                    codec_streaming=True,
+                    codec_chunk_frames=0,
+                    codec_left_context_frames=0,
+                    code_flat_numel=0,
+                    stream_finished=torch.tensor(True, dtype=torch.bool),
+                    finished=torch.tensor(True, dtype=torch.bool),
+                ),
+                request_id=req_id,
+            )
+        return None
+    if not is_finished and pending < threshold:
+        return None
+
+    emit_frames = pending if is_finished else threshold
+    chunk_rows = pending_frames[:emit_frames]
+    del pending_frames[:emit_frames]
+    chunk_codes = torch.stack(
+        [row.to(torch.long).cpu() for row in chunk_rows],
+        dim=0,
+    ).contiguous()
+    finished = bool(is_finished and len(pending_frames) == 0)
+
+    codec_flat = chunk_codes.transpose(0, 1).contiguous().reshape(-1).tolist()
+    ref_flat = None
+
+    if finished:
+        transfer_manager.code_prompt_token_ids.pop(req_id, None)
+        transfer_manager.request_payload.pop(req_id, None)
+
+    if not bool(req_payload.get("debug_logged_emit")) or finished:
+        logger.info(
+            "[MossTTSDebug][talker2codec-emit] req=%s chunk_shape=%s emit_frames=%d "
+            "remaining_frames=%d code_flat=%d ref_flat=%s finished=%s",
+            req_id,
+            tuple(chunk_codes.shape),
+            emit_frames,
+            len(pending_frames),
+            len(codec_flat),
+            int(ref_flat.numel()) if isinstance(ref_flat, torch.Tensor) else None,
+            finished,
+        )
+        req_payload["debug_logged_emit"] = True
+
+    return OmniPayloadStruct(
+        codes=CodesStruct(audio=codec_flat, ref=ref_flat),
+        meta=MetaStruct(
+            req_id=[req_id],
+            left_context_size=0,
+            codec_streaming=True,
+            codec_chunk_frames=int(chunk_codes.shape[0]),
+            codec_left_context_frames=0,
+            code_flat_numel=len(codec_flat),
+            ref_code_len=int(ref_flat.numel()) if isinstance(ref_flat, torch.Tensor) else None,
+            stream_finished=torch.tensor(finished, dtype=torch.bool),
+            finished=torch.tensor(finished, dtype=torch.bool),
+        ),
+        request_id=req_id,
+    )
+
+
+__all__ = [
+    "talker2codec",
+    "talker2codec_delay_async_chunk",
+    "talker2codec_raw_async_chunk",
+]
