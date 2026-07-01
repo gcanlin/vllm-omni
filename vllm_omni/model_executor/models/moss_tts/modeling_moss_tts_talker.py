@@ -1372,18 +1372,10 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
         ):
             if state is not None and state.get("is_stopping"):
                 forced_im_end_count = int(state.get("_forced_im_end_count", 0))
-                if forced_im_end_count == 0:
-                    logger.info(
-                        "[MossTTSDebug][scheduler-stop] local stop reached; "
-                        "forcing im_end_token_id=%d for rows=[%d,%d)",
-                        self.im_end_token_id,
-                        row_start,
-                        row_end,
-                    )
-                elif forced_im_end_count == 1:
+                if forced_im_end_count == 1:
                     logger.warning(
-                        "[MossTTSDebug][scheduler-stop] request is still running "
-                        "after im_end_token_id=%d was forced once; verify stage-0 "
+                        "MOSS-TTS Local request is still running after "
+                        "im_end_token_id=%d was forced once; verify stage-0 "
                         "stop_token_ids/eos includes this id.",
                         self.im_end_token_id,
                     )
@@ -1565,18 +1557,6 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
             new_codes = new_codes_b.squeeze(0).to(device=dev, dtype=torch.long)
 
             if not should_continue or (0 <= max_new_frames <= step):
-                stop_reason = "local_binary" if not should_continue else "max_new_frames"
-                logger.info(
-                    "[MossTTSDebug][local-stop] reason=%s step=%d "
-                    "max_new_frames=%d should_continue=%s accumulated_frames=%s "
-                    "next_scheduler_token=%d",
-                    stop_reason,
-                    step,
-                    max_new_frames,
-                    should_continue,
-                    int(acc.shape[0]) if isinstance(acc, torch.Tensor) else 0,
-                    self.im_end_token_id,
-                )
                 state["is_stopping"] = True
                 state["step"] = step + 1
                 updates.append(

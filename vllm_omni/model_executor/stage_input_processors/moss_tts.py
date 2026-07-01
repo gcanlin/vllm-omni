@@ -246,26 +246,17 @@ def talker2codec_raw_async_chunk(
         transfer_manager.put_req_chunk = defaultdict(int)
 
     pending_frames = transfer_manager.code_prompt_token_ids[req_id]
-    payload_store = transfer_manager.request_payload
-    req_payload = payload_store.get(req_id)
-    if not isinstance(req_payload, dict):
-        req_payload = {}
-        payload_store[req_id] = req_payload
 
-    input_shape: tuple[int, ...] | None = None
-    valid_rows_count: int | None = None
     if isinstance(multimodal_output, Mapping):
         codes_dict = multimodal_output.get("codes", {}) or {}
         new_frames = codes_dict.get("audio")
         if isinstance(new_frames, torch.Tensor) and new_frames.numel() > 0:
-            input_shape = tuple(new_frames.shape)
             frames_cpu = new_frames.detach().to("cpu", torch.long).contiguous()
             if frames_cpu.ndim == 1:
                 frames_cpu = frames_cpu.reshape(1, -1)
             if frames_cpu.ndim != 2:
                 raise ValueError(f"MOSS raw codec frames must be 2-D, got {tuple(frames_cpu.shape)}")
             valid_rows = frames_cpu.ne(_MOSS_AUDIO_PAD_CODE).any(dim=1)
-            valid_rows_count = int(valid_rows.sum().item())
             for frame in frames_cpu[valid_rows]:
                 pending_frames.append(frame.clone())
         # Raw/local streaming should mirror the non-streaming path: the codec
@@ -273,17 +264,6 @@ def talker2codec_raw_async_chunk(
         # talker, but feeding its codes into the codec streaming state adds a
         # long first-packet prime step and changes the decoder state relative
         # to non-streaming output.
-
-    if input_shape is not None and not bool(req_payload.get("debug_logged_input")):
-        logger.info(
-            "[MossTTSDebug][talker2codec-input] req=%s input_shape=%s valid_rows=%s pending_frames=%d finished=%s",
-            req_id,
-            input_shape,
-            valid_rows_count,
-            len(pending_frames),
-            is_finished,
-        )
-        req_payload["debug_logged_input"] = True
 
     connector = getattr(transfer_manager, "connector", None)
     raw_cfg = getattr(connector, "config", {}) or {}
@@ -308,10 +288,6 @@ def talker2codec_raw_async_chunk(
     threshold = initial_chunk_frames if initial_chunk_frames > 0 and not emitted_any else chunk_frames
     if pending <= 0:
         if is_finished:
-            logger.info(
-                "[MossTTSDebug][talker2codec-empty-finish] req=%s pending=0",
-                req_id,
-            )
             transfer_manager.code_prompt_token_ids.pop(req_id, None)
             transfer_manager.request_payload.pop(req_id, None)
             return OmniPayloadStruct(
@@ -350,20 +326,6 @@ def talker2codec_raw_async_chunk(
     if finished:
         transfer_manager.code_prompt_token_ids.pop(req_id, None)
         transfer_manager.request_payload.pop(req_id, None)
-
-    if not bool(req_payload.get("debug_logged_emit")) or finished:
-        logger.info(
-            "[MossTTSDebug][talker2codec-emit] req=%s chunk_shape=%s emit_frames=%d "
-            "remaining_frames=%d code_flat=%d ref_flat=%s finished=%s",
-            req_id,
-            tuple(chunk_codes.shape),
-            emit_frames,
-            len(pending_frames),
-            len(codec_flat),
-            int(ref_flat.numel()) if isinstance(ref_flat, torch.Tensor) else None,
-            finished,
-        )
-        req_payload["debug_logged_emit"] = True
 
     return OmniPayloadStruct(
         codes=CodesStruct(audio=codec_flat, ref=ref_flat),

@@ -240,8 +240,6 @@ class MossTTSCodecDecoder(nn.Module):
         self._stream_prompt_codes: dict[str, torch.Tensor] = {}
         self._stream_primed_reqs: set[str] = set()
         self._stream_starved_reqs: set[str] = set()
-        self._debug_logged_codec_inputs: set[str] = set()
-        self._debug_logged_codec_outputs: set[str] = set()
 
     # ------------------------------------------------------------------
     # vLLM-Omni stubs (codec has no AR loop)
@@ -388,22 +386,6 @@ class MossTTSCodecDecoder(nn.Module):
 
             req_key = self._runtime_request_key(info, meta, i)
             prompt_codes = self._runtime_prompt_codes(info, device) if streaming_enabled else None
-            if req_key not in self._debug_logged_codec_inputs or finished:
-                logger.info(
-                    "[MossTTSDebug][codec-input] req=%s streaming=%s seg_tokens=%d "
-                    "codes_shape=%s left_ctx=%d finished=%s prompt_shape=%s "
-                    "code_flat_numel=%s ref_code_len=%s",
-                    req_key,
-                    streaming_enabled,
-                    int(seg.numel()),
-                    tuple(codes_nq_t.shape),
-                    left_ctx,
-                    finished,
-                    tuple(prompt_codes.shape) if isinstance(prompt_codes, torch.Tensor) else None,
-                    meta.get("code_flat_numel"),
-                    meta.get("ref_code_len"),
-                )
-                self._debug_logged_codec_inputs.add(req_key)
 
             if streaming_enabled:
                 streaming_work.append((i, req_key, codes_nq_t, finished, prompt_codes))
@@ -437,17 +419,6 @@ class MossTTSCodecDecoder(nn.Module):
                 wav = wav[..., trim:]
 
             audios[i] = wav.reshape(-1) if wav.ndim == 1 or int(wav.shape[0]) == 1 else wav
-            if req_key not in self._debug_logged_codec_outputs or finished:
-                logger.info(
-                    "[MossTTSDebug][codec-output] req=%s streaming=false wav_shape=%s "
-                    "audio_lengths=%s output_shape=%s finished=%s",
-                    req_key,
-                    tuple(wav.shape),
-                    out.audio_lengths.detach().cpu().tolist() if out.audio_lengths is not None else None,
-                    tuple(audios[i].shape),
-                    finished,
-                )
-                self._debug_logged_codec_outputs.add(req_key)
 
         if streaming_work:
             for i, wav in self._decode_streaming_batch(streaming_work).items():
@@ -491,22 +462,7 @@ class MossTTSCodecDecoder(nn.Module):
                     wavs = session.decode_offline([decode_codes], max_step_frames=max_step_frames)
                     if wavs:
                         outputs[i] = self._trim_prompt_audio(wavs[0], prompt_frames)
-                        logger.info(
-                            "[MossTTSDebug][codec-stream-output] req=%s mode=offline-empty-finish "
-                            "codes_shape=%s wav_shape=%s prompt_frames=%d finished=%s",
-                            req_key,
-                            tuple(decode_codes.shape),
-                            tuple(outputs[i].shape),
-                            prompt_frames,
-                            finished,
-                        )
             if slot is not None or pending:
-                logger.info(
-                    "[MossTTSDebug][codec-empty-finish] req=%s releasing_slot=%s had_pending=%s",
-                    req_key,
-                    slot is not None,
-                    pending,
-                )
                 self._finish_stream_request(req_key, session, slot)
         return outputs
 
@@ -649,15 +605,6 @@ class MossTTSCodecDecoder(nn.Module):
                         wavs = session.decode_offline([decode_codes], max_step_frames=max_step_frames)
                         if wavs:
                             outputs[output_index] = self._trim_prompt_audio(wavs[0], prompt_frames)
-                            logger.info(
-                                "[MossTTSDebug][codec-stream-output] req=%s mode=offline "
-                                "codes_shape=%s wav_shape=%s prompt_frames=%d finished=%s",
-                                request_id,
-                                tuple(decode_codes.shape),
-                                tuple(outputs[output_index].shape),
-                                prompt_frames,
-                                finished,
-                            )
                         self._finish_stream_request(request_id, session, None)
                     continue
                 self._stream_req_slots[request_id] = slot
@@ -670,16 +617,6 @@ class MossTTSCodecDecoder(nn.Module):
                 wav = self._decode_stream_slot_sequence(session, slot, replay_codes)
                 if wav is not None:
                     outputs[output_index] = wav
-                    if request_id not in self._debug_logged_codec_outputs or finished:
-                        logger.info(
-                            "[MossTTSDebug][codec-stream-output] req=%s mode=replay "
-                            "codes_shape=%s wav_shape=%s finished=%s",
-                            request_id,
-                            tuple(replay_codes.shape),
-                            tuple(wav.shape),
-                            finished,
-                        )
-                        self._debug_logged_codec_outputs.add(request_id)
                 if finished:
                     self._finish_stream_request(request_id, session, slot)
                 continue
@@ -688,16 +625,6 @@ class MossTTSCodecDecoder(nn.Module):
                 wav = self._decode_stream_slot_sequence(session, slot, codes_nq_t)
                 if wav is not None:
                     outputs[output_index] = wav
-                    if request_id not in self._debug_logged_codec_outputs or finished:
-                        logger.info(
-                            "[MossTTSDebug][codec-stream-output] req=%s mode=sequence "
-                            "codes_shape=%s wav_shape=%s finished=%s",
-                            request_id,
-                            tuple(codes_nq_t.shape),
-                            tuple(wav.shape),
-                            finished,
-                        )
-                        self._debug_logged_codec_outputs.add(request_id)
                 if finished:
                     self._finish_stream_request(request_id, session, slot)
                 continue
@@ -713,16 +640,6 @@ class MossTTSCodecDecoder(nn.Module):
                 wav = decoded.get(slot)
                 if wav is not None:
                     outputs[output_index] = wav
-                    if request_id not in self._debug_logged_codec_outputs or finished:
-                        logger.info(
-                            "[MossTTSDebug][codec-stream-output] req=%s mode=step "
-                            "codes_shape=%s wav_shape=%s finished=%s",
-                            request_id,
-                            tuple(plan[slot].shape),
-                            tuple(wav.shape),
-                            finished,
-                        )
-                        self._debug_logged_codec_outputs.add(request_id)
                 if finished:
                     self._finish_stream_request(request_id, session, slot)
 
@@ -734,11 +651,6 @@ class MossTTSCodecDecoder(nn.Module):
         if request_id in self._stream_prompt_codes:
             return
         self._stream_prompt_codes[request_id] = prompt_codes.detach().to("cpu", torch.long).contiguous()
-        logger.info(
-            "[MossTTSDebug][codec-prompt] req=%s prompt_shape=%s",
-            request_id,
-            tuple(self._stream_prompt_codes[request_id].shape),
-        )
 
     def _with_stream_prompt(self, request_id: str, codes_nq_t: torch.Tensor) -> tuple[torch.Tensor, int]:
         prompt = self._stream_prompt_codes.get(request_id)
@@ -812,8 +724,6 @@ class MossTTSCodecDecoder(nn.Module):
         self._stream_prompt_codes.pop(request_id, None)
         self._stream_primed_reqs.discard(request_id)
         self._stream_starved_reqs.discard(request_id)
-        self._debug_logged_codec_inputs.discard(request_id)
-        self._debug_logged_codec_outputs.discard(request_id)
 
     def _connector_int(self, name: str, default: int = 0) -> int:
         model_cfg = getattr(self.vllm_config, "model_config", None)

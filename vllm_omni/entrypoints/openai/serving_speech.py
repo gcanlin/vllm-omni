@@ -1771,22 +1771,14 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         """
         cached = getattr(self, "_moss_processor_cache", None)
         if cached is not None:
-            logger.info("[MossTTSDebug][processor-cache-hit]")
             return cached
         from transformers import AutoProcessor
 
         model_id = self.engine_client.model_config.model
-        logger.info("[MossTTSDebug][processor-load-start] model=%s", model_id)
-        start_s = time.perf_counter()
         proc = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
         if hasattr(proc, "audio_tokenizer"):
             proc.audio_tokenizer = proc.audio_tokenizer.to("cpu").eval()
         self._moss_processor_cache = proc
-        logger.info(
-            "[MossTTSDebug][processor-load-done] elapsed_ms=%.2f has_audio_tokenizer=%s",
-            (time.perf_counter() - start_s) * 1000.0,
-            hasattr(proc, "audio_tokenizer"),
-        )
         return proc
 
     async def _build_moss_tts_params(self, request: OpenAICreateSpeechRequest) -> dict[str, Any]:
@@ -1808,14 +1800,6 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         import torch  # local to avoid pulling torch at module import time
 
         v = self._moss_variant
-        logger.info(
-            "[MossTTSDebug][build-moss-params-start] variant=%s text_len=%d stream=%s ref_audio=%s ref_audio_2=%s",
-            v,
-            len(request.input or ""),
-            bool(getattr(request, "stream", False)),
-            bool(request.ref_audio),
-            bool(request.ref_audio_2),
-        )
 
         # ---- Legacy nano path (unchanged) ----
         if v is None:  # moss_tts_nano
@@ -1860,7 +1844,6 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         # never reads -- info_dict["codes"]["ref"] is the only thing it
         # consumes, so skipping this path silently drops all voice-clone
         # conditioning and produces unconditioned/garbage audio online). ----
-        logger.info("[MossTTSDebug][build-moss-before-processor] variant=%s", v)
         proc = self._get_moss_processor()
         n_vq = int(getattr(proc.model_config, "n_vq", 32))
         # Local-v1.5 encodes reference audio at a fixed 24 kHz working rate
@@ -1882,15 +1865,7 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         _voice_created = self._voice_created_at(_voice.lower()) if _voice else 0
 
         async def _encode_ref(ref_str: str) -> torch.Tensor:
-            logger.info(
-                "[MossTTSDebug][encode-ref-start] variant=%s n_vq=%d sr_target=%d ref=%s",
-                v,
-                n_vq,
-                sr_target,
-                ref_str,
-            )
-            start_s = time.perf_counter()
-            ref_codes = await encode_reference_codes(
+            return await encode_reference_codes(
                 ref_str,
                 processor=proc,
                 resolve_ref_audio=self._resolve_ref_audio,
@@ -1901,14 +1876,6 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
                 voice_name=_voice or None,
                 voice_created_at=_voice_created,
             )
-            logger.info(
-                "[MossTTSDebug][encode-ref-done] variant=%s elapsed_ms=%.2f shape=%s dtype=%s",
-                v,
-                (time.perf_counter() - start_s) * 1000.0,
-                tuple(ref_codes.shape),
-                ref_codes.dtype,
-            )
-            return ref_codes
 
         user_kwargs: dict[str, Any] = {"text": request.input or ""}
         if v in ("tts", "local"):
@@ -1938,31 +1905,11 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         # Build the unified-codes prompt: (L, 1+n_vq) where col 0 is text/special
         # tokens and cols 1..n_vq are the delay-pattern audio code grid (mostly
         # audio_pad_code outside the reference block).
-        logger.info(
-            "[MossTTSDebug][processor-build-message-start] variant=%s user_keys=%s",
-            v,
-            sorted(user_kwargs.keys()),
-        )
         user_msg = proc.build_user_message(**user_kwargs)
-        logger.info("[MossTTSDebug][processor-call-start] variant=%s", v)
-        start_s = time.perf_counter()
         batch = proc(conversations=[[user_msg]], mode="generation")
-        logger.info(
-            "[MossTTSDebug][processor-call-done] variant=%s elapsed_ms=%.2f batch_keys=%s",
-            v,
-            (time.perf_counter() - start_s) * 1000.0,
-            sorted(batch.keys()),
-        )
         unified = batch["input_ids"][0]  # torch.LongTensor (L, 1+n_vq)
         text_ids: list[int] = unified[:, 0].tolist()
         audio_codes: torch.Tensor = unified[:, 1:].contiguous().to(torch.int64)
-        logger.info(
-            "[MossTTSDebug][build-moss-params-done] variant=%s unified_shape=%s text_len=%d audio_codes_shape=%s",
-            v,
-            tuple(unified.shape),
-            len(text_ids),
-            tuple(audio_codes.shape),
-        )
 
         params: dict[str, Any] = {
             "prompt_token_ids": text_ids,
@@ -2710,7 +2657,6 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         sample_rate_val = 24000
         first_chunk = True
         first_audio_chunk_s: float | None = None
-        debug_logged_stream_audio = False
         stream_start_s = request_start_s if request_start_s is not None else time.perf_counter()
         artifact_ready = False
 
@@ -2747,16 +2693,13 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
                     chunk_np = np.asarray(chunk_np)
                     if chunk_np.size == 0:
                         continue
-                    raw_chunk_shape = tuple(chunk_np.shape)
                     if chunk_np.ndim == 3 and chunk_np.shape[0] == 1:
                         chunk_np = chunk_np[0]
                     if chunk_np.ndim > 2:
                         chunk_np = chunk_np.squeeze()
                     if chunk_np.ndim == 2 and 1 in chunk_np.shape:
                         chunk_np = chunk_np.squeeze()
-                    squeezed_chunk_shape = tuple(chunk_np.shape)
                     chunk_np = self._maybe_restore_moss_local_stereo(chunk_np)
-                    tensor_delta_mode = tensor_stream_mode or "unknown"
                     if is_tensor_chunk:
                         full_chunk_np = np.asarray(chunk_np)
                         if (
@@ -2773,16 +2716,7 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
                             )
                         ):
                             prev_len = int(prev_tensor_snapshot.shape[-1])
-                            if tensor_stream_mode != "cumulative":
-                                logger.info(
-                                    "[MossTTSDebug][api-stream-audio-mode] req=%s "
-                                    "tensor_mode=cumulative_snapshot prev_samples=%d cur_samples=%d",
-                                    request_id,
-                                    prev_len,
-                                    int(full_chunk_np.shape[-1]),
-                                )
                             tensor_stream_mode = "cumulative"
-                            tensor_delta_mode = "cumulative_tail"
                             chunk_np = full_chunk_np[..., prev_len:]
                             prev_tensor_snapshot = full_chunk_np.copy()
                             if chunk_np.size == 0:
@@ -2792,33 +2726,10 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
                                 prev_tensor_snapshot = full_chunk_np.copy()
                             elif tensor_stream_mode != "cumulative":
                                 tensor_stream_mode = "delta"
-                                tensor_delta_mode = "delta"
                                 prev_tensor_snapshot = None
                             else:
-                                logger.warning(
-                                    "[MossTTSDebug][api-stream-audio-mode] req=%s "
-                                    "tensor_mode=cumulative_snapshot_broken; emitting full chunk "
-                                    "prev_shape=%s cur_shape=%s",
-                                    request_id,
-                                    tuple(prev_tensor_snapshot.shape) if prev_tensor_snapshot is not None else None,
-                                    tuple(full_chunk_np.shape),
-                                )
                                 tensor_stream_mode = "delta"
-                                tensor_delta_mode = "delta_after_broken_cumulative"
                                 prev_tensor_snapshot = None
-                    if self._tts_model_type == "moss_tts" and not debug_logged_stream_audio:
-                        logger.info(
-                            "[MossTTSDebug][api-stream-audio] req=%s raw_shape=%s "
-                            "squeezed_shape=%s final_shape=%s sample_rate=%d response_format=%s tensor_mode=%s",
-                            request_id,
-                            raw_chunk_shape,
-                            squeezed_chunk_shape,
-                            tuple(chunk_np.shape),
-                            sample_rate_val,
-                            response_format,
-                            tensor_delta_mode,
-                        )
-                        debug_logged_stream_audio = True
                     # For WAV format, emit header before first audio chunk
                     if response_format == "wav" and first_chunk:
                         # Assert that sample rate has been set from chunk metadata (not just default)
@@ -3749,16 +3660,6 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
                 if isinstance(prompt, dict) and isinstance(prompt.get("additional_information"), dict):
                     prompt["additional_information"]["seed"] = [request.seed]
 
-        if self._tts_model_type == "moss_tts" and self._moss_variant == "local" and sampling_params_list:
-            stage0_params = sampling_params_list[0]
-            logger.info(
-                "[MossTTSDebug][stage0-sampling] stop_token_ids=%s eos_token_id=%s min_tokens=%s max_tokens=%s",
-                getattr(stage0_params, "stop_token_ids", None),
-                getattr(stage0_params, "eos_token_id", None),
-                getattr(stage0_params, "min_tokens", None),
-                getattr(stage0_params, "max_tokens", None),
-            )
-
         generator = self.engine_client.generate(
             prompt=prompt,
             request_id=request_id,
@@ -3883,22 +3784,9 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
                 audio_tensor = audio_tensor.float().detach().cpu().numpy()
 
             audio_tensor = np.asarray(audio_tensor)
-            raw_audio_shape = tuple(audio_tensor.shape)
             if audio_tensor.ndim > 1:
                 audio_tensor = audio_tensor.squeeze()
-            squeezed_audio_shape = tuple(audio_tensor.shape)
             audio_tensor = self._maybe_restore_moss_local_stereo(audio_tensor)
-            if self._tts_model_type == "moss_tts":
-                logger.info(
-                    "[MossTTSDebug][api-final-audio] req=%s raw_shape=%s squeezed_shape=%s "
-                    "final_shape=%s sample_rate=%d response_format=%s",
-                    request_id,
-                    raw_audio_shape,
-                    squeezed_audio_shape,
-                    tuple(audio_tensor.shape),
-                    sample_rate,
-                    request.response_format or "wav",
-                )
 
             audio_obj = CreateAudio(
                 audio_tensor=audio_tensor,
@@ -4105,17 +3993,6 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         if raw_request:
             raw_request.state.request_metadata = RequestResponseMetadata(
                 request_id=request_id,
-            )
-        if self._tts_model_type == "moss_tts":
-            logger.info(
-                "[MossTTSDebug][create-speech-entry] req=%s stream=%s raw_stream=%s "
-                "sse_stream=%s ref_audio=%s response_format=%s",
-                request_id,
-                bool(request.stream),
-                request.is_raw_audio_stream(),
-                request.is_sse_stream(),
-                bool(request.ref_audio),
-                request.response_format,
             )
 
         try:
