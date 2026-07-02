@@ -320,23 +320,21 @@ def talker2codec_raw_async_chunk(
     ).contiguous()
     finished = bool(is_finished and len(pending_frames) == 0)
 
-    codec_flat = chunk_codes.transpose(0, 1).contiguous().reshape(-1).tolist()
-    ref_flat = None
+    codec_flat = chunk_codes.transpose(0, 1).contiguous().reshape(-1).to(torch.long)
 
     if finished:
         transfer_manager.code_prompt_token_ids.pop(req_id, None)
         transfer_manager.request_payload.pop(req_id, None)
 
     return OmniPayloadStruct(
-        codes=CodesStruct(audio=codec_flat, ref=ref_flat),
+        codes=CodesStruct(audio=codec_flat),
         meta=MetaStruct(
             req_id=[req_id],
             left_context_size=0,
             codec_streaming=True,
             codec_chunk_frames=int(chunk_codes.shape[0]),
             codec_left_context_frames=0,
-            code_flat_numel=len(codec_flat),
-            ref_code_len=int(ref_flat.numel()) if isinstance(ref_flat, torch.Tensor) else None,
+            code_flat_numel=int(codec_flat.numel()),
             stream_finished=torch.tensor(finished, dtype=torch.bool),
             finished=torch.tensor(finished, dtype=torch.bool),
         ),

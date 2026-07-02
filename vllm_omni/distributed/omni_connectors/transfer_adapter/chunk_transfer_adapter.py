@@ -256,15 +256,11 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                 info = dict(prev_info) if isinstance(prev_info, dict) else {}
                 for key, value in payload_data.items():
                     if key == "codes":
-                        if isinstance(value, dict):
+                        if use_tensor_codes and isinstance(value, dict):
                             existing_sub = info.get(key)
                             merged_sub = dict(existing_sub) if isinstance(existing_sub, dict) else {}
-                            for sk, sv in value.items():
-                                if sk == "audio" and not use_tensor_codes:
-                                    continue
-                                merged_sub[sk] = sv
-                            if merged_sub:
-                                info[key] = merged_sub
+                            merged_sub.update(value)
+                            info[key] = merged_sub
                         continue
                     if isinstance(value, dict):
                         existing_sub = info.get(key)
