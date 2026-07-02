@@ -147,9 +147,9 @@ class IdsStruct(_StructBase):
 
 
 class MetaStruct(_StructBase):
-    finished: bool | torch.Tensor | None = None
+    finished: torch.Tensor | None = None
     is_segment_finished: torch.Tensor | None = None
-    stream_finished: bool | torch.Tensor | None = None
+    stream_finished: torch.Tensor | None = None
     req_id: list[str] | None = None
     left_context_size: int | None = None
     right_holdback_size: int | None = None
