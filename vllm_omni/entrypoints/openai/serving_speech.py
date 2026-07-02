@@ -2729,8 +2729,6 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
             Raw audio bytes for each chunk (with WAV header for first chunk if wav format)
         """
         prev_count = 0
-        prev_tensor_snapshot: np.ndarray | None = None
-        tensor_stream_mode: str | None = None
         sample_rate_val = 24000
         first_chunk = True
         first_audio_chunk_s: float | None = None
@@ -2755,62 +2753,22 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
                 audio_val = audio_output[audio_key]
                 if isinstance(audio_val, list):
                     # Cumulative mode: each update grows the list; emit only new tail.
-                    new_chunks = [(chunk, False) for chunk in audio_val[prev_count:]]
+                    new_chunks = audio_val[prev_count:]
                     prev_count = len(audio_val)
                 else:
-                    # Tensor mode can be either true delta chunks or cumulative
-                    # waveform snapshots, depending on output_kind / stage output
-                    # processor behavior. We distinguish after converting to numpy.
+                    # Per-step mode: each update is a single tensor; emit directly.
                     if audio_val is not None:
-                        new_chunks = [(audio_val, True)]
+                        new_chunks = [audio_val]
                         prev_count += 1
                     else:
                         new_chunks = []
 
-                for chunk_tensor, is_tensor_chunk in new_chunks:
+                for chunk_tensor in new_chunks:
                     chunk_np = (
                         chunk_tensor.float().detach().cpu().numpy() if hasattr(chunk_tensor, "float") else chunk_tensor
                     )
-                    chunk_np = np.asarray(chunk_np)
-                    if chunk_np.size == 0:
-                        continue
-                    if chunk_np.ndim == 3 and chunk_np.shape[0] == 1:
-                        chunk_np = chunk_np[0]
-                    if chunk_np.ndim > 2:
+                    if chunk_np.ndim > 1:
                         chunk_np = chunk_np.squeeze()
-                    if chunk_np.ndim == 2 and 1 in chunk_np.shape:
-                        chunk_np = chunk_np.squeeze()
-                    chunk_np = self._maybe_restore_moss_local_stereo(chunk_np)
-                    if is_tensor_chunk:
-                        full_chunk_np = np.asarray(chunk_np)
-                        if (
-                            prev_tensor_snapshot is not None
-                            and tensor_stream_mode != "delta"
-                            and full_chunk_np.ndim == prev_tensor_snapshot.ndim
-                            and full_chunk_np.shape[:-1] == prev_tensor_snapshot.shape[:-1]
-                            and full_chunk_np.shape[-1] >= prev_tensor_snapshot.shape[-1]
-                            and np.allclose(
-                                full_chunk_np[..., : prev_tensor_snapshot.shape[-1]],
-                                prev_tensor_snapshot,
-                                rtol=0.0,
-                                atol=1e-6,
-                            )
-                        ):
-                            prev_len = int(prev_tensor_snapshot.shape[-1])
-                            tensor_stream_mode = "cumulative"
-                            chunk_np = full_chunk_np[..., prev_len:]
-                            prev_tensor_snapshot = full_chunk_np.copy()
-                            if chunk_np.size == 0:
-                                continue
-                        else:
-                            if prev_tensor_snapshot is None and tensor_stream_mode is None:
-                                prev_tensor_snapshot = full_chunk_np.copy()
-                            elif tensor_stream_mode != "cumulative":
-                                tensor_stream_mode = "delta"
-                                prev_tensor_snapshot = None
-                            else:
-                                tensor_stream_mode = "delta"
-                                prev_tensor_snapshot = None
                     # For WAV format, emit header before first audio chunk
                     if response_format == "wav" and first_chunk:
                         # Assert that sample rate has been set from chunk metadata (not just default)
@@ -2990,12 +2948,6 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
             return None, None
         key = "audio" if "audio" in mm else ("model_outputs" if "model_outputs" in mm else None)
         return mm, key
-
-    def _maybe_restore_moss_local_stereo(self, audio: np.ndarray) -> np.ndarray:
-        # Do not infer stereo from a flat 1-D tensor. The current MOSS Local
-        # streaming codec path logs wav_shape=(1, T), so splitting that tensor
-        # into (2, T/2) corrupts mono audio instead of restoring channels.
-        return audio
 
     def _build_tts_params(self, request: OpenAICreateSpeechRequest) -> dict[str, Any]:
         """Build TTS parameters from request.
@@ -3902,10 +3854,8 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
             if hasattr(audio_tensor, "float"):
                 audio_tensor = audio_tensor.float().detach().cpu().numpy()
 
-            audio_tensor = np.asarray(audio_tensor)
             if audio_tensor.ndim > 1:
                 audio_tensor = audio_tensor.squeeze()
-            audio_tensor = self._maybe_restore_moss_local_stereo(audio_tensor)
 
             audio_obj = CreateAudio(
                 audio_tensor=audio_tensor,

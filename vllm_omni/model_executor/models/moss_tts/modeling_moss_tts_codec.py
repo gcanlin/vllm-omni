@@ -34,14 +34,6 @@ from vllm_omni.model_executor.models.output_templates import OmniOutput
 logger = init_logger(__name__)
 
 
-def _meta_bool(value: Any) -> bool:
-    if isinstance(value, torch.Tensor):
-        return bool(value.reshape(-1)[0].item()) if value.numel() else False
-    if isinstance(value, (list, tuple)):
-        return _meta_bool(value[0]) if value else False
-    return bool(value)
-
-
 class _MossCodecStreamSession:
     """Persistent streaming decode session for vendored MOSS-Audio-Tokenizer-v2."""
 
@@ -50,13 +42,11 @@ class _MossCodecStreamSession:
         codec: nn.Module,
         *,
         stream_slots: int,
-        offline_slots: int,
         n_vq: int,
     ) -> None:
         self._codec = codec
         self._stream_slots = int(stream_slots)
-        self._offline_slots = int(offline_slots)
-        self._batch_size = self._stream_slots + self._offline_slots
+        self._batch_size = self._stream_slots
         self._n_vq = int(n_vq)
         self._device = next(codec.parameters()).device
         self._free_stream_slots = list(range(self._stream_slots))
@@ -133,55 +123,6 @@ class _MossCodecStreamSession:
             out[slot] = wav.contiguous()
         return out
 
-    @torch.no_grad()
-    def decode_offline(
-        self,
-        codes_list: list[torch.Tensor],
-        *,
-        max_step_frames: int,
-    ) -> list[torch.Tensor]:
-        """Decode complete utterances through the reserved offline slots.
-
-        This mirrors SGLang-Omni's slot-starved path: requests that never got a
-        streaming slot keep all codes buffered and are decoded once at finish,
-        instead of paying a per-chunk stateless decode cost.
-        """
-        if not codes_list:
-            return []
-        if self._offline_slots <= 0:
-            raise RuntimeError("MOSS codec offline decode requires at least one offline slot.")
-
-        max_step_frames = max(1, int(max_step_frames))
-        wavs: list[torch.Tensor] = []
-        for wave_start in range(0, len(codes_list), self._offline_slots):
-            wave = codes_list[wave_start : wave_start + self._offline_slots]
-            slots = [self._stream_slots + i for i in range(len(wave))]
-            self.reset_slots(slots)
-            cursors = [0] * len(wave)
-            chunks: list[list[torch.Tensor]] = [[] for _ in wave]
-            while True:
-                remaining = [int(codes.shape[1]) - cursor for codes, cursor in zip(wave, cursors)]
-                positive = [rem for rem in remaining if rem > 0]
-                if not positive:
-                    break
-                step_t = max_step_frames if any(rem >= max_step_frames for rem in positive) else min(positive)
-                plan = {
-                    slots[i]: wave[i][:, cursors[i] : cursors[i] + step_t]
-                    for i, rem in enumerate(remaining)
-                    if rem >= step_t
-                }
-                decoded = self.step(plan)
-                for i, slot in enumerate(slots):
-                    if slot in plan:
-                        chunks[i].append(decoded[slot])
-                        cursors[i] += step_t
-            for item_chunks in chunks:
-                if item_chunks:
-                    wavs.append(torch.cat(item_chunks, dim=-1))
-                else:
-                    wavs.append(torch.zeros((1, 0), dtype=torch.float32))
-        return wavs
-
 
 class MossTTSCodecDecoder(nn.Module):
     """Stage-1 decoder for all MOSS-TTS variants.
@@ -233,12 +174,9 @@ class MossTTSCodecDecoder(nn.Module):
         self._sr_tensor = torch.tensor(self._OUTPUT_SAMPLE_RATE, dtype=torch.int32)
         self._stream_session: _MossCodecStreamSession | None = None
         self._stream_slots: int = self._connector_int("codec_stream_slots", default=0)
-        self._stream_offline_slots: int = self._connector_int("codec_offline_slots", default=0)
         self._stream_max_step_frames: int = self._connector_int("codec_max_step_frames", default=100)
         self._stream_req_slots: dict[str, int] = {}
         self._stream_pending_codes: dict[str, list[torch.Tensor]] = {}
-        self._stream_prompt_codes: dict[str, torch.Tensor] = {}
-        self._stream_primed_reqs: set[str] = set()
         self._stream_starved_reqs: set[str] = set()
 
     # ------------------------------------------------------------------
@@ -305,7 +243,7 @@ class MossTTSCodecDecoder(nn.Module):
         audios: list[torch.Tensor] = [empty] * num_req
         srs: list[torch.Tensor] = [sr_tensor] * num_req
         device = next(self._codec.parameters()).device
-        streaming_work: list[tuple[int, str, torch.Tensor, bool, torch.Tensor | None]] = []
+        streaming_work: list[tuple[int, str, torch.Tensor, bool]] = []
 
         if input_ids is None or input_ids.numel() == 0:
             for i, wav in self._finish_empty_streaming_requests(info_list).items():
@@ -354,8 +292,8 @@ class MossTTSCodecDecoder(nn.Module):
             if seg.numel() == 0:
                 continue
             meta = (info.get("meta", {}) if isinstance(info, dict) else {}) or {}
-            finished = _meta_bool(meta.get("stream_finished", meta.get("finished", False)))
-            streaming_enabled = self._runtime_streaming_enabled(info, meta)
+            finished = bool(meta.get("stream_finished", meta.get("finished", False)))
+            streaming_enabled = bool(meta.get("codec_streaming", False))
             code_flat_numel = meta.get("code_flat_numel")
             if streaming_enabled and finished and code_flat_numel is not None and int(code_flat_numel) == 0:
                 for _, wav in self._finish_empty_streaming_requests([info]).items():
@@ -377,7 +315,7 @@ class MossTTSCodecDecoder(nn.Module):
             codebook_size = self._codec.config.codebook_size
             codes_nq_t = codes_nq_t.clamp_(0, int(codebook_size) - 1)
 
-            left_ctx = self._runtime_value(info, meta, "left_context_size", 0)
+            left_ctx = meta.get("left_context_size", 0)
             if isinstance(left_ctx, (list, tuple)):
                 left_ctx = int(left_ctx[0]) if left_ctx else 0
             elif isinstance(left_ctx, torch.Tensor):
@@ -385,10 +323,9 @@ class MossTTSCodecDecoder(nn.Module):
             left_ctx = int(left_ctx)
 
             req_key = self._runtime_request_key(info, meta, i)
-            prompt_codes = self._runtime_prompt_codes(info, device) if streaming_enabled else None
 
             if streaming_enabled:
-                streaming_work.append((i, req_key, codes_nq_t, finished, prompt_codes))
+                streaming_work.append((i, req_key, codes_nq_t, finished))
                 continue
 
             if self._cuda_graph_wrapper is not None:
@@ -430,39 +367,36 @@ class MossTTSCodecDecoder(nn.Module):
         )
 
     def _finish_empty_streaming_requests(self, info_list: list[dict[str, Any]]) -> dict[int, torch.Tensor]:
-        """Flush or release codec stream state for empty finish sentinels.
+        """Release codec stream state for empty finish sentinels.
 
         Stage-0 can finish on a step that emits no new audio frame. The stage
-        input processor forwards that as an empty payload with finished=true;
-        if the request was previously buffered because streaming slots were
-        full, this final empty payload is also the only chance to decode the
-        pending codes.
+        input processor forwards that as an empty payload with finished=true.
+        If a request never acquired a stream slot, do not offline-decode its
+        buffered codes here: streaming requests must only emit client deltas.
         """
         session = self._stream_session
         outputs: dict[int, torch.Tensor] = {}
         if session is None:
             return outputs
-        max_step_frames = max(1, int(self._stream_max_step_frames))
         for i, info in enumerate(info_list):
             if not isinstance(info, dict):
                 continue
             meta = (info.get("meta", {}) or {}) if isinstance(info.get("meta", {}), dict) else {}
-            if not self._runtime_streaming_enabled(info, meta):
+            if not bool(meta.get("codec_streaming", False)):
                 continue
-            finished = _meta_bool(meta.get("stream_finished", meta.get("finished", False)))
+            finished = bool(meta.get("stream_finished", meta.get("finished", False)))
             if not finished:
                 continue
             req_key = self._runtime_request_key(info, meta, i)
             slot = self._stream_req_slots.get(req_key)
             pending = req_key in self._stream_pending_codes
-            if pending:
-                full_codes = self._pop_stream_pending(req_key)
-                if full_codes.numel() > 0:
-                    decode_codes, prompt_frames = self._with_stream_prompt(req_key, full_codes)
-                    wavs = session.decode_offline([decode_codes], max_step_frames=max_step_frames)
-                    if wavs:
-                        outputs[i] = self._trim_prompt_audio(wavs[0], prompt_frames)
             if slot is not None or pending:
+                if pending and slot is None:
+                    logger.warning(
+                        "MOSS codec stream request %s finished before a codec stream slot became available; "
+                        "dropping buffered codes instead of offline-decoding a non-delta waveform.",
+                        req_key,
+                    )
                 self._finish_stream_request(req_key, session, slot)
         return outputs
 
@@ -483,26 +417,6 @@ class MossTTSCodecDecoder(nn.Module):
                 raise ValueError(f"MossTTS codec seq_token_counts must be non-negative, got {counts}.")
         return counts
 
-    @staticmethod
-    def _runtime_value(info: Any, meta: dict[str, Any], name: str, default: Any = None) -> Any:
-        if name in meta:
-            return meta[name]
-        if isinstance(info, dict) and name in info:
-            return info[name]
-        return default
-
-    def _runtime_streaming_enabled(self, info: Any, meta: dict[str, Any]) -> bool:
-        value = self._runtime_value(info, meta, "codec_streaming", False)
-        if not _meta_bool(value):
-            return False
-        codec = self._codec
-        return bool(
-            codec is not None
-            and hasattr(codec, "streaming")
-            and hasattr(codec, "_set_streaming_exec_mask")
-            and hasattr(codec, "_decode_frame")
-        )
-
     def _runtime_request_key(self, info: Any, meta: dict[str, Any], index: int) -> str:
         for value in (
             meta.get("req_id"),
@@ -513,39 +427,6 @@ class MossTTSCodecDecoder(nn.Module):
             if value is not None:
                 return str(value)
         return f"moss-codec-stream-{index}"
-
-    def _runtime_prompt_codes(self, info: Any, device: torch.device) -> torch.Tensor | None:
-        if not isinstance(info, dict):
-            return None
-        codes = info.get("codes", {}) or {}
-        if not isinstance(codes, dict):
-            return None
-        ref = codes.get("ref")
-        if not isinstance(ref, torch.Tensor) or ref.numel() == 0:
-            return None
-        ref = ref.detach().to(dtype=torch.long)
-        if ref.ndim == 1:
-            if ref.numel() % self._n_vq != 0:
-                return None
-            ref = ref.view(self._n_vq, -1)
-        elif ref.ndim == 2:
-            if int(ref.shape[0]) == self._n_vq:
-                pass
-            elif int(ref.shape[1]) == self._n_vq:
-                ref = ref.t()
-            else:
-                return None
-        else:
-            return None
-
-        if self._codec is None:
-            return None
-        codebook_size = int(self._codec.config.codebook_size)
-        audio_cols = ref.ne(codebook_size).any(dim=0)
-        ref = ref[:, audio_cols]
-        if ref.numel() == 0:
-            return None
-        return ref.clamp_(0, codebook_size - 1).to(device=device).contiguous()
 
     def _empty_audio(self) -> torch.Tensor:
         if self._n_channels > 1:
@@ -561,21 +442,16 @@ class MossTTSCodecDecoder(nn.Module):
         if slots <= 0:
             scheduler_cfg = getattr(self.vllm_config, "scheduler_config", None)
             slots = int(getattr(scheduler_cfg, "max_num_seqs", 1) or 1)
-        offline_slots = self._stream_offline_slots
-        if offline_slots <= 0:
-            scheduler_cfg = getattr(self.vllm_config, "scheduler_config", None)
-            offline_slots = int(getattr(scheduler_cfg, "max_num_seqs", 1) or 1)
         self._stream_session = _MossCodecStreamSession(
             self._codec,
             stream_slots=max(1, slots),
-            offline_slots=max(1, offline_slots),
             n_vq=self._n_vq,
         )
         return self._stream_session
 
     def _decode_streaming_batch(
         self,
-        items: list[tuple[int, str, torch.Tensor, bool, torch.Tensor | None]],
+        items: list[tuple[int, str, torch.Tensor, bool]],
     ) -> dict[int, torch.Tensor]:
         session = self._ensure_stream_session()
         if session is None:
@@ -585,8 +461,7 @@ class MossTTSCodecDecoder(nn.Module):
         grouped: dict[int, list[tuple[int, str, int, torch.Tensor, bool]]] = {}
         max_step_frames = max(1, int(self._stream_max_step_frames))
 
-        for output_index, request_id, codes_nq_t, finished, prompt_codes in items:
-            self._store_stream_prompt(request_id, prompt_codes)
+        for output_index, request_id, codes_nq_t, finished in items:
             pending = self._stream_pending_codes.get(request_id)
             slot = self._stream_req_slots.get(request_id)
             if slot is None:
@@ -595,21 +470,19 @@ class MossTTSCodecDecoder(nn.Module):
                     self._append_stream_pending(request_id, codes_nq_t)
                     if request_id not in self._stream_starved_reqs:
                         logger.warning(
-                            "MOSS codec streaming slots exhausted; buffering %s for offline decode.",
+                            "MOSS codec streaming slots exhausted; buffering %s until a stream slot is available.",
                             request_id,
                         )
                         self._stream_starved_reqs.add(request_id)
                     if finished:
-                        full_codes = self._pop_stream_pending(request_id)
-                        decode_codes, prompt_frames = self._with_stream_prompt(request_id, full_codes)
-                        wavs = session.decode_offline([decode_codes], max_step_frames=max_step_frames)
-                        if wavs:
-                            outputs[output_index] = self._trim_prompt_audio(wavs[0], prompt_frames)
+                        logger.warning(
+                            "MOSS codec stream request %s finished before a codec stream slot became available; "
+                            "dropping buffered codes instead of offline-decoding a non-delta waveform.",
+                            request_id,
+                        )
                         self._finish_stream_request(request_id, session, None)
                     continue
                 self._stream_req_slots[request_id] = slot
-
-            self._prime_stream_request(session, request_id, slot)
 
             if pending:
                 self._append_stream_pending(request_id, codes_nq_t)
@@ -644,41 +517,6 @@ class MossTTSCodecDecoder(nn.Module):
                     self._finish_stream_request(request_id, session, slot)
 
         return outputs
-
-    def _store_stream_prompt(self, request_id: str, prompt_codes: torch.Tensor | None) -> None:
-        if prompt_codes is None or prompt_codes.numel() == 0:
-            return
-        if request_id in self._stream_prompt_codes:
-            return
-        self._stream_prompt_codes[request_id] = prompt_codes.detach().to("cpu", torch.long).contiguous()
-
-    def _with_stream_prompt(self, request_id: str, codes_nq_t: torch.Tensor) -> tuple[torch.Tensor, int]:
-        prompt = self._stream_prompt_codes.get(request_id)
-        if prompt is None or prompt.numel() == 0:
-            return codes_nq_t, 0
-        prompt = prompt.to(device=codes_nq_t.device, dtype=torch.long)
-        return torch.cat([prompt, codes_nq_t], dim=1).contiguous(), int(prompt.shape[1])
-
-    def _prime_stream_request(
-        self,
-        session: _MossCodecStreamSession,
-        request_id: str,
-        slot: int,
-    ) -> None:
-        if request_id in self._stream_primed_reqs:
-            return
-        prompt = self._stream_prompt_codes.get(request_id)
-        if prompt is None or prompt.numel() == 0:
-            return
-        prompt = prompt.to(device=next(self._codec.parameters()).device, dtype=torch.long)
-        _ = self._decode_stream_slot_sequence(session, slot, prompt)
-        self._stream_primed_reqs.add(request_id)
-
-    def _trim_prompt_audio(self, wav: torch.Tensor, prompt_frames: int) -> torch.Tensor:
-        if prompt_frames <= 0 or self._codec is None:
-            return wav
-        trim = min(prompt_frames * int(self._codec.downsample_rate), int(wav.shape[-1]))
-        return wav[..., trim:].contiguous()
 
     def _append_stream_pending(self, request_id: str, codes_nq_t: torch.Tensor) -> None:
         self._stream_pending_codes.setdefault(request_id, []).append(
@@ -721,8 +559,6 @@ class MossTTSCodecDecoder(nn.Module):
             session.release(slot)
         self._stream_req_slots.pop(request_id, None)
         self._stream_pending_codes.pop(request_id, None)
-        self._stream_prompt_codes.pop(request_id, None)
-        self._stream_primed_reqs.discard(request_id)
         self._stream_starved_reqs.discard(request_id)
 
     def on_requests_finished(self, finished_req_ids: set[str] | list[str]) -> None:
@@ -739,11 +575,7 @@ class MossTTSCodecDecoder(nn.Module):
             request_id = str(req_id)
             slot = self._stream_req_slots.get(request_id)
             has_state = (
-                slot is not None
-                or request_id in self._stream_pending_codes
-                or request_id in self._stream_prompt_codes
-                or request_id in self._stream_primed_reqs
-                or request_id in self._stream_starved_reqs
+                slot is not None or request_id in self._stream_pending_codes or request_id in self._stream_starved_reqs
             )
             if not has_state:
                 continue
@@ -752,8 +584,6 @@ class MossTTSCodecDecoder(nn.Module):
             else:
                 self._stream_req_slots.pop(request_id, None)
                 self._stream_pending_codes.pop(request_id, None)
-                self._stream_prompt_codes.pop(request_id, None)
-                self._stream_primed_reqs.discard(request_id)
                 self._stream_starved_reqs.discard(request_id)
 
     def _connector_int(self, name: str, default: int = 0) -> int:

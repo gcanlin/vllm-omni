@@ -217,7 +217,7 @@ def talker2codec_delay_async_chunk(
         codes=CodesStruct(audio=codec_flat),
         meta=MetaStruct(
             left_context_size=left_context,
-            finished=torch.tensor(is_finished, dtype=torch.bool),
+            finished=bool(is_finished),
         ),
     )
 
@@ -302,8 +302,8 @@ def talker2codec_raw_async_chunk(
                     codec_chunk_frames=0,
                     codec_left_context_frames=0,
                     code_flat_numel=0,
-                    stream_finished=torch.tensor(True, dtype=torch.bool),
-                    finished=torch.tensor(True, dtype=torch.bool),
+                    stream_finished=True,
+                    finished=True,
                 ),
                 request_id=req_id,
             )
@@ -337,8 +337,8 @@ def talker2codec_raw_async_chunk(
             codec_left_context_frames=0,
             code_flat_numel=len(codec_flat),
             ref_code_len=int(ref_flat.numel()) if isinstance(ref_flat, torch.Tensor) else None,
-            stream_finished=torch.tensor(finished, dtype=torch.bool),
-            finished=torch.tensor(finished, dtype=torch.bool),
+            stream_finished=finished,
+            finished=finished,
         ),
         request_id=req_id,
     )
