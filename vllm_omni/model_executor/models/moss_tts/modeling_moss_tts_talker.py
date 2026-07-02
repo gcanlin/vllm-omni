@@ -1460,14 +1460,12 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
             )
 
             max_new_frames = info_dict.get("max_new_frames", [-1])[0]
-            seed = info_dict.get("seed", [None])[0]
 
             info_update: dict[str, Any] = {
                 "audio_state": {
                     "is_stopping": False,
                     "step": 0,
                     "max_new_frames": max_new_frames,
-                    "seed": seed,
                 },
                 "audio_codes": {"current": current_codes, "emit": False},
                 "ref_offset": ref_offset + span_len,

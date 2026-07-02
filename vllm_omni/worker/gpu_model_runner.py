@@ -1824,17 +1824,7 @@ class OmniGPUModelRunner(GPUModelRunner):
             extra_args = getattr(sampling_params, "extra_args", None) if sampling_params is not None else None
             seed = None
             if isinstance(extra_args, dict):
-                seed = extra_args.get("qwen3_tts_request_seed")
-                if seed is None:
-                    seed = extra_args.get("moss_tts_request_seed")
-            if seed is None:
-                req_info = self.model_intermediate_buffer.get(req_id, {})
-                if isinstance(req_info, dict):
-                    seed = req_info.get("seed")
-                    if isinstance(seed, (list, tuple)) and seed:
-                        seed = seed[0]
-                    elif isinstance(seed, (list, tuple)):
-                        seed = None
+                seed = extra_args.get("tts_local_seed")
             return int(seed) if seed is not None else None
 
         if decode_batch_size > 1 and any(_explicit_talker_seed(req_id) is not None for req_id in decode_req_ids):
