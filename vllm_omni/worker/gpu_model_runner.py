@@ -1351,7 +1351,6 @@ class OmniGPUModelRunner(GPUModelRunner):
         nstp = self._omni_num_scheduled_tokens_np
         if nstp is not None and len(nstp) == len(self.input_batch.req_ids):
             try:
-                model_kwargs_extra["seq_token_counts"] = [int(n) for n in nstp.tolist()]
                 model_kwargs_extra["request_token_spans"] = self._compute_request_token_spans(nstp)
             except Exception as e:
                 # Visible on purpose: the fallback is the equal rows-per-request
@@ -1874,22 +1873,19 @@ class OmniGPUModelRunner(GPUModelRunner):
             talker_kwargs["generator"] = generator
         if getattr(self.model, "talker_mtp_accepts_req_infos", False):
             talker_kwargs["req_ids"] = decode_req_ids
-            talker_kwargs["req_infos"] = [self.model_intermediate_buffer.get(req_id, {}) for req_id in decode_req_ids]
+            talker_kwargs["req_infos"] = [
+                self.model_intermediate_buffer.setdefault(req_id, {}) for req_id in decode_req_ids
+            ]
         with current_omni_platform.set_forward_context(
             None, self.vllm_config, cudagraph_runtime_mode=_cudagraph_mode, batch_descriptor=batch_desc
         ):
-            talker_result = self.talker_mtp(
+            req_embeds, code_predictor_codes = self.talker_mtp(
                 req_input_ids,
                 req_embeds,
                 last_talker_hidden,
                 text_step,
                 **talker_kwargs,
             )
-        mtp_updates = None
-        if isinstance(talker_result, tuple) and len(talker_result) == 3:
-            req_embeds, code_predictor_codes, mtp_updates = talker_result
-        else:
-            req_embeds, code_predictor_codes = talker_result
         # update the inputs_embeds and code_predictor_codes
         out_key = getattr(self.model, "talker_mtp_output_key", ("codes", "audio"))
         if not isinstance(out_key, tuple) or len(out_key) != 2:
@@ -1901,9 +1897,6 @@ class OmniGPUModelRunner(GPUModelRunner):
             inputs_embeds[start_offset : start_offset + 1] = req_embeds[idx : idx + 1]
             if code_predictor_codes is not None:
                 update_dict = {out_key[0]: {out_key[1]: code_predictor_codes[idx : idx + 1]}}
-                self._merge_additional_information_update(req_id, update_dict)
-            if mtp_updates is not None:
-                update_dict = mtp_updates[idx] if isinstance(mtp_updates, list) else mtp_updates
                 self._merge_additional_information_update(req_id, update_dict)
 
     def _model_forward(

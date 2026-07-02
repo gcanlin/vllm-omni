@@ -1504,12 +1504,19 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
         generator: torch.Generator | None = None,
         req_infos: list[dict[str, Any]] | None = None,
         **_: Any,
-    ) -> tuple[torch.Tensor, None, list[dict[str, Any]]]:
+    ) -> tuple[torch.Tensor, None]:
         bsz = int(input_embeds.shape[0])
         dev = input_embeds.device
         input_embeds_out = input_embeds.reshape(bsz, -1).clone()
-        updates: list[dict[str, Any]] = []
         req_infos = req_infos or [{} for _ in range(bsz)]
+
+        def write_update(info: dict[str, Any], update: dict[str, Any]) -> None:
+            for key, value in update.items():
+                if isinstance(value, dict):
+                    target = info.setdefault(key, {})
+                    target.update(value)
+                else:
+                    info[key] = value
 
         # Match MOSS-TTS Local v1.5's model-card/SGLang defaults. The generic
         # stage SamplingParams are for the backbone token loop and should not
@@ -1527,14 +1534,15 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
             acc = (info.get("audio_codes", {}) or {}).get("accumulated")
 
             if state.get("is_stopping"):
-                updates.append(
+                write_update(
+                    info,
                     {
                         "audio_state": state,
                         "audio_codes": {
                             "current": input_embeds.new_empty((0, self.n_vq), dtype=torch.long),
                             "emit": False,
                         },
-                    }
+                    },
                 )
                 continue
 
@@ -1565,7 +1573,8 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
             if not should_continue or (0 <= max_new_frames <= step):
                 state["is_stopping"] = True
                 state["step"] = step + 1
-                updates.append(
+                write_update(
+                    info,
                     {
                         "audio_state": state,
                         "audio_codes": {
@@ -1573,7 +1582,7 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
                             "accumulated": acc,
                             "emit": False,
                         },
-                    }
+                    },
                 )
                 continue
 
@@ -1587,7 +1596,8 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
             input_embeds_out[i : i + 1] = input_embeds_out[i : i + 1] + self._audio_embed(current).to(
                 dtype=input_embeds_out.dtype
             )
-            updates.append(
+            write_update(
+                info,
                 {
                     "audio_state": state,
                     "audio_codes": {
@@ -1595,10 +1605,10 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
                         "accumulated": updated_acc,
                         "emit": True,
                     },
-                }
+                },
             )
 
-        return input_embeds_out, None, updates
+        return input_embeds_out, None
 
     # ------------------------------------------------------------------
     # Package runner-generated audio frames
