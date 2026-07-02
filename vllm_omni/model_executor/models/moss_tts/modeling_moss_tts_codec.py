@@ -725,6 +725,37 @@ class MossTTSCodecDecoder(nn.Module):
         self._stream_primed_reqs.discard(request_id)
         self._stream_starved_reqs.discard(request_id)
 
+    def on_requests_finished(self, finished_req_ids: set[str] | list[str]) -> None:
+        """Release codec streaming slots when requests finish outside payload flow.
+
+        Normal streaming completion releases slots from ``_decode_streaming_batch``
+        when the Stage-0 payload carries ``finished=True``. Client disconnects
+        and engine-side aborts can finish a request without delivering that
+        terminal payload, so the runner calls this hook from its finished-request
+        path to avoid leaking stream slots and buffered codes.
+        """
+        session = self._stream_session
+        for req_id in finished_req_ids:
+            request_id = str(req_id)
+            slot = self._stream_req_slots.get(request_id)
+            has_state = (
+                slot is not None
+                or request_id in self._stream_pending_codes
+                or request_id in self._stream_prompt_codes
+                or request_id in self._stream_primed_reqs
+                or request_id in self._stream_starved_reqs
+            )
+            if not has_state:
+                continue
+            if session is not None:
+                self._finish_stream_request(request_id, session, slot)
+            else:
+                self._stream_req_slots.pop(request_id, None)
+                self._stream_pending_codes.pop(request_id, None)
+                self._stream_prompt_codes.pop(request_id, None)
+                self._stream_primed_reqs.discard(request_id)
+                self._stream_starved_reqs.discard(request_id)
+
     def _connector_int(self, name: str, default: int = 0) -> int:
         model_cfg = getattr(self.vllm_config, "model_config", None)
         connector_cfg = getattr(model_cfg, "stage_connector_config", None)

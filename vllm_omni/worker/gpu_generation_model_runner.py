@@ -76,6 +76,10 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
 
     def _update_request_states(self, scheduler_output: SchedulerOutput):
         # remove requests
+        # Some stateful vocoder model may need to clean the state
+        # to avoid the leak of slots when the requests have been aborted.
+        if scheduler_output.finished_req_ids and hasattr(self.model, "on_requests_finished"):
+            self.model.on_requests_finished(scheduler_output.finished_req_ids)
         for req_id in scheduler_output.finished_req_ids:
             self.input_batch.remove_request(req_id)
         scheduled_req_ids = scheduler_output.num_scheduled_tokens.keys()
