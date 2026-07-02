@@ -1651,7 +1651,7 @@ class MossAudioTokenizerModel(MossAudioTokenizerPreTrainedModel):
         num_quantizers: int | None = None,
         return_dict: bool | None = None,
         chunk_duration: float | None = None,
-    ):
+    ) -> MossAudioTokenizerEncoderOutput | tuple[torch.Tensor, torch.Tensor]:
         """
         Encodes the input audio waveform into discrete codes.
 
@@ -1770,7 +1770,7 @@ class MossAudioTokenizerModel(MossAudioTokenizerPreTrainedModel):
         return_dict: bool | None = None,
         chunk_duration: float | None = None,
         num_quantizers: int | None = None,
-    ):
+    ) -> MossAudioTokenizerDecoderOutput | tuple[torch.Tensor]:
         """
         Decodes the given codes into an output audio waveform.
 
