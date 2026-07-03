@@ -1909,9 +1909,6 @@ class OmniGPUModelRunner(GPUModelRunner):
     ):
         """Inject omni-specific kwargs into forward and cache model output"""
         model_kwargs_extra = self._build_model_kwargs_extra()
-        for key in tuple(model_kwargs_extra):
-            if key in model_kwargs:
-                model_kwargs_extra.pop(key)
         update_decode_metadata = getattr(self.model, "update_decode_step_metadata", None)
         if getattr(self.model, "supports_omni_decode_step_metadata", False) and callable(update_decode_metadata):
             update_decode_metadata(
