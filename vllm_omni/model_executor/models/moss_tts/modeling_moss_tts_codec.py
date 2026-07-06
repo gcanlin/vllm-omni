@@ -26,6 +26,9 @@ from vllm_omni.model_executor.models.moss_tts.audio_tokenizer_v2 import (
 from vllm_omni.model_executor.models.moss_tts.configuration_moss_audio_tokenizer_v2 import (
     MossAudioTokenizerConfig as MossAudioTokenizerV2Config,
 )
+from vllm_omni.model_executor.models.moss_tts.cuda_graph_streaming_decoder_wrapper import (
+    CUDAGraphStreamingDecoderWrapper,
+)
 from vllm_omni.model_executor.models.moss_tts.moss_codec_cudagraph import (
     MossTTSCUDAGraphCodecWrapper,
 )
@@ -43,6 +46,7 @@ class _MossCodecStreamSession:
         *,
         stream_slots: int,
         n_vq: int,
+        cudagraph_capture_sizes: list[int] | None = None,
     ) -> None:
         self._codec = codec
         self._stream_slots = int(stream_slots)
@@ -54,6 +58,19 @@ class _MossCodecStreamSession:
         self._closed = False
         with torch.no_grad():
             self._exit_stack.enter_context(codec.streaming(self._batch_size))
+        self._cudagraph_wrapper: CUDAGraphStreamingDecoderWrapper | None = None
+        capture_sizes = sorted({int(size) for size in (cudagraph_capture_sizes or []) if int(size) > 0})
+        if capture_sizes and self._device.type == "cuda":
+            self._cudagraph_wrapper = CUDAGraphStreamingDecoderWrapper(
+                codec,
+                batch_size=self._batch_size,
+                num_quantizers=self._n_vq,
+                reset_streaming_state=lambda: self.reset_slots(list(range(self._batch_size))),
+            )
+            self._cudagraph_wrapper.warmup(self._device, capture_sizes)
+            self.reset_slots(list(range(self._batch_size)))
+            if not self._cudagraph_wrapper.is_ready:
+                self._cudagraph_wrapper = None
 
     def acquire(self) -> int | None:
         if not self._free_stream_slots:
@@ -109,12 +126,23 @@ class _MossCodecStreamSession:
             codes_lengths[slot] = int(codes.shape[1])
             exec_mask[slot] = True
 
-        self._codec._set_streaming_exec_mask(exec_mask)
-        result = self._codec._decode_frame(codes_step, codes_lengths)
-        if result.audio is None:
-            return {}
-        audio = result.audio.detach().to("cpu", torch.float32)
-        lengths = result.audio_lengths.detach().to("cpu") if result.audio_lengths is not None else None
+        graph_output: tuple[torch.Tensor, torch.Tensor] | None = None
+        if self._cudagraph_wrapper is not None:
+            graph_output = self._cudagraph_wrapper.decode(codes_step, exec_mask)
+
+        used_cudagraph = graph_output is not None
+        if used_cudagraph:
+            audio_tensor, lengths_tensor = graph_output
+        else:
+            self._codec._set_streaming_exec_mask(exec_mask)
+            result = self._codec._decode_frame(codes_step, codes_lengths)
+            if result.audio is None:
+                return {}
+            audio_tensor = result.audio
+            lengths_tensor = result.audio_lengths
+
+        audio = audio_tensor.detach().to("cpu", torch.float32)
+        lengths = lengths_tensor.detach().to("cpu") if lengths_tensor is not None else None
         out: dict[int, torch.Tensor] = {}
         for slot in slot_codes:
             wav = audio[slot]
@@ -174,10 +202,16 @@ class MossTTSCodecDecoder(nn.Module):
         self._sr_tensor = torch.tensor(self._OUTPUT_SAMPLE_RATE, dtype=torch.int32)
         self._stream_session: _MossCodecStreamSession | None = None
         self._stream_slots: int = self._connector_int("codec_stream_slots", default=0)
-        self._stream_max_step_frames: int = self._connector_int("codec_max_step_frames", default=100)
+        self._stream_chunk_frames: int = self._connector_int("codec_chunk_frames", default=0)
+        self._stream_max_step_frames: int = self._stream_chunk_frames or 100
         self._stream_req_slots: dict[str, int] = {}
         self._stream_pending_codes: dict[str, list[torch.Tensor]] = {}
         self._stream_starved_reqs: set[str] = set()
+        default_graph_capture_max = self._stream_chunk_frames or min(self._stream_max_step_frames, 32)
+        default_graph_capture_sizes = list(range(1, max(1, default_graph_capture_max) + 1))
+        self._streaming_cudagraph_capture_sizes = self._streaming_cudagraph_capture_sizes_from_compilation_config(
+            default_graph_capture_sizes
+        )
 
     # ------------------------------------------------------------------
     # vLLM-Omni stubs (codec has no AR loop)
@@ -446,6 +480,7 @@ class MossTTSCodecDecoder(nn.Module):
             self._codec,
             stream_slots=max(1, slots),
             n_vq=self._n_vq,
+            cudagraph_capture_sizes=self._streaming_cudagraph_capture_sizes,
         )
         return self._stream_session
 
@@ -596,6 +631,19 @@ class MossTTSCodecDecoder(nn.Module):
         if isinstance(extra_cfg, dict) and name in extra_cfg:
             return int(extra_cfg[name])
         return default
+
+    def _streaming_cudagraph_capture_sizes_from_compilation_config(
+        self,
+        default: list[int],
+    ) -> list[int]:
+        if getattr(self.vllm_config.model_config, "enforce_eager", True):
+            return []
+        compilation_config = getattr(self.vllm_config, "compilation_config", None)
+        capture_sizes = getattr(compilation_config, "cudagraph_capture_sizes", None)
+        if capture_sizes:
+            max_step_frames = max(1, int(self._stream_max_step_frames))
+            return sorted({int(size) for size in capture_sizes if 0 < int(size) <= max_step_frames})
+        return list(default)
 
     # ------------------------------------------------------------------
     # Weight loading
