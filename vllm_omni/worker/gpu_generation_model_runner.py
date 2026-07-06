@@ -78,14 +78,21 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
         # remove requests
         # Some stateful vocoder model may need to clean the state
         # to avoid the leak of slots when the requests have been aborted.
-        if scheduler_output.finished_req_ids and hasattr(self.model, "on_requests_finished"):
-            self.model.on_requests_finished(scheduler_output.finished_req_ids)
+        finished_or_preempted_req_ids = set(scheduler_output.finished_req_ids)
+        preempted_req_ids = getattr(scheduler_output, "preempted_req_ids", None)
+        if preempted_req_ids:
+            finished_or_preempted_req_ids.update(preempted_req_ids)
+        if finished_or_preempted_req_ids and hasattr(self.model, "on_requests_finished"):
+            self.model.on_requests_finished(finished_or_preempted_req_ids)
         for req_id in scheduler_output.finished_req_ids:
             self.input_batch.remove_request(req_id)
         scheduled_req_ids = scheduler_output.num_scheduled_tokens.keys()
         cached_req_ids = self.input_batch.req_id_to_index.keys()
         resumed_req_ids = scheduler_output.scheduled_cached_reqs.resumed_req_ids
         unscheduled_req_ids = cached_req_ids - (scheduled_req_ids - resumed_req_ids)
+        orphaned_unscheduled_req_ids = {req_id for req_id in unscheduled_req_ids if req_id not in self.requests}
+        if orphaned_unscheduled_req_ids and hasattr(self.model, "on_requests_finished"):
+            self.model.on_requests_finished(orphaned_unscheduled_req_ids)
         for req_id in unscheduled_req_ids:
             self.input_batch.remove_request(req_id)
         cached_reqs = scheduler_output.scheduled_cached_reqs
@@ -154,7 +161,10 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
             record_function_or_nullcontext("gpu_model_runner: preprocess"),
             self.synchronize_input_prep(),
         ):
-            if self.model_config.async_chunk and num_scheduled_tokens:
+            has_finished_state = bool(
+                scheduler_output.finished_req_ids or getattr(scheduler_output, "preempted_req_ids", None)
+            )
+            if self.model_config.async_chunk and (num_scheduled_tokens or has_finished_state):
                 self._update_request_states(scheduler_output)
             deferred_state_corrections_fn = self._update_states(scheduler_output)
             if not scheduler_output.total_num_scheduled_tokens:
