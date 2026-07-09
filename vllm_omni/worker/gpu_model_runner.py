@@ -1365,6 +1365,11 @@ class OmniGPUModelRunner(GPUModelRunner):
             except Exception as e:
                 logger.debug("[OMNI] Failed to attach query_start_loc: %s", e)
 
+        talker_mtp_batch_outputs = getattr(self, "_talker_mtp_batch_outputs", None)
+        if talker_mtp_batch_outputs is not None:
+            model_kwargs_extra["talker_mtp_batch_outputs"] = talker_mtp_batch_outputs
+            self._talker_mtp_batch_outputs = None
+
         if getattr(self.model_config, "has_sampling_extra_args", False):
             extra_args_list: list[dict] = []
             for req_id in self.input_batch.req_ids:
@@ -1443,7 +1448,6 @@ class OmniGPUModelRunner(GPUModelRunner):
             import traceback
 
             traceback.print_exc()
-
     def _collect_additional_information_for_prefill(
         self,
         num_scheduled_tokens_np: np.ndarray,
@@ -1684,7 +1688,18 @@ class OmniGPUModelRunner(GPUModelRunner):
                 req_ids_b = [item[0] for item in decode_batch_items]
                 start_offsets_b = [item[1] for item in decode_batch_items]
                 req_infos_b = [item[2] for item in decode_batch_items]
-                ids_b = torch.stack([input_ids[offset : offset + 1].reshape(-1)[0] for offset in start_offsets_b])
+                offsets_are_contiguous = bool(
+                    start_offsets_b
+                    and all(
+                        int(offset) == int(start_offsets_b[0]) + idx
+                        for idx, offset in enumerate(start_offsets_b)
+                    )
+                )
+                if offsets_are_contiguous:
+                    start0 = int(start_offsets_b[0])
+                    ids_b = input_ids[start0 : start0 + len(start_offsets_b)].reshape(-1)
+                else:
+                    ids_b = torch.stack([input_ids[offset : offset + 1].reshape(-1)[0] for offset in start_offsets_b])
                 req_input_ids, req_embeds, last_talker_hidden, text_step, updates = batch_decode_preprocess(
                     input_ids=ids_b,
                     req_infos=req_infos_b,
@@ -1696,9 +1711,15 @@ class OmniGPUModelRunner(GPUModelRunner):
                         dtype=req_embeds.dtype,
                     )
 
-                offsets_t = torch.tensor(start_offsets_b, device=req_embeds.device, dtype=torch.long)
-                inputs_embeds.index_copy_(0, offsets_t, req_embeds)
-                input_ids.index_copy_(0, offsets_t, req_input_ids.reshape(-1).to(dtype=input_ids.dtype))
+                if offsets_are_contiguous:
+                    start0 = int(start_offsets_b[0])
+                    end0 = start0 + len(start_offsets_b)
+                    inputs_embeds[start0:end0].copy_(req_embeds)
+                    input_ids[start0:end0].copy_(req_input_ids.reshape(-1).to(dtype=input_ids.dtype))
+                else:
+                    offsets_t = torch.tensor(start_offsets_b, device=req_embeds.device, dtype=torch.long)
+                    inputs_embeds.index_copy_(0, offsets_t, req_embeds)
+                    input_ids.index_copy_(0, offsets_t, req_input_ids.reshape(-1).to(dtype=input_ids.dtype))
 
                 dst = slice(len(decode_req_ids), len(decode_req_ids) + len(req_ids_b))
                 self.talker_mtp_input_ids.gpu[dst].copy_(req_input_ids.reshape(-1))
@@ -1706,8 +1727,13 @@ class OmniGPUModelRunner(GPUModelRunner):
                 self.last_talker_hidden.gpu[dst].copy_(last_talker_hidden)
                 self.text_step.gpu[dst].copy_(text_step)
 
-                for req_id_b, update_dict_b in zip(req_ids_b, updates, strict=True):
-                    self._merge_additional_information_update(req_id_b, update_dict_b)
+                if updates:
+                    if len(updates) != len(req_ids_b):
+                        raise ValueError(
+                            f"preprocess_decode_batch returned {len(updates)} updates for {len(req_ids_b)} requests"
+                        )
+                    for req_id_b, update_dict_b in zip(req_ids_b, updates, strict=True):
+                        self._merge_additional_information_update(req_id_b, update_dict_b)
 
                 decode_req_ids.extend(req_ids_b)
                 decode_start_offsets.extend(start_offsets_b)
@@ -1814,6 +1840,8 @@ class OmniGPUModelRunner(GPUModelRunner):
         req_embeds = self.talker_mtp_inputs_embeds.gpu[:num_tokens_padded]
         last_talker_hidden = self.last_talker_hidden.gpu[:num_tokens_padded]
         text_step = self.text_step.gpu[:num_tokens_padded]
+        if num_tokens_padded > decode_batch_size:
+            text_step[decode_batch_size:num_tokens_padded].zero_()
         subtalker_params = getattr(self.vllm_config.model_config, "subtalker_sampling_params", None)
         if not isinstance(subtalker_params, dict):
             subtalker_params = {}
@@ -1871,40 +1899,70 @@ class OmniGPUModelRunner(GPUModelRunner):
         }
         if generator is not None:
             talker_kwargs["generator"] = generator
-        if getattr(self.model, "talker_mtp_accepts_req_infos", False):
-            talker_kwargs["req_ids"] = decode_req_ids
-            talker_kwargs["req_infos"] = [
-                self.model_intermediate_buffer.setdefault(req_id, {}) for req_id in decode_req_ids
-            ]
         with current_omni_platform.set_forward_context(
             None, self.vllm_config, cudagraph_runtime_mode=_cudagraph_mode, batch_descriptor=batch_desc
         ):
-            req_embeds, code_predictor_codes = self.talker_mtp(
+            talker_mtp_outputs = self.talker_mtp(
                 req_input_ids,
                 req_embeds,
                 last_talker_hidden,
                 text_step,
                 **talker_kwargs,
             )
-        postprocess_talker_mtp = getattr(self.model, "postprocess_talker_mtp", None)
-        if callable(postprocess_talker_mtp):
-            req_embeds, code_predictor_codes = postprocess_talker_mtp(
-                req_ids=decode_req_ids,
-                input_embeds=req_embeds,
-                mtp_outputs=code_predictor_codes,
-                req_infos=[self.model_intermediate_buffer.setdefault(req_id, {}) for req_id in decode_req_ids],
+        if not isinstance(talker_mtp_outputs, tuple) or len(talker_mtp_outputs) not in (2, 3):
+            raise TypeError(
+                "talker_mtp must return (input_embeds, output) or "
+                f"(input_embeds, output, aux_output), got {type(talker_mtp_outputs).__name__}: "
+                f"{talker_mtp_outputs!r}"
             )
+        req_embeds = talker_mtp_outputs[0]
+        code_predictor_codes = talker_mtp_outputs[1]
+        aux_output = talker_mtp_outputs[2] if len(talker_mtp_outputs) == 3 else None
         # update the inputs_embeds and code_predictor_codes
         out_key = getattr(self.model, "talker_mtp_output_key", ("codes", "audio"))
         if not isinstance(out_key, tuple) or len(out_key) != 2:
             raise TypeError(f"talker_mtp_output_key must be a 2-tuple, got {type(out_key).__name__}: {out_key!r}")
+        aux_key = getattr(self.model, "talker_mtp_aux_output_key", None)
+        if aux_output is not None and (not isinstance(aux_key, tuple) or len(aux_key) != 2):
+            raise TypeError(
+                "talker_mtp_aux_output_key must be a 2-tuple when talker_mtp returns aux_output, "
+                f"got {type(aux_key).__name__}: {aux_key!r}"
+            )
+        self._talker_mtp_batch_outputs = {
+            "req_ids": list(decode_req_ids),
+            "output_key": out_key,
+            "output": code_predictor_codes[:decode_batch_size] if code_predictor_codes is not None else None,
+            "aux_key": aux_key,
+            "aux": aux_output[:decode_batch_size] if aux_output is not None else None,
+        }
+        store_per_request_outputs = not bool(getattr(self.model, "talker_mtp_outputs_batch_local", False))
         if start_offsets is None:
             id_to_index = self.input_batch.req_id_to_index
             start_offsets = [int(self.query_start_loc.cpu[id_to_index[req_id]]) for req_id in decode_req_ids]
+        offsets_are_contiguous = bool(
+            start_offsets
+            and all(
+                int(offset) == int(start_offsets[0]) + idx
+                for idx, offset in enumerate(start_offsets)
+            )
+        )
+        if not store_per_request_outputs:
+            if offsets_are_contiguous:
+                start0 = int(start_offsets[0])
+                inputs_embeds[start0 : start0 + decode_batch_size].copy_(req_embeds[:decode_batch_size])
+            else:
+                offsets_t = torch.tensor(start_offsets, device=req_embeds.device, dtype=torch.long)
+                inputs_embeds.index_copy_(0, offsets_t, req_embeds[:decode_batch_size])
+            return
         for idx, (req_id, start_offset) in enumerate(zip(decode_req_ids, start_offsets, strict=True)):
             inputs_embeds[start_offset : start_offset + 1] = req_embeds[idx : idx + 1]
+            update_dict: dict[str, dict[str, torch.Tensor]] = {}
             if code_predictor_codes is not None:
-                update_dict = {out_key[0]: {out_key[1]: code_predictor_codes[idx : idx + 1]}}
+                update_dict.setdefault(out_key[0], {})[out_key[1]] = code_predictor_codes[idx : idx + 1]
+            if aux_output is not None:
+                assert aux_key is not None
+                update_dict.setdefault(aux_key[0], {})[aux_key[1]] = aux_output[idx : idx + 1]
+            if update_dict:
                 self._merge_additional_information_update(req_id, update_dict)
 
     def _model_forward(

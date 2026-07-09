@@ -25,9 +25,12 @@ stages:
     gpu_memory_utilization: 0.60
     enable_prefix_caching: false
     async_scheduling: true
-    max_num_batched_tokens: 4096
+    max_num_batched_tokens: 65536
     max_model_len: 4096
     devices: "0"
+    profiler_config:
+      profiler: torch
+      torch_profiler_dir: /root/vllm-omni-workspace/vllm-omni/results/moss_local_stage0/batch_8
     output_connectors:
       to_stage_1: shm
     default_sampling_params:
@@ -44,6 +47,12 @@ stages:
     enforce_eager: false
     enable_prefix_caching: false
     async_scheduling: true
+    compilation_config:
+      cudagraph_capture_sizes: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+      cudagraph_num_of_warmups: 1
+    profiler_config:
+      profiler: torch
+      torch_profiler_dir: /root/vllm-omni-workspace/vllm-omni/results/moss_local_stage1/batch_8
     max_num_batched_tokens: 65536
     max_model_len: 65536
     devices: "0"
