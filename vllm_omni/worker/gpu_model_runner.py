@@ -1886,6 +1886,14 @@ class OmniGPUModelRunner(GPUModelRunner):
                 text_step,
                 **talker_kwargs,
             )
+        postprocess_talker_mtp = getattr(self.model, "postprocess_talker_mtp", None)
+        if callable(postprocess_talker_mtp):
+            req_embeds, code_predictor_codes = postprocess_talker_mtp(
+                req_ids=decode_req_ids,
+                input_embeds=req_embeds,
+                mtp_outputs=code_predictor_codes,
+                req_infos=[self.model_intermediate_buffer.setdefault(req_id, {}) for req_id in decode_req_ids],
+            )
         # update the inputs_embeds and code_predictor_codes
         out_key = getattr(self.model, "talker_mtp_output_key", ("codes", "audio"))
         if not isinstance(out_key, tuple) or len(out_key) != 2:
