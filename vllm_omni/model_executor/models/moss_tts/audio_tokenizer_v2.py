@@ -600,7 +600,8 @@ class MossAudioTokenizerMultiheadAttention(StreamingModule):
     def _init_streaming_state(self, batch_size: int) -> MHAState:
         in_proj = cast(nn.Linear, self.in_projs[0])
         device = cast(torch.device, in_proj.weight.device)
-        dtype = cast(torch.dtype, in_proj.weight.dtype)
+        weight_dtype = cast(torch.dtype, in_proj.weight.dtype)
+        dtype = torch.bfloat16 if device.type == "cuda" else weight_dtype
 
         dim_per_head = self.embed_dim // self.num_heads
         if self.context is None:
@@ -1633,13 +1634,14 @@ class MossAudioTokenizerModel(MossAudioTokenizerPreTrainedModel):
         if codes_lengths is None:
             codes_lengths = torch.full((B,), T, device=device, dtype=torch.long)
 
-        # Decode from codes
-        quantizer = cast(MossAudioTokenizerResidualVQ | MossAudioTokenizerResidualLFQ, self.quantizer)
-        zq = quantizer.decode_codes(codes)
+        # Keep eager execution and CUDA Graph capture on the same BF16 path.
+        with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"):
+            quantizer = cast(MossAudioTokenizerResidualVQ | MossAudioTokenizerResidualLFQ, self.quantizer)
+            zq = quantizer.decode_codes(codes)
 
-        d, d_lengths = zq, codes_lengths
-        for decoder_module in self.decoder:
-            d, d_lengths = decoder_module(d, d_lengths)
+            d, d_lengths = zq, codes_lengths
+            for decoder_module in self.decoder:
+                d, d_lengths = decoder_module(d, d_lengths)
 
         d, d_lengths = self._restore_channels_from_codec(d, d_lengths)
         return MossAudioTokenizerDecoderOutput(audio=d, audio_lengths=d_lengths)
