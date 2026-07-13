@@ -8,6 +8,7 @@ This section contains design documents and architecture specifications for vLLM-
 
 ## Feature Design Documents
 
+- [Hardware Plugin System](feature/hardware_plugin_system.md)
 - [Disaggregated Inference](feature/disaggregated_inference.md)
 - [Ray-based Execution](feature/ray_based_execution.md)
 - [Adding Step Execution Support for Diffusion Pipelines](feature/diffusion_step_execution.md)
