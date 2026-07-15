@@ -32,6 +32,10 @@ from vllm_omni.model_executor.models.moss_tts.cuda_graph_streaming_decoder_wrapp
 from vllm_omni.model_executor.models.moss_tts.moss_codec_cudagraph import (
     MossTTSCUDAGraphCodecWrapper,
 )
+from vllm_omni.model_executor.models.moss_tts.streaming_input import (
+    encode_slot_mask,
+    prepare_streaming_exec_mask,
+)
 from vllm_omni.model_executor.models.output_templates import OmniOutput
 
 logger = init_logger(__name__)
@@ -64,6 +68,14 @@ class _MossCodecStreamSession:
                 else codec.streaming(self._batch_size)
             )
             self._exit_stack.enter_context(streaming_context)
+        shared_exec_mask = getattr(codec, "_streaming_exec_mask", None)
+        if not isinstance(shared_exec_mask, torch.Tensor):
+            raise RuntimeError("The streaming codec does not expose its shared exec mask.")
+        if shared_exec_mask.shape != (self._batch_size,) or shared_exec_mask.dtype != torch.bool:
+            raise RuntimeError(
+                f"Unexpected streaming exec mask: shape={tuple(shared_exec_mask.shape)} dtype={shared_exec_mask.dtype}"
+            )
+        self._exec_mask = shared_exec_mask
         self._cudagraph_wrapper: CUDAGraphStreamingDecoderWrapper | None = None
         capture_sizes = sorted({int(size) for size in (cudagraph_capture_sizes or []) if int(size) > 0})
         if capture_sizes and self._device.type == "cuda":
@@ -71,6 +83,7 @@ class _MossCodecStreamSession:
                 codec,
                 batch_size=self._batch_size,
                 num_quantizers=self._n_vq,
+                exec_mask=self._exec_mask,
                 reset_streaming_state=lambda: self.reset_slots(list(range(self._batch_size))),
             )
             self._cudagraph_wrapper.warmup(self._device, capture_sizes)
@@ -89,11 +102,20 @@ class _MossCodecStreamSession:
         self.reset_slots([slot])
         self._free_stream_slots.append(slot)
 
+    def _prepare_exec_mask(self, active_slot_mask: int) -> torch.Tensor:
+        if self._device.type == "cuda":
+            prepare_streaming_exec_mask(self._exec_mask, active_slot_mask)
+        else:
+            self._exec_mask.zero_()
+            for slot in range(self._batch_size):
+                if (active_slot_mask >> slot) & 1:
+                    self._exec_mask[slot] = True
+        return self._exec_mask
+
     def reset_slots(self, slots: list[int]) -> None:
         if not slots:
             return
-        reset_mask = torch.zeros(self._batch_size, dtype=torch.bool, device=self._device)
-        reset_mask[slots] = True
+        reset_mask = self._prepare_exec_mask(encode_slot_mask(slots, self._batch_size))
 
         reset_streaming_slots = getattr(self._codec, "_reset_streaming_slots", None)
         if callable(reset_streaming_slots):
@@ -131,22 +153,30 @@ class _MossCodecStreamSession:
             dtype=torch.long,
             device=self._device,
         )
-        codes_lengths = torch.zeros(self._batch_size, dtype=torch.long, device=self._device)
-        exec_mask = torch.zeros(self._batch_size, dtype=torch.bool, device=self._device)
+        active_slot_mask = encode_slot_mask(slot_codes, self._batch_size)
         for slot, codes in slot_codes.items():
             codes_step[:, slot, :] = codes.to(device=self._device, dtype=torch.long)
-            codes_lengths[slot] = int(codes.shape[1])
-            exec_mask[slot] = True
 
         graph_output: tuple[torch.Tensor, torch.Tensor] | None = None
         if self._cudagraph_wrapper is not None:
-            graph_output = self._cudagraph_wrapper.decode(codes_step, exec_mask)
+            graph_output = self._cudagraph_wrapper.decode(
+                codes_step,
+                active_slot_mask,
+            )
 
         used_cudagraph = graph_output is not None
         if used_cudagraph:
             audio_tensor, lengths_tensor = graph_output
         else:
-            self._codec._set_streaming_exec_mask(exec_mask)
+            # All active slots have the same T. Inactive outputs are ignored,
+            # so a full vector avoids per-slot Python-scalar H2D copies.
+            codes_lengths = torch.full(
+                (self._batch_size,),
+                step_t,
+                dtype=torch.long,
+                device=self._device,
+            )
+            self._prepare_exec_mask(active_slot_mask)
             result = self._codec._decode_frame(codes_step, codes_lengths)
             if result.audio is None:
                 return {}

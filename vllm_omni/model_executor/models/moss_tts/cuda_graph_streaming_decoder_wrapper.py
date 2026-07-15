@@ -15,6 +15,11 @@ from torch.cuda import CUDAGraph
 from vllm.logger import init_logger
 from vllm.platforms import current_platform
 
+from vllm_omni.model_executor.models.moss_tts.streaming_input import (
+    encode_slot_mask,
+    prepare_streaming_inputs,
+)
+
 logger = init_logger(__name__)
 
 
@@ -41,12 +46,22 @@ class CUDAGraphStreamingDecoderWrapper:
         *,
         batch_size: int,
         num_quantizers: int,
+        exec_mask: torch.Tensor,
         reset_streaming_state: Callable[[], None] | None = None,
     ) -> None:
         self.codec = codec
         self.batch_size = int(batch_size)
         self.num_quantizers = int(num_quantizers)
         self.reset_streaming_state = reset_streaming_state
+        if exec_mask.shape != (self.batch_size,) or exec_mask.dtype != torch.bool:
+            raise RuntimeError(
+                f"Unexpected streaming exec mask: shape={tuple(exec_mask.shape)} dtype={exec_mask.dtype}"
+            )
+        self.exec_mask = exec_mask
+        self._full_slot_mask = encode_slot_mask(
+            range(self.batch_size),
+            self.batch_size,
+        )
         self.graphs: dict[int, _CapturedStreamingDecodeGraph] = {}
         self._pool = None
         self._warmed_up = False
@@ -107,9 +122,16 @@ class CUDAGraphStreamingDecoderWrapper:
             device=device,
         )
         lengths = torch.full((self.batch_size,), size, dtype=torch.long, device=device)
-        exec_mask = torch.ones(self.batch_size, dtype=torch.bool, device=device)
 
-        self.codec._set_streaming_exec_mask(exec_mask)
+        # Compile both the code-copy and mask path during service warmup. The
+        # source and destination may alias here because each element is copied
+        # independently; runtime calls use distinct dynamic/static buffers.
+        prepare_streaming_inputs(
+            codes,
+            codes,
+            self.exec_mask,
+            self._full_slot_mask,
+        )
         stream = torch.cuda.Stream()
         stream.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(stream):
@@ -119,7 +141,6 @@ class CUDAGraphStreamingDecoderWrapper:
 
         if self.reset_streaming_state is not None:
             self.reset_streaming_state()
-        self.codec._set_streaming_exec_mask(exec_mask)
         if self._pool is None:
             self._pool = current_platform.get_global_graph_pool()
         graph = CUDAGraph()
@@ -141,7 +162,7 @@ class CUDAGraphStreamingDecoderWrapper:
     def decode(
         self,
         codes_step: torch.Tensor,
-        exec_mask: torch.Tensor,
+        active_slot_mask: int,
     ) -> tuple[torch.Tensor, torch.Tensor] | None:
         if not codes_step.is_cuda or torch.cuda.is_current_stream_capturing():
             return None
@@ -155,8 +176,12 @@ class CUDAGraphStreamingDecoderWrapper:
         if entry is None:
             return None
 
-        self.codec._set_streaming_exec_mask(exec_mask)
-        entry.static_codes.copy_(codes_step)
+        prepare_streaming_inputs(
+            codes_step,
+            entry.static_codes,
+            self.exec_mask,
+            active_slot_mask,
+        )
         entry.graph.replay()
         return entry.static_audio, entry.static_audio_lengths
 
