@@ -102,12 +102,22 @@ class StreamingState:
 
     def __post_init__(self):
         self.exec_mask = torch.ones(self.batch_size, dtype=torch.bool, device=self.device)
+        self._owns_exec_mask = True
+
+    def bind_exec_mask(self, exec_mask: torch.Tensor) -> None:
+        if exec_mask.shape != (self.batch_size,):
+            raise ValueError(f"Expected exec_mask shape ({self.batch_size},), got {tuple(exec_mask.shape)}")
+        if exec_mask.device != self.device:
+            raise ValueError(f"Expected exec_mask on {self.device}, got {exec_mask.device}")
+        self.exec_mask = exec_mask
+        self._owns_exec_mask = False
 
     def set_exec_mask(self, exec_mask: torch.Tensor):
         self.exec_mask[:] = exec_mask
 
     def reset(self, reset_mask: torch.Tensor) -> None:
-        self.exec_mask[:] = torch.where(reset_mask, torch.ones_like(self.exec_mask), self.exec_mask)
+        if self._owns_exec_mask:
+            self.exec_mask.masked_fill_(reset_mask, True)
 
     def __enter__(self):
         # ExitStack expects a context manager; returning self is conventional and useful for debugging.
@@ -1236,6 +1246,76 @@ class MossAudioTokenizerResidualLFQ(nn.Module):
                 for _ in range(num_quantizers)
             ]
         )
+        self.register_buffer("_decode_lut", None, persistent=False)
+        self.register_buffer("_decode_lut_bias", None, persistent=False)
+        self.register_buffer("_decode_lut_quantizer_ids", None, persistent=False)
+
+    @torch.no_grad()
+    def build_decode_lut(
+        self,
+        num_quantizers: int,
+        *,
+        dtype: torch.dtype,
+    ) -> None:
+        """Fold the inference-only LFQ decode projections into code tables."""
+        if not 0 < num_quantizers <= len(self.quantizers):
+            raise ValueError(f"num_quantizers must be in [1, {len(self.quantizers)}], got {num_quantizers}")
+
+        output_proj = self.output_proj
+        if isinstance(output_proj, nn.Identity):
+            output_weight = None
+            output_bias = torch.zeros(
+                self.output_dim,
+                device=self.quantizers[0].codebook.weight.device,
+                dtype=torch.float32,
+            )
+        elif isinstance(output_proj, nn.Conv1d) and output_proj.kernel_size == (1,):
+            output_weight = output_proj.weight.detach().squeeze(-1).float()
+            output_bias = (
+                output_proj.bias.detach().float()
+                if output_proj.bias is not None
+                else torch.zeros(
+                    self.output_dim,
+                    device=output_weight.device,
+                    dtype=torch.float32,
+                )
+            )
+        else:
+            raise TypeError(
+                "LFQ decoded LUT requires output_proj to be Identity or Conv1d(kernel_size=1), "
+                f"got {type(output_proj).__name__}"
+            )
+
+        decoded_tables: list[torch.Tensor] = []
+        for quantizer in self.quantizers[:num_quantizers]:
+            quantizer = cast(MossAudioTokenizerLFQ, quantizer)
+            inner_proj = quantizer.out_proj
+            codebook = quantizer.codebook.weight.detach().float()
+            if isinstance(inner_proj, nn.Identity):
+                decoded = codebook
+            elif isinstance(inner_proj, nn.Conv1d) and inner_proj.kernel_size == (1,):
+                inner_weight = inner_proj.weight.detach().squeeze(-1).float()
+                inner_bias = inner_proj.bias.detach().float() if inner_proj.bias is not None else None
+                decoded = F.linear(codebook, inner_weight, inner_bias)
+            else:
+                raise TypeError(
+                    "LFQ decoded LUT requires quantizer out_proj to be Identity or Conv1d(kernel_size=1), "
+                    f"got {type(inner_proj).__name__}"
+                )
+
+            if output_weight is not None:
+                # Apply the shared outer bias once after summing all codebooks.
+                decoded = F.linear(decoded, output_weight, bias=None)
+            decoded_tables.append(decoded)
+
+        lut = torch.stack(decoded_tables).to(dtype=dtype)
+        self._decode_lut = lut
+        self._decode_lut_bias = output_bias.to(dtype=dtype)
+        self._decode_lut_quantizer_ids = torch.arange(
+            num_quantizers,
+            device=lut.device,
+            dtype=torch.long,
+        ).view(-1, 1, 1)
 
     @torch.no_grad()
     def forward(
@@ -1277,6 +1357,12 @@ class MossAudioTokenizerResidualLFQ(nn.Module):
 
     def decode_codes(self, codes: torch.Tensor) -> torch.Tensor:
         nq, B, T = codes.shape
+        if self._decode_lut is not None and nq <= self._decode_lut.shape[0]:
+            quantizer_ids = self._decode_lut_quantizer_ids[:nq]
+            decoded = self._decode_lut[quantizer_ids, codes].sum(dim=0)
+            decoded = decoded + self._decode_lut_bias
+            return decoded.transpose(1, 2)
+
         emb = torch.zeros(B, self.rvq_dim, T, device=codes.device, dtype=torch.float32)
         for i, quantizer in enumerate(self.quantizers[:nq]):
             quantizer = cast(MossAudioTokenizerLFQ, quantizer)
@@ -1390,39 +1476,81 @@ class MossAudioTokenizerModel(MossAudioTokenizerPreTrainedModel):
                 f"got current_frame_rate={current_frame_rate}, expected={expected_output_frame_rate}."
             )
 
+        self._streaming_modules: list[StreamingModule] = []
+        self._streaming_exec_mask: torch.Tensor | None = None
         self.post_init()
 
-    def _start_streaming(self, batch_size: int):
-        """Start streaming mode for all modules."""
+    def _start_streaming(self, batch_size: int, *, decoder_only: bool = False) -> None:
+        """Start streaming with one shared, address-stable execution mask."""
+        if self._streaming_modules:
+            raise RuntimeError("MOSS Audio Tokenizer is already streaming.")
+
+        root: nn.Module = self.decoder if decoder_only else self
+        shared_exec_mask = torch.ones(
+            batch_size,
+            dtype=torch.bool,
+            device=next(self.parameters()).device,
+        )
+        streaming_modules: list[StreamingModule] = []
 
         def _start(module):
             if isinstance(module, StreamingModule):
-                module._streaming_state = module._init_streaming_state(batch_size)
+                if module._streaming_state is not None:
+                    raise RuntimeError("A MOSS Audio Tokenizer submodule is already streaming.")
+                state = module._init_streaming_state(batch_size)
+                state.bind_exec_mask(shared_exec_mask)
+                module._streaming_state = state
+                streaming_modules.append(module)
 
-        self.apply(_start)
+        root.apply(_start)
+        self._streaming_modules = streaming_modules
+        self._streaming_exec_mask = shared_exec_mask
 
-    def _stop_streaming(self):
+    def _stop_streaming(self) -> None:
         """Stop streaming mode for all modules."""
-
-        def _stop(module):
-            if isinstance(module, StreamingModule):
-                module._streaming_state = None
-
-        self.apply(_stop)
+        for module in self._streaming_modules:
+            module._streaming_state = None
+        self._streaming_modules = []
+        self._streaming_exec_mask = None
 
     def _set_streaming_exec_mask(self, exec_mask: torch.Tensor) -> None:
-        """Set the active slot mask on every live streaming module."""
+        """Update the shared active-slot mask with one device copy."""
+        shared_exec_mask = self._streaming_exec_mask
+        if shared_exec_mask is None:
+            raise RuntimeError("MOSS Audio Tokenizer is not streaming.")
+        if exec_mask.shape != shared_exec_mask.shape:
+            raise ValueError(f"Expected exec_mask shape {tuple(shared_exec_mask.shape)}, got {tuple(exec_mask.shape)}")
+        shared_exec_mask.copy_(exec_mask.to(device=shared_exec_mask.device, dtype=torch.bool), non_blocking=True)
 
-        def _set(module):
-            if isinstance(module, StreamingModule) and module._streaming_state is not None:
-                module._streaming_state.set_exec_mask(exec_mask.to(module._streaming_state.device))
-
-        self.apply(_set)
+    def _reset_streaming_slots(self, reset_mask: torch.Tensor) -> None:
+        """Reset cached decoder state without traversing the full module tree."""
+        shared_exec_mask = self._streaming_exec_mask
+        if shared_exec_mask is None:
+            raise RuntimeError("MOSS Audio Tokenizer is not streaming.")
+        if reset_mask.shape != shared_exec_mask.shape:
+            raise ValueError(
+                f"Expected reset_mask shape {tuple(shared_exec_mask.shape)}, got {tuple(reset_mask.shape)}"
+            )
+        reset_mask = reset_mask.to(device=shared_exec_mask.device, dtype=torch.bool)
+        shared_exec_mask.masked_fill_(reset_mask, True)
+        for module in self._streaming_modules:
+            state = module._streaming_state
+            if state is not None:
+                state.reset(reset_mask)
 
     @contextmanager
     def streaming(self, batch_size: int = 1):
         """Context manager for streaming mode."""
         self._start_streaming(batch_size)
+        try:
+            yield
+        finally:
+            self._stop_streaming()
+
+    @contextmanager
+    def decoder_streaming(self, batch_size: int = 1):
+        """Stream decoder-only inference without allocating encoder state."""
+        self._start_streaming(batch_size, decoder_only=True)
         try:
             yield
         finally:
