@@ -56,8 +56,14 @@ class _MossCodecStreamSession:
         self._free_stream_slots = list(range(self._stream_slots))
         self._exit_stack = contextlib.ExitStack()
         self._closed = False
+        decoder_streaming = getattr(codec, "decoder_streaming", None)
         with torch.no_grad():
-            self._exit_stack.enter_context(codec.streaming(self._batch_size))
+            streaming_context = (
+                decoder_streaming(self._batch_size)
+                if callable(decoder_streaming)
+                else codec.streaming(self._batch_size)
+            )
+            self._exit_stack.enter_context(streaming_context)
         self._cudagraph_wrapper: CUDAGraphStreamingDecoderWrapper | None = None
         capture_sizes = sorted({int(size) for size in (cudagraph_capture_sizes or []) if int(size) > 0})
         if capture_sizes and self._device.type == "cuda":
@@ -88,6 +94,12 @@ class _MossCodecStreamSession:
             return
         reset_mask = torch.zeros(self._batch_size, dtype=torch.bool, device=self._device)
         reset_mask[slots] = True
+
+        reset_streaming_slots = getattr(self._codec, "_reset_streaming_slots", None)
+        if callable(reset_streaming_slots):
+            with torch.no_grad():
+                reset_streaming_slots(reset_mask)
+            return
 
         def _reset(module: nn.Module) -> None:
             state = getattr(module, "_streaming_state", None)
@@ -770,6 +782,17 @@ class MossTTSCodecDecoder(nn.Module):
         device = self.vllm_config.device_config.device
         codec.to(device=device, dtype=torch.float32)
         codec.eval()
+        build_decode_lut = getattr(codec.quantizer, "build_decode_lut", None)
+        if callable(build_decode_lut):
+            lut_dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
+            build_decode_lut(self._n_vq, dtype=lut_dtype)
+            lut = codec.quantizer._decode_lut
+            logger.info(
+                "MOSS Audio Tokenizer LFQ decoded LUT: shape=%s dtype=%s size=%.1f MiB",
+                tuple(lut.shape),
+                lut.dtype,
+                lut.numel() * lut.element_size() / (1024**2),
+            )
         self._codec = codec
         inferred_channels = 2 if "v2" in codec_path.lower() else 1
         self._n_channels = int(
