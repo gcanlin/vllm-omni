@@ -1325,7 +1325,7 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
         self.talker_mtp_aux_output_key = ("talker_mtp", "should_continue")
         self.talker_mtp_outputs_batch_local = True
         self.talker_mtp_graph_safe = True
-        self.use_async_omni_output = True
+        self.use_async_omni_output = False
         self.eager_omni_postprocess_before_async_output = True
         self.omni_pooler_payload_include_hidden = False
         self.postprocess_uses_multimodal_outputs = False
@@ -1524,42 +1524,6 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
         mtp_control = torch.zeros_like(mtp_hidden)
         mtp_control[:, :1] = 1.0 if active else 0.0
         return input_ids, text_embed, {"mtp_inputs": (mtp_hidden, mtp_control)}
-
-    def preprocess_decode_batch(
-        self,
-        *,
-        input_ids: torch.Tensor,
-        req_infos: list[dict[str, Any]],
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[dict[str, Any]]]:
-        input_ids_flat = input_ids.reshape(-1)
-        if int(input_ids_flat.numel()) != len(req_infos):
-            raise ValueError(
-                f"preprocess_decode_batch expected {len(req_infos)} input ids, got {int(input_ids_flat.numel())}"
-            )
-
-        device = input_ids_flat.device
-        # Keep vLLM's native input-id dtype (typically int32). Embedding accepts
-        # int32/int64 indices, and forcing int64 here adds a D2D copy on every
-        # decode step.
-        input_ids_out = input_ids_flat
-        text_embeds = self.model.embed_tokens(input_ids_out.reshape(-1, 1)).reshape(len(req_infos), -1)
-        dtype = text_embeds.dtype
-
-        hidden_rows: list[torch.Tensor] = []
-        for info_dict in req_infos:
-            hs = info_dict.get("hidden_states", {}) or {}
-            last_hidden = hs.get("last")
-            if isinstance(last_hidden, torch.Tensor) and last_hidden.numel() > 0:
-                hidden_rows.append(last_hidden.to(device=device, dtype=dtype).reshape(1, -1))
-            else:
-                hidden_rows.append(torch.zeros((1, self.hidden_size), device=device, dtype=dtype))
-        mtp_hidden = torch.cat(hidden_rows, dim=0)
-        mtp_control = torch.zeros((len(req_infos), self.hidden_size), device=device, dtype=dtype)
-        # Decode requests scheduled by vLLM are active; stopped requests should
-        # have been removed from the batch. Avoid constructing a CPU list tensor
-        # here, which shows up as a host-to-device copy in profiles.
-        mtp_control[:, 0] = 1.0
-        return input_ids_out, text_embeds, mtp_hidden, mtp_control, []
 
     def postprocess(self, hidden_states: torch.Tensor, **_: Any) -> dict[str, Any]:
         if hidden_states.numel() == 0:

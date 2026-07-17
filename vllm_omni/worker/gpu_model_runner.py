@@ -1679,18 +1679,7 @@ class OmniGPUModelRunner(GPUModelRunner):
                 req_ids_b = [item[0] for item in decode_batch_items]
                 start_offsets_b = [item[1] for item in decode_batch_items]
                 req_infos_b = [item[2] for item in decode_batch_items]
-                offsets_are_contiguous = bool(
-                    start_offsets_b
-                    and all(
-                        int(offset) == int(start_offsets_b[0]) + idx
-                        for idx, offset in enumerate(start_offsets_b)
-                    )
-                )
-                if offsets_are_contiguous:
-                    start0 = int(start_offsets_b[0])
-                    ids_b = input_ids[start0 : start0 + len(start_offsets_b)].reshape(-1)
-                else:
-                    ids_b = torch.stack([input_ids[offset : offset + 1].reshape(-1)[0] for offset in start_offsets_b])
+                ids_b = torch.stack([input_ids[offset : offset + 1].reshape(-1)[0] for offset in start_offsets_b])
                 req_input_ids, req_embeds, last_talker_hidden, text_step, updates = batch_decode_preprocess(
                     input_ids=ids_b,
                     req_infos=req_infos_b,
@@ -1702,15 +1691,9 @@ class OmniGPUModelRunner(GPUModelRunner):
                         dtype=req_embeds.dtype,
                     )
 
-                if offsets_are_contiguous:
-                    start0 = int(start_offsets_b[0])
-                    end0 = start0 + len(start_offsets_b)
-                    inputs_embeds[start0:end0].copy_(req_embeds)
-                    input_ids[start0:end0].copy_(req_input_ids.reshape(-1).to(dtype=input_ids.dtype))
-                else:
-                    offsets_t = torch.tensor(start_offsets_b, device=req_embeds.device, dtype=torch.long)
-                    inputs_embeds.index_copy_(0, offsets_t, req_embeds)
-                    input_ids.index_copy_(0, offsets_t, req_input_ids.reshape(-1).to(dtype=input_ids.dtype))
+                offsets_t = torch.tensor(start_offsets_b, device=req_embeds.device, dtype=torch.long)
+                inputs_embeds.index_copy_(0, offsets_t, req_embeds)
+                input_ids.index_copy_(0, offsets_t, req_input_ids.reshape(-1).to(dtype=input_ids.dtype))
 
                 dst = slice(len(decode_req_ids), len(decode_req_ids) + len(req_ids_b))
                 self.talker_mtp_input_ids.gpu[dst].copy_(req_input_ids.reshape(-1))
@@ -1718,13 +1701,8 @@ class OmniGPUModelRunner(GPUModelRunner):
                 self.last_talker_hidden.gpu[dst].copy_(last_talker_hidden)
                 self.text_step.gpu[dst].copy_(text_step)
 
-                if updates:
-                    if len(updates) != len(req_ids_b):
-                        raise ValueError(
-                            f"preprocess_decode_batch returned {len(updates)} updates for {len(req_ids_b)} requests"
-                        )
-                    for req_id_b, update_dict_b in zip(req_ids_b, updates, strict=True):
-                        self._merge_additional_information_update(req_id_b, update_dict_b)
+                for req_id_b, update_dict_b in zip(req_ids_b, updates, strict=True):
+                    self._merge_additional_information_update(req_id_b, update_dict_b)
 
                 decode_req_ids.extend(req_ids_b)
                 decode_start_offsets.extend(start_offsets_b)
