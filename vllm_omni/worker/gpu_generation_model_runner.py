@@ -154,11 +154,15 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
                 self._update_request_states(scheduler_output)
             deferred_state_corrections_fn = self._update_states(scheduler_output)
 
-            # Notify stateful models of finished requests before the
-            # zero-token early return. Request cleanup is a model lifecycle
-            # concern and does not depend on the inter-stage transfer mode.
+            # A terminal chunk may be both scheduled and listed as finished in
+            # the same iteration. It must retain codec state until forward has
+            # materialized its PCM; only unscheduled finishes are abort/cleanup
+            # events that can release state before the zero-token early return.
             if scheduler_output.finished_req_ids and hasattr(self.model, "on_requests_finished"):
-                self.model.on_requests_finished(scheduler_output.finished_req_ids)
+                scheduled_req_ids = set(scheduler_output.num_scheduled_tokens)
+                cleanup_req_ids = set(scheduler_output.finished_req_ids) - scheduled_req_ids
+                if cleanup_req_ids:
+                    self.model.on_requests_finished(cleanup_req_ids)
 
             if not scheduler_output.total_num_scheduled_tokens:
                 return self.attach_omni_connector_output(EMPTY_MODEL_RUNNER_OUTPUT)

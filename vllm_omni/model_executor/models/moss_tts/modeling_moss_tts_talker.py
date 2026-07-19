@@ -1638,9 +1638,15 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
         for info in info_dicts:
             req_id = info.get("request_id") if isinstance(info, dict) else None
             batch_idx = batch_output_by_req.get(str(req_id)) if req_id is not None else None
-            if batch_idx is not None and isinstance(batch_should, torch.Tensor) and batch_idx < int(batch_should.shape[0]):
+            if (
+                batch_idx is not None
+                and isinstance(batch_should, torch.Tensor)
+                and batch_idx < int(batch_should.shape[0])
+            ):
                 should_values.append(
-                    batch_should[batch_idx : batch_idx + 1].reshape(-1)[:1].to(
+                    batch_should[batch_idx : batch_idx + 1]
+                    .reshape(-1)[:1]
+                    .to(
                         device=hidden.device,
                         dtype=torch.bool,
                     )
@@ -1662,7 +1668,11 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
         for info in info_dicts:
             req_id = info.get("request_id") if isinstance(info, dict) else None
             batch_idx = batch_output_by_req.get(str(req_id)) if req_id is not None else None
-            if batch_idx is not None and isinstance(batch_codes, torch.Tensor) and batch_idx < int(batch_codes.shape[0]):
+            if (
+                batch_idx is not None
+                and isinstance(batch_codes, torch.Tensor)
+                and batch_idx < int(batch_codes.shape[0])
+            ):
                 codes = batch_codes[batch_idx : batch_idx + 1].to(device=hidden.device, dtype=torch.long)
                 per_req_codes.append(codes)
                 have_codes = True

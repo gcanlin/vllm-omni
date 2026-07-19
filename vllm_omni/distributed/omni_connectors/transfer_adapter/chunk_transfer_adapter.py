@@ -45,7 +45,21 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         model_max_num_seqs = int(getattr(model_config, "max_num_seqs", self.scheduler_max_num_seqs) or 0)
         if model_max_num_seqs <= 0:
             model_max_num_seqs = self.scheduler_max_num_seqs
-        self._active_window = min(active_stream_window, model_max_num_seqs) if active_stream_window > 0 else 0
+        connector_config = getattr(model_config, "stage_connector_config", None)
+        if isinstance(connector_config, dict):
+            connector_extra = connector_config.get("extra", connector_config)
+        else:
+            connector_extra = getattr(connector_config, "extra", None)
+        codec_streaming = (
+            bool(connector_extra.get("codec_streaming", False)) if isinstance(connector_extra, dict) else False
+        )
+        if codec_streaming:
+            # A request keeps decoder KV/offset state while waiting for its
+            # next chunk. Count those idle live streams against max_num_seqs,
+            # otherwise more state leases can be admitted than the codec owns.
+            self._active_window = model_max_num_seqs
+        else:
+            self._active_window = min(active_stream_window, model_max_num_seqs) if active_stream_window > 0 else 0
         if self._active_window > 0:
             logger.info(
                 "Bounded active-stream window enabled: K=%d. "
