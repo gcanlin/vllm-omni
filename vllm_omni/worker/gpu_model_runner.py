@@ -1702,7 +1702,7 @@ class OmniGPUModelRunner(GPUModelRunner):
                 self.text_step.gpu[dst].copy_(text_step)
 
                 for req_id_b, update_dict_b in zip(req_ids_b, updates, strict=True):
-                    self._merge_additional_information_update(req_id_b, update_dict_b)
+                    self._update_intermediate_buffer(req_id_b, update_dict_b)
 
                 decode_req_ids.extend(req_ids_b)
                 decode_start_offsets.extend(start_offsets_b)
