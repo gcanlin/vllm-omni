@@ -82,9 +82,6 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
         cached_req_ids = self.input_batch.req_id_to_index.keys()
         resumed_req_ids = scheduler_output.scheduled_cached_reqs.resumed_req_ids
         unscheduled_req_ids = cached_req_ids - (scheduled_req_ids - resumed_req_ids)
-        orphaned_unscheduled_req_ids = {req_id for req_id in unscheduled_req_ids if req_id not in self.requests}
-        if orphaned_unscheduled_req_ids and hasattr(self.model, "on_requests_finished"):
-            self.model.on_requests_finished(orphaned_unscheduled_req_ids)
         for req_id in unscheduled_req_ids:
             self.input_batch.remove_request(req_id)
         cached_reqs = scheduler_output.scheduled_cached_reqs
@@ -153,10 +150,7 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
             record_function_or_nullcontext("gpu_model_runner: preprocess"),
             self.synchronize_input_prep(),
         ):
-            has_finished_state = bool(
-                scheduler_output.finished_req_ids or getattr(scheduler_output, "preempted_req_ids", None)
-            )
-            if self.model_config.async_chunk and (num_scheduled_tokens or has_finished_state):
+            if self.model_config.async_chunk and num_scheduled_tokens:
                 self._update_request_states(scheduler_output)
             deferred_state_corrections_fn = self._update_states(scheduler_output)
 
