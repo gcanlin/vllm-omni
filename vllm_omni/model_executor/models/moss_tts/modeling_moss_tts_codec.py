@@ -367,8 +367,6 @@ class MossTTSCodecDecoder(nn.Module):
             if i + 1 >= len(offsets):
                 break
             seg = ids_flat[offsets[i] : offsets[i + 1]]
-            if seg.numel() == 0:
-                continue
             meta = (info.get("meta", {}) if isinstance(info, dict) else {}) or {}
             finished = bool(meta.get("stream_finished", meta.get("finished", False)))
             streaming_enabled = bool(meta.get("codec_streaming", self._codec_streaming))
@@ -376,6 +374,8 @@ class MossTTSCodecDecoder(nn.Module):
             if streaming_enabled and finished and code_flat_numel is not None and int(code_flat_numel) == 0:
                 for _, wav in self._finish_empty_streaming_requests([info]).items():
                     audios[i] = wav.reshape(-1) if wav.ndim == 1 or int(wav.shape[0]) == 1 else wav
+                continue
+            if seg.numel() == 0:
                 continue
             if seg.numel() % self._n_vq != 0:
                 logger.warning(

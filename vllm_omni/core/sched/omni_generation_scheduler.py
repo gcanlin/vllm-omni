@@ -161,6 +161,17 @@ class OmniGenerationScheduler(OmniSchedulerMixin, VLLMScheduler):
                 self.waiting.pop_request()
                 continue
 
+            # Requests outside the bounded active-stream window still carry
+            # their Stage-1 pre-submit placeholder prompt. They must remain
+            # queued until the chunk adapter admits them; otherwise the
+            # generation fast path would send placeholder tokens to the codec.
+            if self.chunk_transfer_adapter is not None and not self.chunk_transfer_adapter.is_active_stream(
+                request.request_id
+            ):
+                self.waiting.pop_request()
+                skipped_waiting_requests.prepend_request(request)
+                continue
+
             # async_chunk: wait for the first upstream chunk (don't start with placeholders).
             if self.chunk_transfer_adapter is not None and len(request.prompt_token_ids) == 0:
                 if self.chunk_transfer_adapter.is_done_receiving_chunks(request.request_id):

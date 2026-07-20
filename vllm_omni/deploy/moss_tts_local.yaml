@@ -20,7 +20,7 @@ connectors:
 
 stages:
   - stage_id: 0
-    max_num_seqs: 32
+    max_num_seqs: 64
     gpu_memory_utilization: 0.60
     enable_prefix_caching: false
     async_scheduling: true
@@ -41,7 +41,7 @@ stages:
       repetition_penalty: 1.1
 
   - stage_id: 1
-    max_num_seqs: 32
+    max_num_seqs: 64
     gpu_memory_utilization: 0.30
     enforce_eager: false
     enable_prefix_caching: false
@@ -49,14 +49,14 @@ stages:
     compilation_config:
       # Reused by the codec as execution-batch buckets; T is derived from
       # initial_codec_chunk_frames and codec_chunk_frames.
-      cudagraph_capture_sizes: [1, 2, 4, 8, 16, 32]
+      cudagraph_capture_sizes: [1, 2, 4, 8, 16, 32, 64]
       cudagraph_num_of_warmups: 1
     # profiler_config:
     #   profiler: torch
     #   torch_profiler_dir: /root/vllm-omni-workspace/vllm-omni/results/moss_local_stage1/batch_8
     max_num_batched_tokens: 65536
     max_model_len: 65536
-    devices: "0"
+    devices: "1"
     input_connectors:
       from_stage_0: shm
     default_sampling_params:

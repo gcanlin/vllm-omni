@@ -547,6 +547,10 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         self._active_streams[request_id] = request
         return True
 
+    def is_active_stream(self, request_id: str) -> bool:
+        """Return whether a request may enter the model scheduler."""
+        return self._active_window <= 0 or request_id in self._active_streams
+
     def _preempt_non_active_running(self, waiting_queue: Any, running_queue: list[Request]) -> None:
         # Hold non-active running requests in a private deque rather than
         # routing them back through waiting_queue. Routing through the
