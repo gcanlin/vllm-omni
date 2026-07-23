@@ -1931,10 +1931,7 @@ class OmniGPUModelRunner(GPUModelRunner):
             start_offsets = [int(self.query_start_loc.cpu[id_to_index[req_id]]) for req_id in decode_req_ids]
         offsets_are_contiguous = bool(
             start_offsets
-            and all(
-                int(offset) == int(start_offsets[0]) + idx
-                for idx, offset in enumerate(start_offsets)
-            )
+            and all(int(offset) == int(start_offsets[0]) + idx for idx, offset in enumerate(start_offsets))
         )
         if not store_per_request_outputs:
             if offsets_are_contiguous:
