@@ -14,6 +14,7 @@ from vllm.config import VllmConfig
 from vllm.logger import init_logger
 from vllm.model_executor.model_loader import DefaultModelLoader
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
+from vllm.utils.torch_utils import set_default_torch_dtype
 
 from vllm_omni.model_executor.models.moss_tts.audio_tokenizer import (
     MossAudioTokenizerConfig,
@@ -45,6 +46,7 @@ class _MossCodecStreamSession:
         *,
         state_capacity: int,
         n_vq: int,
+        vllm_config: VllmConfig,
         graph_batch_sizes: list[int] | None = None,
         graph_frame_sizes: list[int] | None = None,
     ) -> None:
@@ -71,6 +73,7 @@ class _MossCodecStreamSession:
                 batch_sizes=batch_sizes,
                 frame_sizes=frame_sizes,
                 num_quantizers=self._n_vq,
+                vllm_config=vllm_config,
             )
             self._cudagraph_wrapper.warmup(self._device)
             self.reset_slots(list(range(self._state_capacity + scratch_capacity)))
@@ -479,6 +482,7 @@ class MossTTSCodecDecoder(nn.Module):
             self._codec,
             state_capacity=self._stream_state_capacity,
             n_vq=self._n_vq,
+            vllm_config=self.vllm_config,
             graph_batch_sizes=self._streaming_graph_batch_sizes,
             graph_frame_sizes=self._streaming_graph_frame_sizes,
         )
@@ -630,9 +634,17 @@ class MossTTSCodecDecoder(nn.Module):
             pass
 
         codec_path = self._codec_path
-        logger.info("Loading MOSS Audio Tokenizer from %s", codec_path)
+        device = self.vllm_config.device_config.device
+        logger.info("Loading MOSS Audio Tokenizer from %s directly on %s", codec_path, device)
 
-        codec_cfg, codec = self._build_codec(codec_path)
+        # This codec comes from a secondary checkpoint, so it cannot be built
+        # by the outer stage's normal initialize_model() call. Re-enter the
+        # same target-device/default-dtype contexts used by vLLM's
+        # BaseModelLoader.load_model() instead of constructing an 8 GiB FP32
+        # model on CPU and copying the whole module to the GPU afterwards.
+        with set_default_torch_dtype(torch.float32):
+            with device:
+                codec_cfg, codec = self._build_codec(codec_path)
 
         model_loader = DefaultModelLoader(self.vllm_config.load_config)
         source = DefaultModelLoader.Source(
@@ -710,9 +722,9 @@ class MossTTSCodecDecoder(nn.Module):
             skipped[:3] if skipped else "none",
         )
 
-        device = self.vllm_config.device_config.device
-        codec.to(device=device, dtype=torch.float32)
         codec.eval()
+        if device.type != "cpu":
+            codec.decoder.to(dtype=torch.bfloat16)
         build_decode_lut = getattr(codec.quantizer, "build_decode_lut", None)
         if callable(build_decode_lut):
             lut_dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
