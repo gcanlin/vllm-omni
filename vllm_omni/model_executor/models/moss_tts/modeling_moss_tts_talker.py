@@ -1748,6 +1748,9 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
             [e.weight.detach() for e in self.audio_embeddings], dim=0
         )  # (n_vq, audio_vocab_size, hidden_size)
 
+        if not self.vllm_config.model_config.enforce_eager:
+            self.local_transformer.setup_compile()
+
         logger.info(
             "[MossTTSLocal] loaded %d/%d params; skipped=%d (first 5: %s)",
             len(loaded),

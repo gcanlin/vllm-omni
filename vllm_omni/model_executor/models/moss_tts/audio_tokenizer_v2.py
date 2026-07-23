@@ -1686,7 +1686,27 @@ class MossAudioTokenizerModel(MossAudioTokenizerPreTrainedModel):
             state_capacity=self._decoder_state_capacity,
             device=codes.device,
         )
-        return self._decode_frame(codes, codes_lengths, execution_context=execution_context)
+        audio, audio_lengths = self.decode_streaming_tensors(
+            codes,
+            codes_lengths,
+            state_slot_ids,
+            valid_rows,
+        )
+        return MossAudioTokenizerDecoderOutput(audio=audio, audio_lengths=audio_lengths)
+
+    def decode_streaming_tensors(
+        self,
+        codes: torch.Tensor,
+        codes_lengths: torch.Tensor,
+        state_slot_ids: torch.Tensor,
+        valid_rows: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Tensor-only streaming decode boundary for vLLM compilation."""
+        execution_context = StreamingExecutionContext(
+            state_slot_ids=state_slot_ids,
+            valid_rows=valid_rows,
+        )
+        return self._decode_frame_tensors(codes, codes_lengths, execution_context=execution_context)
 
     def _set_streaming_exec_mask(self, exec_mask: torch.Tensor) -> None:
         """Update the shared active-slot mask with one device copy."""
@@ -1925,13 +1945,13 @@ class MossAudioTokenizerModel(MossAudioTokenizerPreTrainedModel):
         )
 
     @torch.no_grad()
-    def _decode_frame(
+    def _decode_frame_tensors(
         self,
         codes: torch.Tensor,
         codes_lengths: torch.Tensor | None = None,
         execution_context: StreamingExecutionContext | None = None,
-    ) -> MossAudioTokenizerDecoderOutput:
-        """Detokenize discrete tokens into audio waveform."""
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Detokenize codes and return tensors without Python output wrappers."""
         nq, B, T = codes.shape
         device = codes.device
 
@@ -1955,7 +1975,22 @@ class MossAudioTokenizerModel(MossAudioTokenizerPreTrainedModel):
                     d, d_lengths = decoder_module(d, d_lengths)
 
         d, d_lengths = self._restore_channels_from_codec(d, d_lengths)
-        return MossAudioTokenizerDecoderOutput(audio=d, audio_lengths=d_lengths)
+        return d, d_lengths
+
+    @torch.no_grad()
+    def _decode_frame(
+        self,
+        codes: torch.Tensor,
+        codes_lengths: torch.Tensor | None = None,
+        execution_context: StreamingExecutionContext | None = None,
+    ) -> MossAudioTokenizerDecoderOutput:
+        """Compatibility wrapper around the tensor-only decoder."""
+        audio, audio_lengths = self._decode_frame_tensors(
+            codes,
+            codes_lengths,
+            execution_context=execution_context,
+        )
+        return MossAudioTokenizerDecoderOutput(audio=audio, audio_lengths=audio_lengths)
 
     def encode(  # type: ignore[override]
         self,
