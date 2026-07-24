@@ -32,7 +32,10 @@ from vllm.v1.worker.ubatch_utils import maybe_create_ubatch_slices
 from vllm_omni.core.prefix_cache import OmniTensorPrefixCache
 from vllm_omni.engine.serialization import deserialize_additional_information
 from vllm_omni.model_executor.layers.rotary_embedding.mrope import OmniMRotaryEmbedding as MRotaryEmbedding
-from vllm_omni.model_executor.models.output_templates import OmniOutput
+from vllm_omni.model_executor.models.output_templates import (
+    OmniOutput,
+    TalkerMTPOutput,
+)
 from vllm_omni.platforms import current_omni_platform
 
 if TYPE_CHECKING:
@@ -1362,11 +1365,6 @@ class OmniGPUModelRunner(GPUModelRunner):
             except Exception as e:
                 logger.debug("[OMNI] Failed to attach query_start_loc: %s", e)
 
-        talker_mtp_batch_outputs = getattr(self, "_talker_mtp_batch_outputs", None)
-        if talker_mtp_batch_outputs is not None:
-            model_kwargs_extra["talker_mtp_batch_outputs"] = talker_mtp_batch_outputs
-            self._talker_mtp_batch_outputs = None
-
         if getattr(self.model_config, "has_sampling_extra_args", False):
             extra_args_list: list[dict] = []
             for req_id in self.input_batch.req_ids:
@@ -1770,7 +1768,11 @@ class OmniGPUModelRunner(GPUModelRunner):
 
             # run talker mtp decode
             if self.has_talker_mtp:
-                self._talker_mtp_forward(decode_req_ids, inputs_embeds, decode_start_offsets)
+                self._talker_mtp_forward(
+                    decode_req_ids,
+                    inputs_embeds,
+                    decode_start_offsets,
+                )
 
         return (
             input_ids,
@@ -1865,7 +1867,11 @@ class OmniGPUModelRunner(GPUModelRunner):
                     self.last_talker_hidden.gpu[:1].copy_(saved_hidden[row : row + 1])
                     self.text_step.gpu[:1].copy_(saved_text[row : row + 1])
                     row_offsets = None if start_offsets is None else [start_offsets[row]]
-                    self._talker_mtp_forward([req_id], inputs_embeds, row_offsets)
+                    self._talker_mtp_forward(
+                        [req_id],
+                        inputs_embeds,
+                        row_offsets,
+                    )
             finally:
                 self.talker_mtp_input_ids.gpu[:decode_batch_size].copy_(saved_input_ids)
                 self.talker_mtp_inputs_embeds.gpu[:decode_batch_size].copy_(saved_embeds)
@@ -1892,65 +1898,57 @@ class OmniGPUModelRunner(GPUModelRunner):
         with current_omni_platform.set_forward_context(
             None, self.vllm_config, cudagraph_runtime_mode=_cudagraph_mode, batch_descriptor=batch_desc
         ):
-            talker_mtp_outputs = self.talker_mtp(
+            talker_mtp_output = self.talker_mtp(
                 req_input_ids,
                 req_embeds,
                 last_talker_hidden,
                 text_step,
                 **talker_kwargs,
             )
-        if not isinstance(talker_mtp_outputs, tuple) or len(talker_mtp_outputs) not in (2, 3):
-            raise TypeError(
-                "talker_mtp must return (input_embeds, output) or "
-                f"(input_embeds, output, aux_output), got {type(talker_mtp_outputs).__name__}: "
-                f"{talker_mtp_outputs!r}"
-            )
-        req_embeds = talker_mtp_outputs[0]
-        code_predictor_codes = talker_mtp_outputs[1]
-        aux_output = talker_mtp_outputs[2] if len(talker_mtp_outputs) == 3 else None
-        # update the inputs_embeds and code_predictor_codes
-        out_key = getattr(self.model, "talker_mtp_output_key", ("codes", "audio"))
-        if not isinstance(out_key, tuple) or len(out_key) != 2:
-            raise TypeError(f"talker_mtp_output_key must be a 2-tuple, got {type(out_key).__name__}: {out_key!r}")
-        aux_key = getattr(self.model, "talker_mtp_aux_output_key", None)
-        if aux_output is not None and (not isinstance(aux_key, tuple) or len(aux_key) != 2):
-            raise TypeError(
-                "talker_mtp_aux_output_key must be a 2-tuple when talker_mtp returns aux_output, "
-                f"got {type(aux_key).__name__}: {aux_key!r}"
-            )
-        self._talker_mtp_batch_outputs = {
-            "req_ids": list(decode_req_ids),
-            "output_key": out_key,
-            "output": code_predictor_codes[:decode_batch_size] if code_predictor_codes is not None else None,
-            "aux_key": aux_key,
-            "aux": aux_output[:decode_batch_size] if aux_output is not None else None,
-        }
-        store_per_request_outputs = not bool(getattr(self.model, "talker_mtp_outputs_batch_local", False))
         if start_offsets is None:
             id_to_index = self.input_batch.req_id_to_index
             start_offsets = [int(self.query_start_loc.cpu[id_to_index[req_id]]) for req_id in decode_req_ids]
-        offsets_are_contiguous = bool(
-            start_offsets
-            and all(int(offset) == int(start_offsets[0]) + idx for idx, offset in enumerate(start_offsets))
+        structured_output = (
+            talker_mtp_output
+            if isinstance(talker_mtp_output, TalkerMTPOutput)
+            else (
+                TalkerMTPOutput(*talker_mtp_output)
+                if isinstance(talker_mtp_output, tuple) and len(talker_mtp_output) == len(TalkerMTPOutput._fields)
+                else None
+            )
         )
-        if not store_per_request_outputs:
-            if offsets_are_contiguous:
-                start0 = int(start_offsets[0])
-                inputs_embeds[start0 : start0 + decode_batch_size].copy_(req_embeds[:decode_batch_size])
-            else:
-                offsets_t = torch.tensor(start_offsets, device=req_embeds.device, dtype=torch.long)
-                inputs_embeds.index_copy_(0, offsets_t, req_embeds[:decode_batch_size])
+        if structured_output is not None:
+            req_embeds = structured_output.input_embeds
+            for idx, (req_id, start_offset) in enumerate(zip(decode_req_ids, start_offsets, strict=True)):
+                inputs_embeds[start_offset : start_offset + 1] = req_embeds[idx : idx + 1]
+                self._update_intermediate_buffer(
+                    req_id,
+                    {
+                        "audio_codes": {
+                            "current": structured_output.codes[idx : idx + 1],
+                            "continue_mask": structured_output.continue_mask[idx : idx + 1],
+                        }
+                    },
+                )
             return
+
+        if not isinstance(talker_mtp_output, tuple) or len(talker_mtp_output) != 2:
+            raise TypeError(
+                "talker_mtp must return TalkerMTPOutput or "
+                f"(input_embeds, output), got {type(talker_mtp_output).__name__}: "
+                f"{talker_mtp_output!r}"
+            )
+        req_embeds, code_predictor_codes = talker_mtp_output
+        out_key = getattr(self.model, "talker_mtp_output_key", ("codes", "audio"))
+        if not isinstance(out_key, tuple) or len(out_key) != 2:
+            raise TypeError(f"talker_mtp_output_key must be a 2-tuple, got {type(out_key).__name__}: {out_key!r}")
         for idx, (req_id, start_offset) in enumerate(zip(decode_req_ids, start_offsets, strict=True)):
             inputs_embeds[start_offset : start_offset + 1] = req_embeds[idx : idx + 1]
-            update_dict: dict[str, dict[str, torch.Tensor]] = {}
             if code_predictor_codes is not None:
-                update_dict.setdefault(out_key[0], {})[out_key[1]] = code_predictor_codes[idx : idx + 1]
-            if aux_output is not None:
-                assert aux_key is not None
-                update_dict.setdefault(aux_key[0], {})[aux_key[1]] = aux_output[idx : idx + 1]
-            if update_dict:
-                self._update_intermediate_buffer(req_id, update_dict)
+                self._update_intermediate_buffer(
+                    req_id,
+                    {out_key[0]: {out_key[1]: code_predictor_codes[idx : idx + 1]}},
+                )
 
     def _model_forward(
         self,

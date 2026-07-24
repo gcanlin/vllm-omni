@@ -13,3 +13,11 @@ class OmniOutput(NamedTuple):
     multimodal_outputs: OmniPayload | None = None
     intermediate_tensors: IntermediateTensors | None = None
     next_token_id: torch.Tensor | None = None
+
+
+class TalkerMTPOutput(NamedTuple):
+    """Batch-local output produced by a talker MTP module."""
+
+    input_embeds: torch.Tensor
+    codes: torch.Tensor
+    continue_mask: torch.Tensor
