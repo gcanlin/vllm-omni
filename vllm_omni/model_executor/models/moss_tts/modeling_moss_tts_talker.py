@@ -1321,16 +1321,14 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
         # additive-fusion gathers (avoids an n_vq-iteration Python loop).
         self._stacked_audio_emb_w: torch.Tensor | None = None
         self.mtp_hidden_size = hidden_size
-        self.talker_mtp_output_key = ("audio_codes", "current")
-        self.talker_mtp_aux_output_key = ("talker_mtp", "should_continue")
-        self.talker_mtp_outputs_batch_local = True
         self.talker_mtp_graph_safe = True
+        self.talker_mtp_output_key = ("audio_codes", "current")
         self.use_async_omni_output = False
         self.eager_omni_postprocess_before_async_output = True
         self.omni_pooler_payload_include_hidden = False
         self.postprocess_uses_multimodal_outputs = False
         self.postprocess_uses_req_infos = False
-        self._batch_talker_mtp_should_continue: torch.Tensor | None = None
+        self._batch_should_continue: torch.Tensor | None = None
 
         self.gpu_resident_buffer_keys: set[tuple[str, str]] = {
             ("audio_codes", "current"),
@@ -1383,9 +1381,9 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
         logits = hidden_states.new_full((num_rows, self.text_vocab_size), float("-inf"))
 
         states = self._batch_state or []
-        batch_should_continue = self._batch_talker_mtp_should_continue
-        if isinstance(batch_should_continue, torch.Tensor) and batch_should_continue.numel() > 0:
-            should_by_req = batch_should_continue.reshape(-1)
+        batch_continue_mask = self._batch_should_continue
+        if isinstance(batch_continue_mask, torch.Tensor) and batch_continue_mask.numel() > 0:
+            should_by_req = batch_continue_mask.reshape(-1)
             if should_by_req.device != logits.device or should_by_req.dtype != torch.bool:
                 should_by_req = should_by_req.to(device=logits.device, dtype=torch.bool)
             if int(should_by_req.numel()) == num_rows:
@@ -1483,7 +1481,6 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
 
             ref_codes = (info_dict.get("codes", {}) or {}).get("ref")
             ref_offset = int(info_dict.get("ref_offset", 0))
-            last_ref_row = None
             if isinstance(ref_codes, torch.Tensor) and ref_codes.numel() > 0:
                 if ref_codes.dim() == 1 and ref_codes.numel() % self.n_vq == 0:
                     ref_codes = ref_codes.view(-1, self.n_vq)
@@ -1493,17 +1490,9 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
                     if chunk.numel() > 0 and chunk.shape[0] == span_len:
                         codes = chunk.to(device=device, dtype=torch.long)
                         embeds = embeds + self._audio_embed(codes)
-                        last_ref_row = codes[-1].detach()
-
-            current_codes = (
-                last_ref_row
-                if last_ref_row is not None
-                else torch.full((self.n_vq,), self.audio_pad_token_id, dtype=torch.long, device=device)
-            )
 
             info_update: dict[str, Any] = {
                 "audio_state": {"is_stopping": False},
-                "audio_codes": {"current": current_codes, "emit": False},
                 "ref_offset": ref_offset + span_len,
             }
             return input_ids, embeds, info_update
@@ -1543,7 +1532,7 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
         top_p: float | None = None,
         generator: torch.Generator | None = None,
         **_: Any,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         bsz = int(input_embeds.shape[0])
         input_embeds_out = input_embeds.reshape(bsz, -1)
         last_talker_hidden = last_talker_hidden.reshape(bsz, -1).to(
@@ -1585,7 +1574,7 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
             new_codes,
             torch.full_like(new_codes, self.audio_pad_token_id),
         )
-        return input_embeds_out, output_codes, keep.reshape(bsz, 1).to(dtype=torch.bool)
+        return input_embeds_out, output_codes
 
     # ------------------------------------------------------------------
     # Package runner-generated audio frames
@@ -1599,7 +1588,7 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
         if isinstance(model_outputs, OmniOutput):
             self._batch_state = None
             self._batch_state_spans = None
-            self._batch_talker_mtp_should_continue = None
+            self._batch_should_continue = None
             return model_outputs
 
         hidden = model_outputs  # (S, H)
@@ -1613,82 +1602,27 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
 
         self._batch_state = [(info["audio_state"] if isinstance(info, dict) else {}) for info in info_dicts]
         self._batch_state_spans = kwargs.get("request_token_spans")
-        batch_outputs = kwargs.get("talker_mtp_batch_outputs")
-        batch_output_by_req: dict[str, int] = {}
-        batch_codes = None
-        batch_should = None
-        if isinstance(batch_outputs, dict):
-            req_ids = batch_outputs.get("req_ids")
-            output_key = batch_outputs.get("output_key")
-            aux_key = batch_outputs.get("aux_key")
-            raw_codes = batch_outputs.get("output")
-            raw_should = batch_outputs.get("aux")
-            if (
-                isinstance(req_ids, list)
-                and output_key == self.talker_mtp_output_key
-                and isinstance(raw_codes, torch.Tensor)
-            ):
-                batch_output_by_req = {str(req_id): idx for idx, req_id in enumerate(req_ids)}
-                batch_codes = raw_codes
-            if aux_key == self.talker_mtp_aux_output_key and isinstance(raw_should, torch.Tensor):
-                batch_should = raw_should
-
         should_values: list[torch.Tensor] = []
-        have_should_continue = False
-        for info in info_dicts:
-            req_id = info.get("request_id") if isinstance(info, dict) else None
-            batch_idx = batch_output_by_req.get(str(req_id)) if req_id is not None else None
-            if (
-                batch_idx is not None
-                and isinstance(batch_should, torch.Tensor)
-                and batch_idx < int(batch_should.shape[0])
-            ):
-                should_values.append(
-                    batch_should[batch_idx : batch_idx + 1]
-                    .reshape(-1)[:1]
-                    .to(
-                        device=hidden.device,
-                        dtype=torch.bool,
-                    )
-                )
-                have_should_continue = True
-                continue
-            raw_should = (info.get("talker_mtp", {}) or {}).get("should_continue") if isinstance(info, dict) else None
-            if isinstance(raw_should, torch.Tensor) and raw_should.numel() > 0:
-                should_values.append(raw_should.reshape(-1)[:1].to(device=hidden.device, dtype=torch.bool))
-                have_should_continue = True
-            else:
-                should_values.append(torch.ones((1,), device=hidden.device, dtype=torch.bool))
-        self._batch_talker_mtp_should_continue = (
-            torch.cat(should_values, dim=0) if have_should_continue and should_values else None
-        )
-
+        have_mtp_output = False
         per_req_codes: list[torch.Tensor] = []
         have_codes = False
         for info in info_dicts:
-            req_id = info.get("request_id") if isinstance(info, dict) else None
-            batch_idx = batch_output_by_req.get(str(req_id)) if req_id is not None else None
-            if (
-                batch_idx is not None
-                and isinstance(batch_codes, torch.Tensor)
-                and batch_idx < int(batch_codes.shape[0])
-            ):
-                codes = batch_codes[batch_idx : batch_idx + 1].to(device=hidden.device, dtype=torch.long)
-                per_req_codes.append(codes)
-                have_codes = True
-                continue
-            current = (info.get("audio_codes", {}) or {}).get("current") if isinstance(info, dict) else None
-            emit = bool((info.get("audio_codes", {}) or {}).get("emit")) if isinstance(info, dict) else False
-            raw_should = (info.get("talker_mtp", {}) or {}).get("should_continue") if isinstance(info, dict) else None
-            has_talker_output = isinstance(raw_should, torch.Tensor) and raw_should.numel() > 0
-            if (emit or has_talker_output) and isinstance(current, torch.Tensor) and current.numel() > 0:
+            audio_codes = (info.get("audio_codes", {}) or {}) if isinstance(info, dict) else {}
+            current = audio_codes.pop("current", None)
+            if isinstance(current, torch.Tensor) and current.numel() > 0:
                 codes = current.to(device=hidden.device, dtype=torch.long)
                 if codes.dim() == 1:
                     codes = codes.unsqueeze(0)
-                per_req_codes.append(codes)
-                have_codes = True
+                should_continue = codes.ne(self.audio_pad_token_id).any(dim=-1)
+                should_values.append(should_continue.reshape(-1)[:1])
+                have_mtp_output = True
+                emitted_codes = codes[should_continue]
+                per_req_codes.append(emitted_codes)
+                have_codes = have_codes or emitted_codes.numel() > 0
             else:
+                should_values.append(torch.ones((1,), device=hidden.device, dtype=torch.bool))
                 per_req_codes.append(hidden.new_empty((0, self.n_vq), dtype=torch.long))
+        self._batch_should_continue = torch.cat(should_values, dim=0) if have_mtp_output and should_values else None
 
         if not have_codes:
             return OmniOutput(text_hidden_states=hidden, multimodal_outputs={})
