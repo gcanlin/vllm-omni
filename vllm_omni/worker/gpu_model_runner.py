@@ -1892,12 +1892,13 @@ class OmniGPUModelRunner(GPUModelRunner):
                 text_step,
                 **talker_kwargs,
             )
-        if start_offsets is None:
-            id_to_index = self.input_batch.req_id_to_index
-            start_offsets = [int(self.query_start_loc.cpu[id_to_index[req_id]]) for req_id in decode_req_ids]
+        # update the inputs_embeds and code_predictor_codes
         out_key = getattr(self.model, "talker_mtp_output_key", ("codes", "audio"))
         if not isinstance(out_key, tuple) or len(out_key) != 2:
             raise TypeError(f"talker_mtp_output_key must be a 2-tuple, got {type(out_key).__name__}: {out_key!r}")
+        if start_offsets is None:
+            id_to_index = self.input_batch.req_id_to_index
+            start_offsets = [int(self.query_start_loc.cpu[id_to_index[req_id]]) for req_id in decode_req_ids]
         for idx, (req_id, start_offset) in enumerate(zip(decode_req_ids, start_offsets, strict=True)):
             inputs_embeds[start_offset : start_offset + 1] = req_embeds[idx : idx + 1]
             if code_predictor_codes is not None:
