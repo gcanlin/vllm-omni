@@ -1808,8 +1808,6 @@ class OmniGPUModelRunner(GPUModelRunner):
         req_embeds = self.talker_mtp_inputs_embeds.gpu[:num_tokens_padded]
         last_talker_hidden = self.last_talker_hidden.gpu[:num_tokens_padded]
         text_step = self.text_step.gpu[:num_tokens_padded]
-        if num_tokens_padded > decode_batch_size:
-            text_step[decode_batch_size:num_tokens_padded].zero_()
         subtalker_params = getattr(self.vllm_config.model_config, "subtalker_sampling_params", None)
         if not isinstance(subtalker_params, dict):
             subtalker_params = {}
