@@ -1768,11 +1768,7 @@ class OmniGPUModelRunner(GPUModelRunner):
 
             # run talker mtp decode
             if self.has_talker_mtp:
-                self._talker_mtp_forward(
-                    decode_req_ids,
-                    inputs_embeds,
-                    decode_start_offsets,
-                )
+                self._talker_mtp_forward(decode_req_ids, inputs_embeds, decode_start_offsets)
 
         return (
             input_ids,
@@ -1867,11 +1863,7 @@ class OmniGPUModelRunner(GPUModelRunner):
                     self.last_talker_hidden.gpu[:1].copy_(saved_hidden[row : row + 1])
                     self.text_step.gpu[:1].copy_(saved_text[row : row + 1])
                     row_offsets = None if start_offsets is None else [start_offsets[row]]
-                    self._talker_mtp_forward(
-                        [req_id],
-                        inputs_embeds,
-                        row_offsets,
-                    )
+                    self._talker_mtp_forward([req_id], inputs_embeds, row_offsets)
             finally:
                 self.talker_mtp_input_ids.gpu[:decode_batch_size].copy_(saved_input_ids)
                 self.talker_mtp_inputs_embeds.gpu[:decode_batch_size].copy_(saved_embeds)
@@ -1945,10 +1937,8 @@ class OmniGPUModelRunner(GPUModelRunner):
         for idx, (req_id, start_offset) in enumerate(zip(decode_req_ids, start_offsets, strict=True)):
             inputs_embeds[start_offset : start_offset + 1] = req_embeds[idx : idx + 1]
             if code_predictor_codes is not None:
-                self._update_intermediate_buffer(
-                    req_id,
-                    {out_key[0]: {out_key[1]: code_predictor_codes[idx : idx + 1]}},
-                )
+                update_dict = {out_key[0]: {out_key[1]: code_predictor_codes[idx : idx + 1]}}
+                self._update_intermediate_buffer(req_id, update_dict)
 
     def _model_forward(
         self,
