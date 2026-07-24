@@ -521,27 +521,6 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
             logprobs_tensors=None,
         )
 
-    @staticmethod
-    def _code2wav_seq_token_counts(
-        input_ids: torch.Tensor | None,
-        scheduled_token_counts: list[int],
-        runtime_additional_information: object,
-    ) -> list[int]:
-        if input_ids is None:
-            return scheduled_token_counts
-        total = int(input_ids.reshape(-1).shape[0])
-        if isinstance(runtime_additional_information, list):
-            sizes: list[int] = []
-            for info in runtime_additional_information:
-                meta = info.get("meta", {}) if isinstance(info, dict) else {}
-                value = meta.get("code_flat_numel") if isinstance(meta, dict) else None
-                if value is None:
-                    break
-                sizes.append(int(value))
-            if len(sizes) == len(scheduled_token_counts) and sum(sizes) <= total:
-                return sizes
-        return scheduled_token_counts
-
     def _run_generation_model(
         self,
         *,

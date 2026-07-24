@@ -1334,7 +1334,6 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
             ("audio_codes", "current"),
             ("audio_codes", "accumulated"),
             ("hidden_states", "last"),
-            ("talker_mtp", "should_continue"),
         }
 
     # ------------------------------------------------------------------
