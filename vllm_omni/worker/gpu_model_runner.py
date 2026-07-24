@@ -32,10 +32,7 @@ from vllm.v1.worker.ubatch_utils import maybe_create_ubatch_slices
 from vllm_omni.core.prefix_cache import OmniTensorPrefixCache
 from vllm_omni.engine.serialization import deserialize_additional_information
 from vllm_omni.model_executor.layers.rotary_embedding.mrope import OmniMRotaryEmbedding as MRotaryEmbedding
-from vllm_omni.model_executor.models.output_templates import (
-    OmniOutput,
-    TalkerMTPOutput,
-)
+from vllm_omni.model_executor.models.output_templates import OmniOutput
 from vllm_omni.platforms import current_omni_platform
 
 if TYPE_CHECKING:
@@ -1888,7 +1885,7 @@ class OmniGPUModelRunner(GPUModelRunner):
         with current_omni_platform.set_forward_context(
             None, self.vllm_config, cudagraph_runtime_mode=_cudagraph_mode, batch_descriptor=batch_desc
         ):
-            talker_mtp_output = self.talker_mtp(
+            req_embeds, code_predictor_codes = self.talker_mtp(
                 req_input_ids,
                 req_embeds,
                 last_talker_hidden,
@@ -1898,37 +1895,6 @@ class OmniGPUModelRunner(GPUModelRunner):
         if start_offsets is None:
             id_to_index = self.input_batch.req_id_to_index
             start_offsets = [int(self.query_start_loc.cpu[id_to_index[req_id]]) for req_id in decode_req_ids]
-        structured_output = (
-            talker_mtp_output
-            if isinstance(talker_mtp_output, TalkerMTPOutput)
-            else (
-                TalkerMTPOutput(*talker_mtp_output)
-                if isinstance(talker_mtp_output, tuple) and len(talker_mtp_output) == len(TalkerMTPOutput._fields)
-                else None
-            )
-        )
-        if structured_output is not None:
-            req_embeds = structured_output.input_embeds
-            for idx, (req_id, start_offset) in enumerate(zip(decode_req_ids, start_offsets, strict=True)):
-                inputs_embeds[start_offset : start_offset + 1] = req_embeds[idx : idx + 1]
-                self._update_intermediate_buffer(
-                    req_id,
-                    {
-                        "audio_codes": {
-                            "current": structured_output.codes[idx : idx + 1],
-                            "continue_mask": structured_output.continue_mask[idx : idx + 1],
-                        }
-                    },
-                )
-            return
-
-        if not isinstance(talker_mtp_output, tuple) or len(talker_mtp_output) != 2:
-            raise TypeError(
-                "talker_mtp must return TalkerMTPOutput or "
-                f"(input_embeds, output), got {type(talker_mtp_output).__name__}: "
-                f"{talker_mtp_output!r}"
-            )
-        req_embeds, code_predictor_codes = talker_mtp_output
         out_key = getattr(self.model, "talker_mtp_output_key", ("codes", "audio"))
         if not isinstance(out_key, tuple) or len(out_key) != 2:
             raise TypeError(f"talker_mtp_output_key must be a 2-tuple, got {type(out_key).__name__}: {out_key!r}")
