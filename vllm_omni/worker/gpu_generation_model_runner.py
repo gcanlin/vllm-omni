@@ -157,6 +157,9 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
                 self._update_request_states(scheduler_output)
             deferred_state_corrections_fn = self._update_states(scheduler_output)
 
+            # Notify stateful models of finished requests before the
+            # zero-token early return. Request cleanup is a model lifecycle
+            # concern and does not depend on the inter-stage transfer mode.
             if scheduler_output.finished_req_ids and hasattr(self.model, "on_requests_finished"):
                 self.model.on_requests_finished(scheduler_output.finished_req_ids)
 
