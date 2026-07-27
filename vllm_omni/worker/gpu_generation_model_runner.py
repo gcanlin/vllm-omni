@@ -157,15 +157,8 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
                 self._update_request_states(scheduler_output)
             deferred_state_corrections_fn = self._update_states(scheduler_output)
 
-            # A terminal chunk may be both scheduled and listed as finished in
-            # the same iteration. It must retain codec state until forward has
-            # materialized its PCM; only unscheduled finishes are abort/cleanup
-            # events that can release state before the zero-token early return.
             if scheduler_output.finished_req_ids and hasattr(self.model, "on_requests_finished"):
-                scheduled_req_ids = set(scheduler_output.num_scheduled_tokens)
-                cleanup_req_ids = set(scheduler_output.finished_req_ids) - scheduled_req_ids
-                if cleanup_req_ids:
-                    self.model.on_requests_finished(cleanup_req_ids)
+                self.model.on_requests_finished(scheduler_output.finished_req_ids)
 
             # `<= 0`: upstream can schedule a negative span, which is truthy (#5196).
             if scheduler_output.total_num_scheduled_tokens <= 0:

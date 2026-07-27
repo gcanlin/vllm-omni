@@ -320,8 +320,6 @@ class MossTTSCodecDecoder(nn.Module):
         streaming_work: list[tuple[int, str, torch.Tensor, bool]] = []
 
         if input_ids is None or input_ids.numel() == 0:
-            for i, wav in self._finish_empty_streaming_requests(info_list).items():
-                audios[i] = wav.reshape(-1) if wav.ndim == 1 or int(wav.shape[0]) == 1 else wav
             return OmniOutput(
                 text_hidden_states=None,
                 multimodal_outputs={"model_outputs": audios, "sr": srs},
@@ -367,16 +365,11 @@ class MossTTSCodecDecoder(nn.Module):
             if i + 1 >= len(offsets):
                 break
             seg = ids_flat[offsets[i] : offsets[i + 1]]
+            if seg.numel() == 0:
+                continue
             meta = (info.get("meta", {}) if isinstance(info, dict) else {}) or {}
             finished = bool(meta.get("stream_finished", meta.get("finished", False)))
             streaming_enabled = bool(meta.get("codec_streaming", self._codec_streaming))
-            code_flat_numel = meta.get("code_flat_numel")
-            if streaming_enabled and finished and code_flat_numel is not None and int(code_flat_numel) == 0:
-                for _, wav in self._finish_empty_streaming_requests([info]).items():
-                    audios[i] = wav.reshape(-1) if wav.ndim == 1 or int(wav.shape[0]) == 1 else wav
-                continue
-            if seg.numel() == 0:
-                continue
             if seg.numel() % self._n_vq != 0:
                 logger.warning(
                     "MossTTS codec input length %d not divisible by n_vq %d; skipping.",
@@ -443,33 +436,6 @@ class MossTTSCodecDecoder(nn.Module):
             text_hidden_states=None,
             multimodal_outputs={"model_outputs": audios, "sr": srs},
         )
-
-    def _finish_empty_streaming_requests(self, info_list: list[dict[str, Any]]) -> dict[int, torch.Tensor]:
-        """Release codec stream state for empty finish sentinels.
-
-        Stage-0 can finish on a step that emits no new audio frame. The stage
-        input processor forwards that as an empty payload with finished=true.
-        If a request never acquired a stream slot, do not offline-decode its
-        buffered codes here: streaming requests must only emit client deltas.
-        """
-        session = self._stream_session
-        outputs: dict[int, torch.Tensor] = {}
-        if session is None:
-            return outputs
-        for i, info in enumerate(info_list):
-            if not isinstance(info, dict):
-                continue
-            meta = (info.get("meta", {}) or {}) if isinstance(info.get("meta", {}), dict) else {}
-            if not bool(meta.get("codec_streaming", self._codec_streaming)):
-                continue
-            finished = bool(meta.get("stream_finished", meta.get("finished", False)))
-            if not finished:
-                continue
-            req_key = self._runtime_request_key(info, meta, i)
-            slot = self._stream_req_slots.get(req_key)
-            if slot is not None:
-                self._finish_stream_request(req_key, session, slot)
-        return outputs
 
     @staticmethod
     def _normalize_seq_token_counts(value: Any) -> list[int] | None:

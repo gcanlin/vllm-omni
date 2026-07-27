@@ -163,8 +163,10 @@ class OmniGenerationScheduler(OmniSchedulerMixin, VLLMScheduler):
             # their Stage-1 pre-submit placeholder prompt. They must remain
             # queued until the chunk adapter admits them; otherwise the
             # generation fast path would send placeholder tokens to the codec.
-            if self.chunk_transfer_adapter is not None and not self.chunk_transfer_adapter.is_active_stream(
-                request.request_id
+            if (
+                self.chunk_transfer_adapter is not None
+                and self.chunk_transfer_adapter.receives_chunks
+                and not self.chunk_transfer_adapter.is_active_stream(request.request_id)
             ):
                 self.waiting.pop_request()
                 skipped_waiting_requests.prepend_request(request)
