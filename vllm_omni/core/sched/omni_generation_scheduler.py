@@ -152,7 +152,7 @@ class OmniGenerationScheduler(OmniSchedulerMixin, VLLMScheduler):
             # `num_waiting_for_streaming_input` when enforcing max_num_seqs.
             num_running = len(self.running)
             if self._retains_state_across_chunks and self.chunk_transfer_adapter is not None:
-                num_running += self.chunk_transfer_adapter.num_waiting_for_chunk_input
+                num_running += self.chunk_transfer_adapter.num_running_waiting_for_chunk
             if num_running >= self.max_num_running_reqs:
                 break
 

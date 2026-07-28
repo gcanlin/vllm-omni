@@ -537,14 +537,10 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         self._active_streams[request_id] = request
         return True
 
-    def is_active_stream(self, request_id: str) -> bool:
-        """Return whether a request may enter the model scheduler."""
-        return self._active_window <= 0 or request_id in self._active_streams
-
     @property
-    def num_waiting_for_chunk_input(self) -> int:
-        """Count requests absent from ``running`` while awaiting chunk admission."""
-        return len(self.waiting_for_chunk_running_requests) + len(self._held_non_active)
+    def num_running_waiting_for_chunk(self) -> int:
+        """Count running requests temporarily removed while awaiting a chunk."""
+        return len(self.waiting_for_chunk_running_requests)
 
     def _preempt_non_active_running(self, waiting_queue: Any, running_queue: list[Request]) -> None:
         # Hold non-active running requests in a private deque rather than
