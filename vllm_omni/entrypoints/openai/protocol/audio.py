@@ -133,6 +133,15 @@ class OpenAICreateSpeechRequest(BaseModel):
         default=None,
         description="Maximum tokens to generate",
     )
+    token_count: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Expected number of audio tokens for MOSS-TTS duration control "
+            "(approximately 12.5 tokens per second). This conditions the model; "
+            "use max_new_tokens as a separate hard generation limit."
+        ),
+    )
     seed: int | None = Field(
         default=None,
         ge=0,
@@ -403,6 +412,7 @@ class SpeechBatchItem(BaseModel):
     ref_text: str | None = None
     x_vector_only_mode: bool | None = None
     max_new_tokens: int | None = None
+    token_count: int | None = Field(default=None, ge=1)
     initial_codec_chunk_frames: int | None = Field(default=None, ge=0)
     non_streaming_mode: bool | None = None
 
@@ -423,6 +433,7 @@ class BatchSpeechRequest(BaseModel):
     ref_text: str | None = None
     x_vector_only_mode: bool | None = None
     max_new_tokens: int | None = None
+    token_count: int | None = Field(default=None, ge=1)
     initial_codec_chunk_frames: int | None = Field(default=None, ge=0)
     non_streaming_mode: bool | None = None
 
@@ -507,6 +518,7 @@ class StreamingSpeechSessionConfig(BaseModel):
     response_format: Literal["wav", "pcm", "flac", "mp3", "opus"] = DEFAULT_AUDIO_FORMAT
     speed: float | None = Field(default=1.0, ge=0.25, le=4.0)
     max_new_tokens: int | None = Field(default=None, ge=1)
+    token_count: int | None = Field(default=None, ge=1)
     initial_codec_chunk_frames: int | None = Field(
         default=None,
         ge=0,

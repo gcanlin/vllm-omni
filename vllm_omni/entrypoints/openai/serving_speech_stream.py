@@ -241,6 +241,7 @@ class OmniStreamingSpeechHandler:
             response_format=response_format,
             speed=config.speed,
             max_new_tokens=config.max_new_tokens,
+            token_count=config.token_count,
             initial_codec_chunk_frames=config.initial_codec_chunk_frames,
             non_streaming_mode=config.non_streaming_mode,
             ref_audio=config.ref_audio,

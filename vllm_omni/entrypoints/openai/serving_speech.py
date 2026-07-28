@@ -1953,6 +1953,8 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
             )
 
         user_kwargs: dict[str, Any] = {"text": request.input or ""}
+        if request.token_count is not None:
+            user_kwargs["tokens"] = int(request.token_count)
         if v in ("tts", "local"):
             user_kwargs["reference"] = [await _encode_ref(request.ref_audio)]
         elif v == "ttsd":
@@ -1963,10 +1965,11 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         elif v == "sound_effect":
             user_kwargs["text"] = request.input or ""  # may be empty
             user_kwargs["ambient_sound"] = request.ambient_sound or ""
-            if request.duration_seconds is not None:
-                user_kwargs["tokens"] = max(1, int(float(request.duration_seconds) * 12.5))
-            elif request.max_new_tokens is not None:
-                user_kwargs["tokens"] = int(request.max_new_tokens)
+            if "tokens" not in user_kwargs:
+                if request.duration_seconds is not None:
+                    user_kwargs["tokens"] = max(1, int(float(request.duration_seconds) * 12.5))
+                elif request.max_new_tokens is not None:
+                    user_kwargs["tokens"] = int(request.max_new_tokens)
         elif v == "voice_generator":
             user_kwargs["instruction"] = request.instructions or ""
 
@@ -4177,6 +4180,7 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
             ref_text=_pick("ref_text"),
             x_vector_only_mode=_pick("x_vector_only_mode"),
             max_new_tokens=_pick("max_new_tokens"),
+            token_count=_pick("token_count"),
             initial_codec_chunk_frames=_pick("initial_codec_chunk_frames"),
             non_streaming_mode=_pick("non_streaming_mode"),
         )
