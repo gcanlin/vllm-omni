@@ -238,7 +238,7 @@ class MossTTSCodecDecoder(nn.Module):
         self._stream_chunk_frames: int = self._connector_int("codec_chunk_frames", default=0)
         self._stream_max_step_frames: int = self._stream_chunk_frames or 100
         self._stream_req_slots: dict[str, int] = {}
-        self._codec_streaming: bool = self._connector_bool("codec_streaming", default=False)
+        self._async_chunk = bool(getattr(self.vllm_config.model_config, "async_chunk", False))
         self._streaming_graph_batch_sizes = self._streaming_graph_batch_sizes_from_compilation_config()
         self._streaming_graph_frame_sizes = sorted(
             {frames for frames in (self._initial_stream_chunk_frames, self._stream_chunk_frames) if frames > 0}
@@ -305,7 +305,7 @@ class MossTTSCodecDecoder(nn.Module):
                 },
             )
 
-        if self._codec_streaming and runtime_additional_information is None:
+        if self._async_chunk and runtime_additional_information is None:
             return OmniOutput(
                 text_hidden_states=None,
                 multimodal_outputs={
@@ -369,7 +369,7 @@ class MossTTSCodecDecoder(nn.Module):
                 continue
             meta = (info.get("meta", {}) if isinstance(info, dict) else {}) or {}
             finished = bool(meta.get("stream_finished", meta.get("finished", False)))
-            streaming_enabled = bool(meta.get("codec_streaming", self._codec_streaming))
+            streaming_enabled = self._async_chunk
             if seg.numel() % self._n_vq != 0:
                 logger.warning(
                     "MossTTS codec input length %d not divisible by n_vq %d; skipping.",
@@ -604,17 +604,6 @@ class MossTTSCodecDecoder(nn.Module):
             return int(extra_cfg[name])
         return default
 
-    def _connector_bool(self, name: str, default: bool = False) -> bool:
-        model_cfg = getattr(self.vllm_config, "model_config", None)
-        connector_cfg = getattr(model_cfg, "stage_connector_config", None)
-        if isinstance(connector_cfg, dict):
-            extra_cfg: dict | None = connector_cfg.get("extra", connector_cfg)
-        else:
-            extra_cfg = getattr(connector_cfg, "extra", None)
-        if isinstance(extra_cfg, dict) and name in extra_cfg:
-            return bool(extra_cfg[name])
-        return default
-
     def _streaming_graph_batch_sizes_from_compilation_config(self) -> list[int]:
         if getattr(self.vllm_config.model_config, "enforce_eager", True):
             return []
@@ -755,7 +744,7 @@ class MossTTSCodecDecoder(nn.Module):
         )
 
         self._configure_decoder_cudagraph(device)
-        if self._codec_streaming and self._streaming_graph_batch_sizes and self._streaming_graph_frame_sizes:
+        if self._async_chunk and self._streaming_graph_batch_sizes and self._streaming_graph_frame_sizes:
             self._ensure_stream_session()
 
         # vLLM's track_weights_loading() compares the returned set against
@@ -783,7 +772,7 @@ class MossTTSCodecDecoder(nn.Module):
         """Select the codec CUDA Graph path.
 
         ``enforce_eager`` is the single graph on/off switch. If graphing is
-        enabled, ``codec_streaming`` decides whether decode uses the persistent
+        enabled, ``async_chunk`` decides whether decode uses the persistent
         streaming-state wrapper or the offline full-chunk wrapper.
         """
         if getattr(self.vllm_config.model_config, "enforce_eager", True):
@@ -791,7 +780,7 @@ class MossTTSCodecDecoder(nn.Module):
             return
         if self._codec is None:
             return
-        if self._codec_streaming:
+        if self._async_chunk:
             logger.info(
                 "MOSS-TTS codec CUDA Graph selected streaming wrapper: B=%s exact_T=%s",
                 self._streaming_graph_batch_sizes,
