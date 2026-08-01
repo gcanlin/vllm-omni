@@ -1839,20 +1839,21 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
     def _get_moss_processor(self):
         """Lazily load the upstream MOSS-TTS processor once per server.
 
-        Cached on ``self._moss_processor_cache``. The processor owns its own
-        audio_tokenizer (~1.6 B params); we keep it on CPU so it doesn't
-        compete with the talker (~8 GiB) and codec (~7 GiB) for our 96 GiB
-        GPU — per-request ref-audio encoding is fast enough on CPU.
+        Cached on ``self._moss_processor_cache``. Device placement is owned by
+        ``moss_tts.reference_encoder`` so the shared serving layer does not
+        need variant-specific accelerator policy.
         """
         cached = getattr(self, "_moss_processor_cache", None)
         if cached is not None:
             return cached
         from transformers import AutoProcessor
+        from vllm_omni.model_executor.models.moss_tts.reference_encoder import (
+            configure_reference_processor,
+        )
 
         model_id = self.engine_client.model_config.model
         proc = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
-        if hasattr(proc, "audio_tokenizer"):
-            proc.audio_tokenizer = proc.audio_tokenizer.to("cpu").eval()
+        proc = configure_reference_processor(proc, variant=self._moss_variant)
         self._moss_processor_cache = proc
         return proc
 

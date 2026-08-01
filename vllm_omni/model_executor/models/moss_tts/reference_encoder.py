@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -24,9 +25,65 @@ from vllm.logger import init_logger
 
 logger = init_logger(__name__)
 
+_DEVICE_ENV = "VLLM_OMNI_MOSS_REF_ENCODER_DEVICE"
 
-def _encode_wav_sync(processor: Any, wav_list: list, sr: int, sr_target: int, n_vq: int) -> torch.Tensor:
-    """Blocking resample + CPU codec encode (the expensive bit)."""
+
+def _normalize_device(device: str | torch.device) -> torch.device:
+    """Accept torch device strings as well as a bare visible GPU index."""
+    if isinstance(device, str):
+        device = device.strip()
+        if device.isdecimal():
+            device = f"cuda:{device}"
+    return torch.device(device)
+
+
+def configure_reference_processor(
+    processor: Any,
+    *,
+    variant: str,
+    device: str | torch.device | None = None,
+) -> Any:
+    """Place the MOSS reference encoder on its serving device.
+
+    Local-v1.5 uses the large MOSS-Audio-Tokenizer-v2 encoder, where CPU
+    inference is prohibitively slow. Other MOSS variants retain the existing
+    CPU placement because their GPU memory budget was sized around it.
+
+    ``VLLM_OMNI_MOSS_REF_ENCODER_DEVICE`` is an operational override. It can
+    force ``cpu`` when GPU memory is tight or select a particular visible GPU.
+    """
+    audio_tokenizer = getattr(processor, "audio_tokenizer", None)
+    if audio_tokenizer is None:
+        return processor
+
+    if device is None:
+        configured_device = os.environ.get(_DEVICE_ENV)
+        if configured_device:
+            device = configured_device
+        elif variant == "local" and torch.cuda.is_available():
+            device = "cuda"
+        else:
+            device = "cpu"
+
+    target = _normalize_device(device)
+    if target.type == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError(
+            f"{_DEVICE_ENV}={device!s} requests CUDA, but CUDA is unavailable"
+        )
+
+    processor.audio_tokenizer = audio_tokenizer.to(target).eval()
+    logger.info("MOSS-TTS %s reference encoder loaded on %s", variant, target)
+    return processor
+
+
+def _encode_wav_sync(
+    processor: Any,
+    wav_list: list,
+    sr: int,
+    sr_target: int,
+    n_vq: int,
+) -> torch.Tensor:
+    """Blocking resample + codec encode (the expensive bit)."""
     wav = torch.tensor(wav_list, dtype=torch.float32)
     if wav.dim() == 1:
         wav = wav.unsqueeze(0)
@@ -35,7 +92,9 @@ def _encode_wav_sync(processor: Any, wav_list: list, sr: int, sr_target: int, n_
 
         wav = torchaudio.functional.resample(wav, sr, sr_target)
     with torch.no_grad():
-        codes_list = processor.encode_audios_from_wav([wav], sampling_rate=sr_target, n_vq=n_vq)
+        codes_list = processor.encode_audios_from_wav(
+            [wav], sampling_rate=sr_target, n_vq=n_vq
+        )
     return codes_list[0]
 
 
@@ -53,10 +112,8 @@ async def encode_reference_codes(
 ) -> torch.Tensor:
     """Encode one reference clip into MOSS RVQ codes, reusing the speaker cache.
 
-    The MOSS audio tokenizer sits on CPU (to spare ~6.7 GiB next to the 8B
-    talker), so re-encoding the same reference is a fixed per-request cost that
-    otherwise dominates the 8B voice-clone variants and serializes under
-    concurrency. Mirror CosyVoice3 / Qwen3-TTS: cache by named voice when one is
+    Re-encoding the same reference is a fixed per-request cost. Mirror
+    CosyVoice3 / Qwen3-TTS: cache by named voice when one is
     supplied (``voice_created_at`` invalidates on re-upload), else by a content
     hash of the reference. The blocking encode runs in a worker thread via
     ``asyncio.to_thread`` so cold/anonymous encodes from concurrent requests

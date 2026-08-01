@@ -21,10 +21,10 @@ connectors:
 stages:
   - stage_id: 0
     max_num_seqs: 64
-    gpu_memory_utilization: 0.60
+    gpu_memory_utilization: 0.50
     enable_prefix_caching: false
     async_scheduling: true
-    max_num_batched_tokens: 65536
+    max_num_batched_tokens: 30000
     max_model_len: 4096
     devices: "0"
     # profiler_config:
@@ -42,7 +42,7 @@ stages:
 
   - stage_id: 1
     max_num_seqs: 64
-    gpu_memory_utilization: 0.30
+    gpu_memory_utilization: 0.15
     enforce_eager: false
     enable_prefix_caching: false
     async_scheduling: true
@@ -54,7 +54,7 @@ stages:
     # profiler_config:
     #   profiler: torch
     #   torch_profiler_dir: /root/vllm-omni-workspace/vllm-omni/results/moss_local_stage1/batch_8
-    max_num_batched_tokens: 65536
+    max_num_batched_tokens: 30000
     max_model_len: 65536
     devices: "0"
     input_connectors:
