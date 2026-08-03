@@ -23,7 +23,7 @@ stages:
     enable_prefix_caching: false
     async_scheduling: true
     max_num_batched_tokens: 65536
-    max_model_len: 4096
+    max_model_len: 10240
     devices: "0"
     # profiler_config:
     #   profiler: torch
