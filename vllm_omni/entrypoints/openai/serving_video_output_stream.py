@@ -616,13 +616,11 @@ class OmniStreamingVideoOutputHandler:
                 detail="Stage configs not found. Start server with an omni diffusion model.",
             )
 
-        for stage in stage_configs:
-            stage_type = get_stage_type(stage)
-            if stage_type != "diffusion":
-                raise HTTPException(
-                    status_code=HTTPStatus.SERVICE_UNAVAILABLE.value,
-                    detail=f"Video generation only supports diffusion stages, found '{stage_type}' stage.",
-                )
+        if not any(get_stage_type(stage) == "diffusion" for stage in stage_configs):
+            raise HTTPException(
+                status_code=HTTPStatus.SERVICE_UNAVAILABLE.value,
+                detail="No diffusion stage found in video generation pipeline.",
+            )
 
         sampling_params_list = build_stage_sampling_params_list(
             list(stage_configs),

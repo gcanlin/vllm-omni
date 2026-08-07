@@ -345,6 +345,7 @@ class StageMetadata:
     custom_process_input_func: Callable | None
     model_stage: str | None
     runtime_cfg: Any
+    prompt_transform_func: Callable | None = None
     prompt_expand_func: Callable | None = None
     cfg_kv_collect_func: Callable | None = None
     # Multi-replica: replica_id distinguishes replicas of the same stage.
@@ -403,6 +404,12 @@ def extract_legacy_stage_metadata(stage_config: Any) -> StageMetadata:
         mod_path, fn_name = _cpif_path.rsplit(".", 1)
         custom_process_input_func = getattr(importlib.import_module(mod_path), fn_name)
 
+    prompt_transform_func: Callable | None = None
+    _ptf_path = _get_attr_or_item(stage_config, "prompt_transform_func")
+    if _ptf_path:
+        _mod, _fn = _ptf_path.rsplit(".", 1)
+        prompt_transform_func = getattr(importlib.import_module(_mod), _fn)
+
     prompt_expand_func: Callable | None = None
     _pef_path = _get_attr_or_item(stage_config, "prompt_expand_func")
     if _pef_path:
@@ -431,6 +438,7 @@ def extract_legacy_stage_metadata(stage_config: Any) -> StageMetadata:
             custom_process_input_func=custom_process_input_func,
             model_stage=model_stage,
             runtime_cfg=runtime_cfg,
+            prompt_transform_func=prompt_transform_func,
             cfg_kv_collect_func=cfg_kv_collect_func,
         )
 
@@ -451,6 +459,7 @@ def extract_legacy_stage_metadata(stage_config: Any) -> StageMetadata:
         custom_process_input_func=custom_process_input_func,
         model_stage=model_stage,
         runtime_cfg=runtime_cfg,
+        prompt_transform_func=prompt_transform_func,
         prompt_expand_func=prompt_expand_func,
     )
 
@@ -497,6 +506,9 @@ def extract_stage_metadata_from_omni_stage_config(
             custom_process_input_func=custom_process_input_func,
             model_stage=stage_config.model_stage,
             runtime_cfg=stage_config.runtime_config,
+            prompt_transform_func=_resolve_omni_metadata_hook(
+                stage_config.prompt_transform_func
+            ),
             cfg_kv_collect_func=_resolve_omni_metadata_hook(stage_config.cfg_kv_collect_func),
         )
 
@@ -513,6 +525,9 @@ def extract_stage_metadata_from_omni_stage_config(
         custom_process_input_func=custom_process_input_func,
         model_stage=stage_config.model_stage,
         runtime_cfg=stage_config.runtime_config,
+        prompt_transform_func=_resolve_omni_metadata_hook(
+            stage_config.prompt_transform_func
+        ),
         prompt_expand_func=_resolve_omni_metadata_hook(stage_config.prompt_expand_func),
     )
 
@@ -874,6 +889,15 @@ def _finalize_engine_args_dict(
     stage_defines_tokenizer = (
         engine_args_dict.get("tokenizer") is not None or engine_args_dict.get("tokenizer_subdir") is not None
     )
+    if engine_args_dict.get("model_arch") == "MiniMaxH3TextEncoder":
+        from vllm_omni.model_executor.models.minimax_h3.checkpoint import (
+            resolve_minimax_h3_model_root,
+        )
+
+        model = resolve_minimax_h3_model_root(
+            model,
+            engine_args_dict.get("revision"),
+        )
     audex_stage = str(engine_args_dict.get("model_stage") or "")
     if audex_stage == "audex_xcodec":
         # TTA stage 1 decodes with the external XCodec1 checkpoint, not a

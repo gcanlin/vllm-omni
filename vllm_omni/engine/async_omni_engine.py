@@ -8,6 +8,7 @@ with the Orchestrator (running in a background thread) via janus queues.
 from __future__ import annotations
 
 import asyncio
+import copy
 import concurrent.futures
 import dataclasses
 import json
@@ -253,6 +254,7 @@ class AsyncOmniEngine:
         self.stage_pools: list[StagePool] = []
         self.stage_clients: list[StageClient] = []  # logical-stage view for external readers
         self.input_processor: InputProcessor | None = None
+        self.prompt_transform_func: Any | None = None
         self.prompt_expand_func: Any | None = None
         self.supported_tasks: tuple[str, ...] = ("generate",)
         self.default_sampling_params_list: list[OmniSamplingParams] = []
@@ -359,6 +361,11 @@ class AsyncOmniEngine:
         self.input_processor = (
             build_stage0_input_processor(self.stage_vllm_configs[0])
             if self.stage_vllm_configs and self.stage_vllm_configs[0] is not None
+            else None
+        )
+        self.prompt_transform_func = (
+            getattr(self.stage_clients[0], "prompt_transform_func", None)
+            if self.stage_clients
             else None
         )
         self.prompt_expand_func = next(
@@ -708,6 +715,13 @@ class AsyncOmniEngine:
         output_prompt_text: Any = None
         _preprocess_ms = 0.0
         if stage_type != "diffusion" and not isinstance(prompt, EngineCoreRequest):
+            prompt_transform_func = getattr(self, "prompt_transform_func", None)
+            if prompt_transform_func is not None:
+                prompt = prompt_transform_func(
+                    copy.copy(prompt),
+                    effective_sampling_params_list,
+                )
+
             # Inject global_request_id into the raw prompt.
             if isinstance(prompt, dict):
                 inject_global_id(prompt, request_id)

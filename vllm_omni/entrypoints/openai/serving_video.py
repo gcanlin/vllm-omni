@@ -441,14 +441,13 @@ class OmniOpenAIServingVideo:
                 detail="Stage configs not found. Start server with an omni diffusion model.",
             )
 
-        # Video generation endpoint only supports diffusion stages.
-        for stage in stage_configs:
-            stage_type = get_stage_type(stage)
-            if stage_type != "diffusion":
-                raise HTTPException(
-                    status_code=HTTPStatus.SERVICE_UNAVAILABLE.value,
-                    detail=f"Video generation only supports diffusion stages, found '{stage_type}' stage.",
-                )
+        # Video pipelines may use preparatory AR stages (for example, a
+        # vLLM-hosted text encoder) before the diffusion stage.
+        if not any(get_stage_type(stage) == "diffusion" for stage in stage_configs):
+            raise HTTPException(
+                status_code=HTTPStatus.SERVICE_UNAVAILABLE.value,
+                detail="No diffusion stage found in video generation pipeline.",
+            )
 
         # Common generation logic for both paths
         engine_client = cast(AsyncOmni, self._engine_client)
