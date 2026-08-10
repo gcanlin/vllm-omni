@@ -184,9 +184,7 @@ def _resolve_minimax_h3_model_root(
         return path
     if load_text_encoder:
         allow_patterns = (
-            MINIMAX_H3_DOWNLOAD_PATTERNS
-            if partition == "combined"
-            else MINIMAX_H3_TASK_DOWNLOAD_PATTERNS[partition]
+            MINIMAX_H3_DOWNLOAD_PATTERNS if partition == "combined" else MINIMAX_H3_TASK_DOWNLOAD_PATTERNS[partition]
         )
     else:
         allow_patterns = MINIMAX_H3_DIFFUSION_DOWNLOAD_PATTERNS[partition]
@@ -199,6 +197,23 @@ def _resolve_minimax_h3_model_root(
             require_all=True,
         )
     )
+
+
+def resolve_minimax_h3_diffusion_model_path(
+    model: str,
+    revision: str | None,
+    task_type: str | None,
+) -> str:
+    """Resolve a repository root or Hub ID to its startup partition."""
+    partition = _minimax_h3_partition_for_task(task_type, model)
+    model_root = _resolve_minimax_h3_model_root(
+        model,
+        revision,
+        partition,
+        load_text_encoder=False,
+    )
+    subdir = "Ref2VA" if partition == "ref2va" else "FL2VA"
+    return str(model_root / subdir)
 
 
 def _resolve_component_quant_config(quant_config, component: str):
@@ -289,7 +304,7 @@ def _load_audio(value: Any) -> tuple[torch.Tensor, int]:
         return audios[0]
     if isinstance(value, (str, os.PathLike)):
         return load_audio_file(str(value))
-    if isinstance(value, tuple) and len(value) == 2:
+    if isinstance(value, (list, tuple)) and len(value) == 2:
         waveform, sample_rate = value
         waveform = torch.as_tensor(waveform).float()
         return waveform, int(sample_rate)
@@ -698,8 +713,7 @@ class MiniMaxH3Pipeline(
                 raise ValueError(f"text_encoder_tp_size must be >= 1, got {text_encoder_tp_size}")
             if text_encoder_tp_size > dit_world:
                 raise ValueError(
-                    f"text_encoder_tp_size must not exceed the DiT group size ({dit_world}), "
-                    f"got {text_encoder_tp_size}"
+                    f"text_encoder_tp_size must not exceed the DiT group size ({dit_world}), got {text_encoder_tp_size}"
                 )
             # The Qwen3-VL text model uses 64 attention heads / 8 KV heads.
             if 64 % text_encoder_tp_size or 8 % text_encoder_tp_size:
@@ -1624,9 +1638,7 @@ class MiniMaxH3Pipeline(
                 if not isinstance(text_encoder_output, Mapping):
                     raise OmniClientError("text_encoder_output must be a mapping")
                 try:
-                    text_conditioning = MiniMaxH3TextConditioning.from_payload(
-                        text_encoder_output
-                    )
+                    text_conditioning = MiniMaxH3TextConditioning.from_payload(text_encoder_output)
                 except ValueError as exc:
                     raise OmniClientError(str(exc)) from exc
         if not prompt:

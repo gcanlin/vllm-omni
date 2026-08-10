@@ -10,6 +10,8 @@ from typing import Any
 import torch
 
 MINIMAX_H3_TEXT_HIDDEN_SIZE = 5120
+MINIMAX_H3_PRESENTATION_TASK_KEY = "_minimax_h3_presentation_task"
+MINIMAX_H3_CONDITION_LABELS_KEY = "_minimax_h3_condition_labels"
 
 
 @dataclass(frozen=True)
@@ -23,7 +25,7 @@ class MiniMaxH3TextConditioning:
     def from_payload(
         cls,
         payload: Mapping[str, Any],
-    ) -> "MiniMaxH3TextConditioning":
+    ) -> MiniMaxH3TextConditioning:
         hidden_states = payload.get("hidden_states")
         token_tags = payload.get("token_tags")
         if not isinstance(hidden_states, torch.Tensor) or not isinstance(token_tags, torch.Tensor):

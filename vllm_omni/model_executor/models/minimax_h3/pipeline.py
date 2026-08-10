@@ -10,10 +10,9 @@ from vllm_omni.config.stage_config import (
 _PROCESSOR = "vllm_omni.model_executor.stage_input_processors.minimax_h3"
 
 MINIMAX_H3_PIPELINE = PipelineConfig(
-    model_type="minimax_h3",
-    default_deploy_config_name="minimax_h3.yaml",
+    model_type="minimax_h3_disaggregated",
+    default_deploy_config_name="minimax_h3_disaggregated.yaml",
     model_arch="MiniMaxH3TextEncoder",
-    diffusers_class_name="MiniMaxH3Pipeline",
     stages=(
         StagePipelineConfig(
             stage_id=0,
@@ -24,8 +23,6 @@ MINIMAX_H3_PIPELINE = PipelineConfig(
             requires_multimodal_data=True,
             model_arch="MiniMaxH3TextEncoder",
             engine_output_type="latent",
-            model_subdir="FL2VA/text_encoder",
-            tokenizer_subdir="FL2VA/text_encoder",
             prompt_transform_func=f"{_PROCESSOR}.prepare_text_encoder_prompt",
             sampling_constraints={
                 "max_tokens": 1,
@@ -42,7 +39,6 @@ MINIMAX_H3_PIPELINE = PipelineConfig(
             final_output_type="video",
             requires_multimodal_data=True,
             model_arch="MiniMaxH3Pipeline",
-            model_subdir="FL2VA",
             custom_process_input_func=f"{_PROCESSOR}.text_encoder2diffusion",
             omni_kv_config={"need_recv_cache": False},
         ),

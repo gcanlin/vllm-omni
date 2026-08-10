@@ -27,7 +27,7 @@ from vllm_omni.entrypoints.openai.stage_params import (
     build_stage_sampling_params_list,
     get_default_sampling_params_list,
 )
-from vllm_omni.entrypoints.openai.utils import get_stage_type, parse_lora_request
+from vllm_omni.entrypoints.openai.utils import is_video_generation_pipeline, parse_lora_request
 from vllm_omni.entrypoints.openai.video_api_utils import _encode_video_bytes, encode_video_base64
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniTextPrompt
 from vllm_omni.outputs.output_metadata import (
@@ -443,10 +443,10 @@ class OmniOpenAIServingVideo:
 
         # Video pipelines may use preparatory AR stages (for example, a
         # vLLM-hosted text encoder) before the diffusion stage.
-        if not any(get_stage_type(stage) == "diffusion" for stage in stage_configs):
+        if not is_video_generation_pipeline(stage_configs):
             raise HTTPException(
                 status_code=HTTPStatus.SERVICE_UNAVAILABLE.value,
-                detail="No diffusion stage found in video generation pipeline.",
+                detail="No final video output stage found in video generation pipeline.",
             )
 
         # Common generation logic for both paths

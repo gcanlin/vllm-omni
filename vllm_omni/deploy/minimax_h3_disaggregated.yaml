@@ -1,4 +1,5 @@
 # MiniMax H3: vLLM Qwen3-VL text encoder + diffusion video/audio generation.
+pipeline: minimax_h3_disaggregated
 async_chunk: false
 trust_remote_code: true
 distributed_executor_backend: mp

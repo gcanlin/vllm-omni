@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import copy
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -19,7 +20,184 @@ from vllm.model_executor.models.qwen3_vl import (
 from vllm.model_executor.models.utils import AutoWeightsLoader
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
+from vllm_omni.diffusion.models.minimax_h3.presentation import (
+    IMAGE_PAD,
+    VIDEO_PAD,
+    VISION_END,
+    VISION_START,
+    minimax_h3_multi_image_presentation_ids,
+    minimax_h3_multi_image_presentation_token_tags,
+    minimax_h3_ref2va_presentation,
+    minimax_h3_ref2va_video_presentation,
+    minimax_h3_text_only_ids,
+)
+from vllm_omni.model_executor.models.minimax_h3.conditioning import (
+    MINIMAX_H3_CONDITION_LABELS_KEY,
+    MINIMAX_H3_PRESENTATION_TASK_KEY,
+)
 from vllm_omni.model_executor.models.output_templates import OmniOutput
+
+
+def _build_minimax_h3_presentation(
+    tokenizer: Any,
+    *,
+    prompt: str,
+    task: str,
+    condition_labels: list[tuple[str, int]],
+    image_grid_thw: torch.Tensor | None,
+    video_grid_thw: torch.Tensor | None,
+    video_timestamps: Sequence[Sequence[float]] | None,
+    merge_size: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Build the same token stream consumed by the fused H3 encoder."""
+    if task == "t2va":
+        ids = minimax_h3_text_only_ids(tokenizer, prompt)
+        return ids, torch.ones_like(ids)
+
+    merge_length = int(merge_size) ** 2
+    image_counts = (
+        [int(grid.prod().item()) // merge_length for grid in image_grid_thw] if image_grid_thw is not None else []
+    )
+    if task == "fl2va":
+        ids = minimax_h3_multi_image_presentation_ids(
+            tokenizer,
+            prompt=prompt,
+            image_token_counts=image_counts,
+        )
+        tags = minimax_h3_multi_image_presentation_token_tags(
+            tokenizer,
+            prompt=prompt,
+            image_token_counts=image_counts,
+        )
+        return ids, tags
+
+    video_counts: list[list[int]] = []
+    if video_grid_thw is not None:
+        for grid in video_grid_thw:
+            block_count = int(grid[0].item())
+            tokens_per_block = int(grid[1:].prod().item()) // merge_length
+            video_counts.append([tokens_per_block] * block_count)
+    timestamps = (
+        [[float(value) for value in group] for group in video_timestamps] if video_timestamps is not None else []
+    )
+    if video_counts:
+        return minimax_h3_ref2va_video_presentation(
+            tokenizer,
+            prompt=prompt,
+            condition_labels=condition_labels,
+            image_token_count=image_counts or None,
+            video_block_token_counts=video_counts,
+            video_block_timestamps=timestamps,
+        )
+    return minimax_h3_ref2va_presentation(
+        tokenizer,
+        prompt=prompt,
+        condition_labels=condition_labels,
+        image_token_count=image_counts or None,
+    )
+
+
+class MiniMaxH3MultiModalProcessor(Qwen3VLMultiModalProcessor):
+    """Qwen3-VL media processing with H3's exact segmented presentation."""
+
+    @staticmethod
+    def _base_processor_kwargs(
+        kwargs: Mapping[str, object],
+    ) -> dict[str, object]:
+        return {
+            key: value
+            for key, value in kwargs.items()
+            if key
+            not in {
+                MINIMAX_H3_PRESENTATION_TASK_KEY,
+                MINIMAX_H3_CONDITION_LABELS_KEY,
+            }
+        }
+
+    @staticmethod
+    def _condition_labels(value: object) -> list[tuple[str, int]]:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+            return []
+        labels: list[tuple[str, int]] = []
+        for item in value:
+            if not isinstance(item, Sequence) or isinstance(item, (str, bytes)) or len(item) != 2:
+                raise ValueError("MiniMax H3 condition labels must be (type, index) pairs")
+            labels.append((str(item[0]), int(item[1])))
+        return labels
+
+    def _cached_apply_hf_processor(self, inputs: Any, timing_ctx: Any):
+        # H3 presentation IDs depend on the processed grids for every media
+        # item. On a sender-cache hit, the generic processor passes only cache
+        # misses to _apply_hf_processor_main, so the full presentation cannot
+        # be reconstructed there. Reprocess H3 media to preserve exact IDs.
+        return self._apply_hf_processor(inputs, timing_ctx)
+
+    def _apply_hf_processor_main(
+        self,
+        prompt: str | list[int],
+        mm_items: Any,
+        hf_processor_mm_kwargs: Mapping[str, object],
+        tokenization_kwargs: Mapping[str, object],
+        *,
+        enable_hf_prompt_update: bool,
+    ):
+        task_value = hf_processor_mm_kwargs.get(MINIMAX_H3_PRESENTATION_TASK_KEY)
+        if task_value is None:
+            return super()._apply_hf_processor_main(
+                prompt,
+                mm_items,
+                hf_processor_mm_kwargs,
+                tokenization_kwargs,
+                enable_hf_prompt_update=enable_hf_prompt_update,
+            )
+        if not isinstance(prompt, str):
+            raise ValueError("MiniMax H3 presentation requires the original prompt text")
+
+        task = str(task_value)
+        condition_labels = self._condition_labels(hf_processor_mm_kwargs.get(MINIMAX_H3_CONDITION_LABELS_KEY))
+        base_kwargs = self._base_processor_kwargs(hf_processor_mm_kwargs)
+        image_count = sum(kind == "image" for kind, _ in condition_labels)
+        video_count = sum(kind == "video" for kind, _ in condition_labels)
+        image_slot = f"{VISION_START}{IMAGE_PAD}{VISION_END}"
+        hf_processor = self.info.get_hf_processor(**base_kwargs)
+        video_slot = (
+            VIDEO_PAD if self._expands_only_video_token(hf_processor) else f"{VISION_START}{VIDEO_PAD}{VISION_END}"
+        )
+        processing_prompt = image_slot * image_count + video_slot * video_count
+        if not processing_prompt:
+            processing_prompt = prompt
+
+        _, processed_data, _ = super()._apply_hf_processor_main(
+            processing_prompt,
+            mm_items,
+            base_kwargs,
+            tokenization_kwargs,
+            enable_hf_prompt_update=enable_hf_prompt_update,
+        )
+        image_processor = self.info.get_image_processor(**base_kwargs)
+        ids, _ = _build_minimax_h3_presentation(
+            self.info.get_tokenizer(),
+            prompt=prompt,
+            task=task,
+            condition_labels=condition_labels,
+            image_grid_thw=processed_data.get("image_grid_thw"),
+            video_grid_thw=processed_data.get("video_grid_thw"),
+            video_timestamps=processed_data.get("timestamps"),
+            merge_size=int(image_processor.merge_size),
+        )
+        return ids.tolist(), processed_data, True
+
+    def _get_prompt_updates(
+        self,
+        mm_items: Any,
+        hf_processor_mm_kwargs: Mapping[str, Any],
+        out_mm_kwargs: Any,
+    ):
+        return super()._get_prompt_updates(
+            mm_items,
+            self._base_processor_kwargs(hf_processor_mm_kwargs),
+            out_mm_kwargs,
+        )
 
 
 class _ResidualMerge(nn.Module):
@@ -36,7 +214,7 @@ class _ResidualMerge(nn.Module):
 
 
 @MULTIMODAL_REGISTRY.register_processor(
-    Qwen3VLMultiModalProcessor,
+    MiniMaxH3MultiModalProcessor,
     info=Qwen3VLProcessingInfo,
     dummy_inputs=Qwen3VLDummyInputsBuilder,
 )

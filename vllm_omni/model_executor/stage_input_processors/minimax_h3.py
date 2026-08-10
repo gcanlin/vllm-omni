@@ -27,13 +27,10 @@ from vllm_omni.diffusion.models.minimax_h3.reference_video import (
 )
 from vllm_omni.errors import OmniClientError
 from vllm_omni.model_executor.models.minimax_h3.conditioning import (
+    MINIMAX_H3_CONDITION_LABELS_KEY,
+    MINIMAX_H3_PRESENTATION_TASK_KEY,
     MiniMaxH3TextConditioning,
 )
-
-VISION_START = "<|vision_start|>"
-VISION_END = "<|vision_end|>"
-IMAGE_PAD = "<|image_pad|>"
-VIDEO_PAD = "<|video_pad|>"
 
 
 def _items(value: Any) -> list[Any]:
@@ -41,11 +38,17 @@ def _items(value: Any) -> list[Any]:
         return []
     if isinstance(value, list):
         return value
-    if isinstance(value, tuple) and not (
-        len(value) == 2 and isinstance(value[1], Mapping)
-    ):
+    if isinstance(value, tuple) and not (len(value) == 2 and isinstance(value[1], Mapping)):
         return list(value)
     return [value]
+
+
+def _audio_items(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)) and len(value) == 2 and isinstance(value[1], (int, np.integer)):
+        return [value]
+    return list(value) if isinstance(value, (list, tuple)) else [value]
 
 
 def _request_extra_args(sampling_params_list: Sequence[Any]) -> Mapping[str, Any]:
@@ -69,10 +72,6 @@ def _resolve_task(
     if multi_modal_data.get("image") is not None:
         return "fl2va"
     return "t2va"
-
-
-def _vision_placeholder(pad: str) -> str:
-    return f"{VISION_START}{pad}{VISION_END}"
 
 
 def _diffusion_sampling_params(sampling_params_list: Sequence[Any]) -> Any:
@@ -113,10 +112,7 @@ def _prepare_qwen_images(
         images[0],
     )
     if not 0.25 <= aspect_ratio <= 4.0:
-        raise OmniClientError(
-            "MiniMax H3 canvas aspect ratio must be in [1:4, 4:1], "
-            f"got {aspect_ratio}"
-        )
+        raise OmniClientError(f"MiniMax H3 canvas aspect ratio must be in [1:4, 4:1], got {aspect_ratio}")
     height = sampling.height
     width = sampling.width
     if height is None or width is None:
@@ -126,8 +122,7 @@ def _prepare_qwen_images(
         )
         if isinstance(short_edge, bool) or not isinstance(short_edge, (int, np.integer)):
             raise OmniClientError(
-                "MiniMax H3 target.short_edge must be "
-                f"{MINIMAX_H3_OUTPUT_SHORT_EDGE}, got {short_edge!r}"
+                f"MiniMax H3 target.short_edge must be {MINIMAX_H3_OUTPUT_SHORT_EDGE}, got {short_edge!r}"
             )
         height, width = _resolve_output_canvas(aspect_ratio, int(short_edge))
     height = int(height) // 32 * 32
@@ -136,10 +131,7 @@ def _prepare_qwen_images(
         raise OmniClientError(f"invalid MiniMax H3 canvas {width}x{height}")
     if width > 4 * height or height > 4 * width:
         raise OmniClientError("MiniMax H3 canvas aspect ratio must be in [1:4, 4:1]")
-    return [
-        image.resize((width, height), Image.Resampling.LANCZOS)
-        for image in images
-    ]
+    return [image.resize((width, height), Image.Resampling.LANCZOS) for image in images]
 
 
 def prepare_text_encoder_prompt(
@@ -167,30 +159,24 @@ def prepare_text_encoder_prompt(
 
     image_values = _items(multi_modal_data.get("image"))
     videos = _items(multi_modal_data.get("video"))
-    audios = _items(multi_modal_data.get("audio"))
+    audios = _audio_items(multi_modal_data.get("audio"))
     extra_args = _request_extra_args(sampling_params_list)
     task = _resolve_task(extra_args, multi_modal_data)
     images = _prepare_qwen_images(task, image_values, sampling_params_list)
     qwen_video_inputs: list[tuple[np.ndarray, dict[str, Any]]] = []
+    condition_labels: list[tuple[str, int]] = []
 
     if task == "t2va":
         if images or videos or audios:
             raise OmniClientError("t2va does not accept image, video, or audio conditions")
-        presentation = text
     elif task == "fl2va":
         if not images or videos or audios:
             raise OmniClientError("fl2va requires image conditions only")
-        presentation = "".join(
-            f"<Picture {index}>: {_vision_placeholder(IMAGE_PAD)}"
-            for index in range(1, len(images) + 1)
-        ) + text
+        condition_labels.extend(("image", index) for index in range(1, len(images) + 1))
     elif task == "ref2va":
         if not images and not videos:
             raise OmniClientError("ref2va requires an image or video condition")
-        parts = [
-            f"<Picture {index}>: {_vision_placeholder(IMAGE_PAD)}"
-            for index in range(1, len(images) + 1)
-        ]
+        condition_labels.extend(("image", index) for index in range(1, len(images) + 1))
         prepared_videos: list[dict[str, Any]] = []
         if videos:
             with tempfile.TemporaryDirectory(prefix="minimax_h3_text_encoder_") as workdir:
@@ -224,21 +210,18 @@ def prepare_text_encoder_prompt(
         for video_index, item in enumerate(prepared_videos, start=1):
             if item["input_has_audio"]:
                 audio_index += 1
-                parts.append(f"<Audio {audio_index}>: ")
-            parts.append(
-                f"<Video {video_index}>: {_vision_placeholder(VIDEO_PAD)}"
-            )
+                condition_labels.append(("audio", audio_index))
+            condition_labels.append(("video", video_index))
         for _ in audios:
             audio_index += 1
-            parts.append(f"<Audio {audio_index}>: ")
-        presentation = "".join(parts) + text
+            condition_labels.append(("audio", audio_index))
     else:
         raise OmniClientError(f"unsupported MiniMax H3 task {task!r}")
 
     transformed = copy.copy(prompt)
     if isinstance(prompt.get("additional_information"), Mapping):
         transformed["additional_information"] = dict(prompt["additional_information"])
-    transformed["prompt"] = presentation
+    transformed["prompt"] = text
     qwen_mm_data = dict(multi_modal_data)
     qwen_mm_data.pop("audio", None)
     if images:
@@ -246,6 +229,11 @@ def prepare_text_encoder_prompt(
     if qwen_video_inputs:
         qwen_mm_data["video"] = qwen_video_inputs
     transformed["multi_modal_data"] = qwen_mm_data or None
+
+    mm_processor_kwargs = dict(prompt.get("mm_processor_kwargs") or {})
+    mm_processor_kwargs[MINIMAX_H3_PRESENTATION_TASK_KEY] = task
+    mm_processor_kwargs[MINIMAX_H3_CONDITION_LABELS_KEY] = condition_labels
+    transformed["mm_processor_kwargs"] = mm_processor_kwargs
     return transformed
 
 
@@ -279,8 +267,7 @@ def text_encoder2diffusion(
         raise RuntimeError("MiniMax H3 text encoder returned no token_tags tensor")
     if token_tags.ndim != 2 or token_tags.shape[-1] != 1:
         raise RuntimeError(
-            "MiniMax H3 stage-wire token_tags must have shape [tokens, 1], "
-            f"got {tuple(token_tags.shape)}"
+            f"MiniMax H3 stage-wire token_tags must have shape [tokens, 1], got {tuple(token_tags.shape)}"
         )
     try:
         conditioning = MiniMaxH3TextConditioning.from_payload(
