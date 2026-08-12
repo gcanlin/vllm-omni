@@ -97,7 +97,7 @@ class OpenAICreateSpeechRequest(BaseModel):
     )
     ref_audio: str | list[str] | None = Field(
         default=None,
-        description="Reference audio for voice cloning (Base task). URL, base64, or file URI.",
+        description="Reference audio for voice cloning (Base task). Local path, URL, base64, or file URI.",
     )
     ref_text: str | None = Field(
         default=None,
@@ -106,7 +106,7 @@ class OpenAICreateSpeechRequest(BaseModel):
     ref_audio_2: str | None = Field(
         default=None,
         description="Second reference audio for two-speaker dialogue (MOSS-TTSD). "
-        "URL, base64, or file URI. Ignored by single-speaker models.",
+        "Local path, URL, base64, or file URI. Ignored by single-speaker models.",
     )
     ambient_sound: str | None = Field(
         default=None,

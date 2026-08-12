@@ -159,6 +159,7 @@ _TTS_LANGUAGES = frozenset(
 )
 _REF_AUDIO_MIN_DURATION = 1.0  # seconds
 _REF_AUDIO_MAX_DURATION = 30.0  # seconds
+_MOSS_TTS_LOCAL_REF_AUDIO_MAX_DURATION = 100.0  # seconds
 _REF_AUDIO_RESOLVE_CACHE_MAX_ENTRIES = 256
 _REF_AUDIO_RESOLVE_CACHE_MAX_BYTES = 256 * 1024 * 1024
 _HIGGS_V3_REF_CODE_CACHE_MAX_ENTRIES = 256
@@ -1594,16 +1595,35 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         return None
 
     def _validate_ref_audio_format(self, ref_audio: str) -> str | None:
-        """Validate ref_audio is a supported URI format. Returns error or None."""
+        """Validate ref_audio is a supported URI or local-path format."""
         if not isinstance(ref_audio, str):
-            return "ref_audio must be a URL (http/https), base64 data URL (data:...), or file URI (file://...)"
+            return (
+                "ref_audio must be a local path, URL (http/https), base64 data URL (data:...), or file URI (file://...)"
+            )
+        if not ref_audio.strip():
+            return "ref_audio must not be empty"
         if not (
             ref_audio.startswith(("http://", "https://"))
             or ref_audio.startswith("data:")
             or ref_audio.startswith("file://")
         ):
-            return "ref_audio must be a URL (http/https), base64 data URL (data:...), or file URI (file://...)"
+            # Bare paths are normalized to file:// by _resolve_ref_audio and
+            # remain subject to MediaConnector's allowed_local_media_path.
+            return None
         return None
+
+    @staticmethod
+    def _normalize_ref_audio_source(ref_audio: str) -> str:
+        """Convert a bare local path to a file URI without bypassing policy."""
+        if ref_audio.startswith(("http://", "https://", "data:", "file://")):
+            return ref_audio
+        return Path(ref_audio).expanduser().resolve().as_uri()
+
+    def _ref_audio_max_duration(self) -> float:
+        """Return the model-specific reference-audio duration limit."""
+        if self._tts_model_type == "moss_tts" and self._moss_variant == "local":
+            return _MOSS_TTS_LOCAL_REF_AUDIO_MAX_DURATION
+        return _REF_AUDIO_MAX_DURATION
 
     def _detect_moss_variant(self) -> str:
         """Sub-classify a ``moss_tts``-stage server into the actual MOSS-TTS
@@ -2006,6 +2026,7 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         URLs, ``data:`` base64 URIs, and ``file:`` local paths (the latter
         gated by ``--allowed-local-media-path``).
         """
+        ref_audio_str = self._normalize_ref_audio_source(ref_audio_str)
         cache_key = hashlib.sha1(ref_audio_str.encode("utf-8")).hexdigest()
         cached = self._ref_audio_resolve_cache.get(cache_key)
         if cached is not None:
@@ -2042,10 +2063,11 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
                 f"Reference audio too short ({duration:.1f}s). "
                 f"At least {_REF_AUDIO_MIN_DURATION:.0f}s of clear speech is required."
             )
-        if duration > _REF_AUDIO_MAX_DURATION:
+        max_duration = self._ref_audio_max_duration()
+        if duration > max_duration:
             raise ValueError(
                 f"Reference audio too long ({duration:.1f}s). "
-                f"Maximum {_REF_AUDIO_MAX_DURATION:.0f}s supported — use a shorter clip."
+                f"Maximum {max_duration:.0f}s supported — use a shorter clip."
             )
         tolist_start_s = time.perf_counter()
         wav_list = wav_np.tolist()
@@ -2071,6 +2093,7 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         return h.hexdigest()
 
     def _get_resolved_ref_audio_artifact_key(self, ref_audio_str: str) -> str | None:
+        ref_audio_str = self._normalize_ref_audio_source(ref_audio_str)
         source_key = hashlib.sha1(ref_audio_str.encode("utf-8")).hexdigest()
         cached = self._ref_audio_resolve_cache.get(source_key)
         if cached is None:
