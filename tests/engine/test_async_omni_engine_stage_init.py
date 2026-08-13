@@ -803,6 +803,23 @@ def test_build_engine_args_keeps_stage_owned_tokenizer_subdir(tmp_path):
     assert engine_args["tokenizer"] == os.path.join(str(tmp_path), "tokenizer")
 
 
+def test_model_path_resolver_is_generic_and_model_owned(tmp_path):
+    from vllm_omni.engine.stage_init_utils import _resolve_model_path
+
+    engine_args = {
+        "model_path_resolver": (
+            "vllm_omni.model_executor.models.minimax_h3.checkpoint.resolve_minimax_h3_model_root"
+        ),
+        "revision": None,
+        "task_type": "ref2va",
+    }
+
+    resolved = _resolve_model_path(str(tmp_path), engine_args)
+
+    assert resolved == str(tmp_path / "Ref2VA" / "text_encoder")
+    assert "model_path_resolver" not in engine_args
+
+
 def test_build_stage0_input_processor_uses_omni_input_preprocessor(monkeypatch):
     import vllm_omni.engine.stage_init_utils as init_mod
 

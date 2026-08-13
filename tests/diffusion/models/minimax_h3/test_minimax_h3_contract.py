@@ -569,16 +569,16 @@ def test_packed_attention_keeps_padding_mask_for_other_backends():
 def test_reference_image_resize_contract():
     from PIL import Image
 
-    from vllm_omni.diffusion.models.minimax_h3.pipeline_minimax_h3 import (
-        _reference_image_shape,
+    from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
+        resolve_minimax_h3_reference_image_shape,
     )
 
-    assert _reference_image_shape(Image.new("RGB", (1080, 1440))) == (
+    assert resolve_minimax_h3_reference_image_shape(Image.new("RGB", (1080, 1440))) == (
         2048,
         2720,
     )
     with pytest.raises(ValueError, match="aspect ratio"):
-        _reference_image_shape(Image.new("RGB", (100, 501)))
+        resolve_minimax_h3_reference_image_shape(Image.new("RGB", (100, 501)))
 
 
 def test_fl2va_supports_first_last_and_explicit_frame_index_contracts():
@@ -595,15 +595,15 @@ def test_fl2va_supports_first_last_and_explicit_frame_index_contracts():
 
 
 def test_minimax_h3_uses_the_official_output_canvas_policy():
-    from vllm_omni.diffusion.models.minimax_h3.pipeline_minimax_h3 import (
-        _resolve_output_canvas,
+    from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
+        resolve_minimax_h3_output_canvas,
     )
 
-    assert _resolve_output_canvas(21 / 9, 768) == (672, 1536)
-    assert _resolve_output_canvas(16 / 9, 768) == (768, 1344)
-    assert _resolve_output_canvas(9 / 16, 768) == (1344, 768)
+    assert resolve_minimax_h3_output_canvas(21 / 9, 768) == (672, 1536)
+    assert resolve_minimax_h3_output_canvas(16 / 9, 768) == (768, 1344)
+    assert resolve_minimax_h3_output_canvas(9 / 16, 768) == (1344, 768)
     with pytest.raises(ValueError, match="short_edge"):
-        _resolve_output_canvas(16 / 9, 720)
+        resolve_minimax_h3_output_canvas(16 / 9, 720)
 
 
 def test_minimax_h3_accepts_sglang_auto_aspect_ratio_alias():
@@ -684,7 +684,7 @@ def test_encoder_forward_forwards_video_inputs():
 
 
 def test_reference_video_shape_uses_h3_adapt_shape_policy():
-    from vllm_omni.diffusion.models.minimax_h3.reference_video import (
+    from vllm_omni.model_executor.models.minimax_h3.reference_video import (
         _reference_video_shape,
     )
 
@@ -1342,18 +1342,18 @@ def test_g1_fanout_uses_incrementing_output_seeds():
 def test_g3_task_specific_aspect_ratio_policy():
     from PIL import Image
 
-    from vllm_omni.diffusion.models.minimax_h3.pipeline_minimax_h3 import (
-        _resolve_minimax_h3_aspect_ratio,
+    from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
+        resolve_minimax_h3_aspect_ratio,
     )
 
     image = Image.new("RGB", (1280, 720))
-    assert _resolve_minimax_h3_aspect_ratio("fl2va", "9:16", image) == pytest.approx(16 / 9)
-    assert _resolve_minimax_h3_aspect_ratio("ref2va", None, None) == pytest.approx(16 / 9)
-    assert _resolve_minimax_h3_aspect_ratio("ref2va", "auto", None) == pytest.approx(16 / 9)
+    assert resolve_minimax_h3_aspect_ratio("fl2va", "9:16", image) == pytest.approx(16 / 9)
+    assert resolve_minimax_h3_aspect_ratio("ref2va", None, None) == pytest.approx(16 / 9)
+    assert resolve_minimax_h3_aspect_ratio("ref2va", "auto", None) == pytest.approx(16 / 9)
     with pytest.raises(ValueError, match="requires an explicit"):
-        _resolve_minimax_h3_aspect_ratio("t2va", None, None)
+        resolve_minimax_h3_aspect_ratio("t2va", None, None)
     with pytest.raises(ValueError, match="one of"):
-        _resolve_minimax_h3_aspect_ratio("t2va", "2:1", None)
+        resolve_minimax_h3_aspect_ratio("t2va", "2:1", None)
 
 
 def test_g3_t2va_shape_requires_a_named_ratio_and_fl2va_ignores_override():
@@ -1416,7 +1416,7 @@ def test_g4_reference_image_file_format_and_size_contract(tmp_path):
 
 
 def test_g4_standalone_audio_duration_and_total_duration_contract():
-    from vllm_omni.diffusion.models.minimax_h3.reference_video import (
+    from vllm_omni.model_executor.models.minimax_h3.reference_video import (
         validate_reference_audio_waveforms,
     )
 
@@ -1450,7 +1450,7 @@ def test_g4_standalone_audio_duration_and_total_duration_contract():
     ],
 )
 def test_g4_reference_video_metadata_validation(field, value, message, tmp_path):
-    from vllm_omni.diffusion.models.minimax_h3.reference_video import (
+    from vllm_omni.model_executor.models.minimax_h3.reference_video import (
         _validate_reference_video_metadata,
     )
 

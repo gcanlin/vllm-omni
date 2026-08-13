@@ -82,6 +82,7 @@ class _ModelEngineOverrides(TypedDict, total=False):
     model_arch: str
     model_subdir: str
     tokenizer_subdir: str
+    model_path_resolver: str
     revision: str
     tokenizer_revision: str
     code_revision: str
@@ -342,6 +343,7 @@ class OmniStageModelConfig:
     # StagePipelineConfig.model_subdir/tokenizer_subdir on the legacy path.
     model_subdir: str | None = None
     tokenizer_subdir: str | None = None
+    model_path_resolver: str | None = None
 
 
 @config
@@ -1361,6 +1363,8 @@ def _build_model_config(
         kwargs["model_subdir"] = topology.model_subdir
     if "tokenizer_subdir" not in kwargs and topology.tokenizer_subdir is not None:
         kwargs["tokenizer_subdir"] = topology.tokenizer_subdir
+    if "model_path_resolver" not in kwargs and topology.model_path_resolver is not None:
+        kwargs["model_path_resolver"] = topology.model_path_resolver
     return OmniStageModelConfig(
         default_sampling_params=default_sampling_params,
         duplex_max_sessions=duplex_max_sessions,

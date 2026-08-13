@@ -3,6 +3,7 @@
 """Structured payload types for inter-stage communication.
 
 Categories under ``OmniPayload``:
+    hidden         – primary AR hidden-state output
     hidden_states  – intermediate / output hidden-state tensors
     embed          – embedding tensors (prefill, decode, special tokens)
     ids            – token-ID sequences
@@ -91,17 +92,17 @@ class OmniPayloadMeta(TypedDict, total=False):
     ref_context_included: bool
     talker_prefill_offset: int
     omni_final_stage_id: int
+    token_role_ids: torch.Tensor
 
 
 class OmniPayload(TypedDict, total=False):
+    hidden: torch.Tensor
     hidden_states: HiddenStates
-    encoder_hidden_states: torch.Tensor
     embed: Embeddings
     ids: Ids
     codes: Codes
     meta: OmniPayloadMeta
     latent: torch.Tensor
-    token_tags: torch.Tensor
     generated_len: int
     model_outputs: list[torch.Tensor]
     mtp_inputs: tuple[torch.Tensor, torch.Tensor]
@@ -191,18 +192,17 @@ class MetaStruct(_StructBase):
     codec_left_context_frames: int | None = None
     code_flat_numel: int | None = None
     omni_final_stage_id: int | None = None
+    token_role_ids: torch.Tensor | None = None
 
 
 class OmniPayloadStruct(_StructBase):
     hidden: torch.Tensor | None = None
     hidden_states: HiddenStatesStruct | None = None
-    encoder_hidden_states: torch.Tensor | None = None
     embed: EmbeddingsStruct | None = None
     ids: IdsStruct | None = None
     codes: CodesStruct | None = None
     meta: MetaStruct | None = None
     latent: torch.Tensor | None = None
-    token_tags: torch.Tensor | None = None
     generated_len: int | None = None
     model_outputs: list[torch.Tensor] | None = None
     mtp_inputs: tuple[torch.Tensor, torch.Tensor] | None = None

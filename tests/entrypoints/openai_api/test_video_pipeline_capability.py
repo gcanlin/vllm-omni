@@ -26,6 +26,25 @@ def test_video_pipeline_requires_declared_final_video_stage():
     )
 
 
+def test_video_pipeline_checks_only_the_last_logical_stage():
+    assert not is_video_generation_pipeline(
+        [
+            SimpleNamespace(final_output=True, final_output_type="video"),
+            SimpleNamespace(final_output=True, final_output_type="text"),
+        ]
+    )
+    assert is_video_generation_pipeline(
+        [
+            SimpleNamespace(final_output=False, final_output_type=None),
+            SimpleNamespace(
+                stage_type="llm",
+                final_output=True,
+                final_output_type="video",
+            ),
+        ]
+    )
+
+
 @pytest.mark.parametrize(
     "stage_configs",
     [

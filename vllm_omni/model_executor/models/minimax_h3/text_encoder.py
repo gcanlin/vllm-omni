@@ -20,81 +20,18 @@ from vllm.model_executor.models.qwen3_vl import (
 from vllm.model_executor.models.utils import AutoWeightsLoader
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
-from vllm_omni.diffusion.models.minimax_h3.presentation import (
+from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
     IMAGE_PAD,
     VIDEO_PAD,
     VISION_END,
     VISION_START,
-    minimax_h3_multi_image_presentation_ids,
-    minimax_h3_multi_image_presentation_token_tags,
-    minimax_h3_ref2va_presentation,
-    minimax_h3_ref2va_video_presentation,
-    minimax_h3_text_only_ids,
+    build_minimax_h3_presentation,
 )
 from vllm_omni.model_executor.models.minimax_h3.conditioning import (
     MINIMAX_H3_CONDITION_LABELS_KEY,
     MINIMAX_H3_PRESENTATION_TASK_KEY,
 )
 from vllm_omni.model_executor.models.output_templates import OmniOutput
-
-
-def _build_minimax_h3_presentation(
-    tokenizer: Any,
-    *,
-    prompt: str,
-    task: str,
-    condition_labels: list[tuple[str, int]],
-    image_grid_thw: torch.Tensor | None,
-    video_grid_thw: torch.Tensor | None,
-    video_timestamps: Sequence[Sequence[float]] | None,
-    merge_size: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Build the same token stream consumed by the fused H3 encoder."""
-    if task == "t2va":
-        ids = minimax_h3_text_only_ids(tokenizer, prompt)
-        return ids, torch.ones_like(ids)
-
-    merge_length = int(merge_size) ** 2
-    image_counts = (
-        [int(grid.prod().item()) // merge_length for grid in image_grid_thw] if image_grid_thw is not None else []
-    )
-    if task == "fl2va":
-        ids = minimax_h3_multi_image_presentation_ids(
-            tokenizer,
-            prompt=prompt,
-            image_token_counts=image_counts,
-        )
-        tags = minimax_h3_multi_image_presentation_token_tags(
-            tokenizer,
-            prompt=prompt,
-            image_token_counts=image_counts,
-        )
-        return ids, tags
-
-    video_counts: list[list[int]] = []
-    if video_grid_thw is not None:
-        for grid in video_grid_thw:
-            block_count = int(grid[0].item())
-            tokens_per_block = int(grid[1:].prod().item()) // merge_length
-            video_counts.append([tokens_per_block] * block_count)
-    timestamps = (
-        [[float(value) for value in group] for group in video_timestamps] if video_timestamps is not None else []
-    )
-    if video_counts:
-        return minimax_h3_ref2va_video_presentation(
-            tokenizer,
-            prompt=prompt,
-            condition_labels=condition_labels,
-            image_token_count=image_counts or None,
-            video_block_token_counts=video_counts,
-            video_block_timestamps=timestamps,
-        )
-    return minimax_h3_ref2va_presentation(
-        tokenizer,
-        prompt=prompt,
-        condition_labels=condition_labels,
-        image_token_count=image_counts or None,
-    )
 
 
 class MiniMaxH3MultiModalProcessor(Qwen3VLMultiModalProcessor):
@@ -175,7 +112,7 @@ class MiniMaxH3MultiModalProcessor(Qwen3VLMultiModalProcessor):
             enable_hf_prompt_update=enable_hf_prompt_update,
         )
         image_processor = self.info.get_image_processor(**base_kwargs)
-        ids, _ = _build_minimax_h3_presentation(
+        ids, _ = build_minimax_h3_presentation(
             self.info.get_tokenizer(),
             prompt=prompt,
             task=task,
@@ -230,8 +167,6 @@ class MiniMaxH3TextEncoder(Qwen3VLForConditionalGeneration):
     """
 
     have_multimodal_outputs = True
-    omni_pooler_payload_include_hidden = False
-    requires_full_prefix_cached_hidden_states = False
     num_encoder_layers = 50
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "model"):
@@ -299,17 +234,14 @@ class MiniMaxH3TextEncoder(Qwen3VLForConditionalGeneration):
             # per-token prefix-cache entries; runner slicing removes these
             # padding rows before the stage payload is emitted.
             token_tags = torch.cat((token_tags, token_tags.new_ones(padding)))
-        # Keep the stage-wire representation two-dimensional.  The Omni
-        # runner treats tensors with shape [tokens, features] as per-token
-        # data, so they are concatenated across chunked-prefill steps and
-        # reconstructed on prefix-cache hits.  The Stage 1 adapter restores
-        # H3's semantic [tokens] representation.
-        token_tags = token_tags.unsqueeze(-1)
+        # The prefix cache recognizes rank-2 tensors as per-token data. Keep
+        # the wire representation [tokens, 1]; the diffusion bridge restores
+        # H3's semantic [tokens] role vector at the stage boundary.
+        token_role_ids = token_tags.unsqueeze(-1)
         return OmniOutput(
             text_hidden_states=model_outputs,
             multimodal_outputs={
-                "encoder_hidden_states": model_outputs,
-                "token_tags": token_tags,
+                "meta": {"token_role_ids": token_role_ids},
             },
         )
 

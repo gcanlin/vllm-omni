@@ -42,7 +42,6 @@ from vllm_omni.diffusion.data import (
     parse_attention_config,
     resolve_model_class_name,
 )
-from vllm_omni.diffusion.io_support import get_diffusion_output_type
 from vllm_omni.engine.async_engine_utils import (
     SHUTDOWN_ENQUEUE_TIMEOUT_S,
     SHUTDOWN_JOIN_TIMEOUT_S,
@@ -1019,7 +1018,7 @@ class AsyncOmniEngine:
         num_devices = max(1, int(parallel_config.world_size))
         devices = ",".join(str(i) for i in range(num_devices))
         model_class_name = kwargs.get("model_class_name", None)
-        final_output_type = get_diffusion_output_type(model_class_name)
+        final_output_type = StageConfigFactory.get_diffusion_output_type(model_class_name)
 
         attention_config = None
         if (

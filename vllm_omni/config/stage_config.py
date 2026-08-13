@@ -246,6 +246,9 @@ class StagePipelineConfig:
     # by ``stage_init_utils._resolve_model_tokenizer_paths``.
     model_subdir: str | None = None
     tokenizer_subdir: str | None = None
+    # Optional model-owned resolver for task-dependent checkpoint layouts.
+    # The callable receives ``model``, ``revision``, and ``task_type``.
+    model_path_resolver: str | None = None
     extras: dict[str, Any] = field(default_factory=dict)
 
 
@@ -848,6 +851,8 @@ def _build_engine_args(
         engine_args["model_subdir"] = ps.model_subdir
     if ps.tokenizer_subdir:
         engine_args["tokenizer_subdir"] = ps.tokenizer_subdir
+    if ps.model_path_resolver:
+        engine_args["model_path_resolver"] = ps.model_path_resolver
 
     # Pipeline-wide top-level DeployConfig settings, applied to every stage.
     for name in _PIPELINE_WIDE_ENGINE_FIELDS:

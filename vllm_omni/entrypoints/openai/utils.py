@@ -22,23 +22,23 @@ def get_stage_type(stage_cfg: Any) -> str:
 
 def is_video_generation_pipeline(stage_configs: list[Any] | None) -> bool:
     """Return whether a pipeline declares a final video output stage."""
-    for stage in stage_configs or ():
-        if isinstance(stage, dict):
-            final_output = stage.get("final_output", False)
-            final_output_type = stage.get("final_output_type")
-        elif hasattr(stage, "get"):
-            try:
-                final_output = stage.get("final_output", False)
-                final_output_type = stage.get("final_output_type")
-            except Exception:
-                final_output = getattr(stage, "final_output", False)
-                final_output_type = getattr(stage, "final_output_type", None)
-        else:
-            final_output = getattr(stage, "final_output", False)
-            final_output_type = getattr(stage, "final_output_type", None)
-        if final_output and final_output_type in {"video", "videos"}:
-            return True
-    return False
+    if not stage_configs:
+        return False
+    final_stage = stage_configs[-1]
+    if isinstance(final_stage, dict):
+        final_output = final_stage.get("final_output", False)
+        final_output_type = final_stage.get("final_output_type")
+    elif hasattr(final_stage, "get"):
+        try:
+            final_output = final_stage.get("final_output", False)
+            final_output_type = final_stage.get("final_output_type")
+        except Exception:
+            final_output = getattr(final_stage, "final_output", False)
+            final_output_type = getattr(final_stage, "final_output_type", None)
+    else:
+        final_output = getattr(final_stage, "final_output", False)
+        final_output_type = getattr(final_stage, "final_output_type", None)
+    return bool(final_output and final_output_type in {"video", "videos"})
 
 
 def parse_lora_request(lora_body: Any) -> tuple[LoRARequest | None, float | None]:
