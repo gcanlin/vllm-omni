@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import torch
 from PIL import Image
 
 from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
@@ -29,20 +28,9 @@ from vllm_omni.errors import OmniClientError
 from vllm_omni.model_executor.models.minimax_h3.conditioning import (
     MINIMAX_H3_CONDITION_LABELS_KEY,
     MINIMAX_H3_PRESENTATION_TASK_KEY,
-    MiniMaxH3TextConditioning,
 )
 
 MINIMAX_H3_DIT_STAGE_ID = 1
-
-
-def _items(value: Any) -> list[Any]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    if isinstance(value, tuple) and not (len(value) == 2 and isinstance(value[1], Mapping)):
-        return list(value)
-    return [value]
 
 
 def _audio_items(value: Any) -> list[Any]:
@@ -67,28 +55,12 @@ def _resolve_task(
     return "t2va"
 
 
-def _stage_sampling_params(sampling_params_list: Sequence[Any], stage_id: int) -> Any:
-    if stage_id >= len(sampling_params_list):
-        raise RuntimeError(
-            f"MiniMax H3 requires sampling parameters for stage {stage_id}, "
-            f"got {len(sampling_params_list)} stage entries"
-        )
-    return sampling_params_list[stage_id]
-
-
-def _sampling_extra_args(sampling: Any) -> Mapping[str, Any]:
-    extra_args = getattr(sampling, "extra_args", None) or {}
-    if not isinstance(extra_args, Mapping):
-        raise OmniClientError("MiniMax H3 diffusion extra_args must be an object")
-    return extra_args
-
-
 def _prepare_qwen_images(
     task: str,
-    values: list[Any],
+    values: Any,
     sampling: Any,
 ) -> list[Any]:
-    if not values:
+    if values is None:
         return []
     images = load_minimax_h3_images(values)
     if task == "ref2va":
@@ -102,7 +74,7 @@ def _prepare_qwen_images(
     if task != "fl2va":
         return images
 
-    extra_args = _sampling_extra_args(sampling)
+    extra_args = sampling.extra_args or {}
     target = extra_args.get("target")
     if target is not None and not isinstance(target, Mapping):
         raise OmniClientError("MiniMax H3 extra_args['target'] must be an object")
@@ -158,29 +130,28 @@ def prepare_text_encoder_prompt(
     if not isinstance(multi_modal_data, Mapping):
         raise TypeError("multi_modal_data must be a mapping")
 
-    image_values = _items(multi_modal_data.get("image"))
-    videos = _items(multi_modal_data.get("video"))
+    videos = multi_modal_data.get("video")
     audios = _audio_items(multi_modal_data.get("audio"))
-    diffusion_sampling = _stage_sampling_params(sampling_params_list, MINIMAX_H3_DIT_STAGE_ID)
-    extra_args = _sampling_extra_args(diffusion_sampling)
+    diffusion_sampling = sampling_params_list[MINIMAX_H3_DIT_STAGE_ID]
+    extra_args = diffusion_sampling.extra_args or {}
     task = _resolve_task(extra_args, multi_modal_data)
-    images = _prepare_qwen_images(task, image_values, diffusion_sampling)
+    images = _prepare_qwen_images(task, multi_modal_data.get("image"), diffusion_sampling)
     qwen_video_inputs: list[tuple[np.ndarray, dict[str, Any]]] = []
     condition_labels: list[tuple[str, int]] = []
 
     if task == "t2va":
-        if images or videos or audios:
+        if images or videos is not None or audios:
             raise OmniClientError("t2va does not accept image, video, or audio conditions")
     elif task == "fl2va":
-        if not images or videos or audios:
+        if not images or videos is not None or audios:
             raise OmniClientError("fl2va requires image conditions only")
         condition_labels.extend(("image", index) for index in range(1, len(images) + 1))
     elif task == "ref2va":
-        if not images and not videos:
+        if not images and videos is None:
             raise OmniClientError("ref2va requires an image or video condition")
         condition_labels.extend(("image", index) for index in range(1, len(images) + 1))
         prepared_videos: list[dict[str, Any]] = []
-        if videos:
+        if videos is not None:
             with tempfile.TemporaryDirectory(prefix="minimax_h3_text_encoder_") as workdir:
                 prepared_videos = prepare_reference_videos(
                     videos,
@@ -255,66 +226,19 @@ def text_encoder2diffusion(
     requires_multimodal_data: bool = False,
     streaming_context: Any | None = None,
 ) -> dict[str, Any] | None:
-    """Attach validated Stage 0 conditioning to the original request."""
+    """Attach Stage 0 conditioning to the original request."""
     del requires_multimodal_data, streaming_context
     if not source_outputs:
         return None
 
-    source = source_outputs[0]
-    source_stage_id = getattr(source, "stage_id", None)
-    if source_stage_id != 0:
-        raise RuntimeError(f"MiniMax H3 conditioning must come from stage 0, got stage {source_stage_id}")
-    source_request_id = str(getattr(source, "request_id", ""))
-    request_output = getattr(source, "request_output", None)
-    inner_request_id = str(getattr(request_output, "request_id", ""))
-    if not source_request_id or not inner_request_id or source_request_id != inner_request_id:
-        raise RuntimeError(
-            "MiniMax H3 text encoder request IDs do not match: "
-            f"source={source_request_id!r}, request_output={inner_request_id!r}"
-        )
-    completions = getattr(source, "outputs", None)
-    if not completions:
-        raise RuntimeError("MiniMax H3 text encoder returned no completion outputs")
-    completion = completions[0]
-    payload = getattr(completion, "multimodal_output", None)
-    if not isinstance(payload, Mapping):
-        raise RuntimeError("MiniMax H3 text encoder returned no conditioning payload")
-    hidden_states = payload.get("hidden")
-    if not isinstance(hidden_states, torch.Tensor):
-        raise RuntimeError("MiniMax H3 text encoder returned no hidden tensor")
-    if hidden_states.ndim != 2:
-        raise RuntimeError(
-            "MiniMax H3 text encoder hidden must have shape "
-            f"[tokens, hidden_size], got {tuple(hidden_states.shape)}"
-        )
-    meta = payload.get("meta")
-    if not isinstance(meta, Mapping):
-        raise RuntimeError("MiniMax H3 text encoder returned no metadata")
-    token_role_ids = meta.get("token_role_ids")
-    if not isinstance(token_role_ids, torch.Tensor):
-        raise RuntimeError("MiniMax H3 text encoder returned no meta.token_role_ids tensor")
-    if token_role_ids.ndim != 2 or token_role_ids.shape[-1] != 1:
-        raise RuntimeError(
-            "MiniMax H3 stage-wire meta.token_role_ids must have shape "
-            f"[tokens, 1], got {tuple(token_role_ids.shape)}"
-        )
-    if hidden_states.shape[0] != token_role_ids.shape[0]:
-        raise RuntimeError(
-            "MiniMax H3 stage-wire hidden and token roles must align: "
-            f"hidden={hidden_states.shape[0]}, roles={token_role_ids.shape[0]}"
-        )
-    try:
-        conditioning = MiniMaxH3TextConditioning.from_payload(
-            {
-                "hidden_states": hidden_states,
-                "token_tags": token_role_ids.squeeze(-1),
-            }
-        )
-    except ValueError as exc:
-        raise RuntimeError(str(exc)) from exc
+    payload = source_outputs[0].outputs[0].multimodal_output
+    conditioning = {
+        "hidden_states": payload["hidden"],
+        "token_tags": payload["meta"]["token_role_ids"].squeeze(-1),
+    }
 
     diffusion_prompt = _original_prompt(prompt)
     additional_information = dict(diffusion_prompt.get("additional_information") or {})
-    additional_information["text_encoder_output"] = conditioning.to_payload()
+    additional_information["text_encoder_output"] = conditioning
     diffusion_prompt["additional_information"] = additional_information
     return diffusion_prompt

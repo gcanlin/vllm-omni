@@ -217,11 +217,10 @@ def test_diffusion_resolver_selects_startup_partition(tmp_path):
     assert resolve_minimax_h3_diffusion_model_path(str(ref2va), None, None) == str(ref2va)
 
 
-def _text_encoder_source(payload, *, request_id="request-1", stage_id=0):
+def _text_encoder_source(payload, *, request_id="request-1"):
     completion = SimpleNamespace(multimodal_output=payload)
     request_output = SimpleNamespace(request_id=request_id, outputs=[completion])
     return SimpleNamespace(
-        stage_id=stage_id,
         request_id=request_id,
         request_output=request_output,
         outputs=request_output.outputs,
@@ -238,15 +237,3 @@ def test_text_encoder_bridge_reads_hidden_and_token_role_metadata():
     payload = result["additional_information"]["text_encoder_output"]
     torch.testing.assert_close(payload["hidden_states"], hidden)
     torch.testing.assert_close(payload["token_tags"], roles.squeeze(-1))
-
-
-def test_text_encoder_bridge_rejects_misaligned_role_metadata():
-    source = _text_encoder_source(
-        {
-            "hidden": torch.randn(4, 8),
-            "meta": {"token_role_ids": torch.ones(3, 1, dtype=torch.long)},
-        }
-    )
-
-    with pytest.raises(RuntimeError, match="must align"):
-        text_encoder2diffusion([source], {"prompt": "hello"})
