@@ -1353,7 +1353,7 @@ stages:
         assert pipeline is not None
         assert pipeline.model_type == expected_pipeline
 
-    def test_minimax_h3_disaggregation_is_not_auto_discovered(self):
+    def test_minimax_h3_disaggregation_is_auto_discovered(self):
         def get_model_file(filename, _model, revision=None):
             del revision
             if filename == "config.json":
@@ -1374,7 +1374,8 @@ stages:
                 trust_remote_code=False,
             )
 
-        assert pipeline is None
+        assert pipeline is not None
+        assert pipeline.model_type == "minimax_h3_disaggregated"
 
     @pytest.mark.parametrize("deploy_name", ["step_audio_2.yaml", "step_audio_2_async_chunk.yaml"])
     def test_step_audio2_deploy_configs_fit_two_gpus(self, deploy_name):

@@ -11,6 +11,8 @@ _PROCESSOR = "vllm_omni.model_executor.stage_input_processors.minimax_h3"
 
 MINIMAX_H3_PIPELINE = PipelineConfig(
     model_type="minimax_h3_disaggregated",
+    diffusers_class_name="MiniMaxH3ModularPipeline",
+    diffusers_class_aliases=("MiniMaxH3Pipeline",),
     default_deploy_config_name="minimax_h3_disaggregated.yaml",
     model_arch="MiniMaxH3TextEncoder",
     stages=(
