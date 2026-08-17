@@ -155,6 +155,9 @@ def indexed_scale_shift_(
     indices: torch.Tensor,
 ) -> torch.Tensor:
     """Apply indexed scale/shift in-place to a disposable contiguous input."""
+    if x.is_cpu:
+        x.copy_((x * (1.0 + scale.index_select(0, indices)) + shift.index_select(0, indices)).to(x.dtype))
+        return x
     rows, hidden_size = x.shape
     if rows == 0:
         return x
@@ -182,6 +185,8 @@ def indexed_gate(
     indices: torch.Tensor,
 ) -> torch.Tensor:
     """Return ``x + gate[indices] * other`` without indexed temporaries."""
+    if x.is_cpu:
+        return (x + gate.index_select(0, indices) * other).to(x.dtype)
     output = torch.empty_like(x)
     rows, hidden_size = x.shape
     if rows == 0:
@@ -213,6 +218,13 @@ def rms_norm_indexed_scale_shift(
     eps: float,
 ) -> torch.Tensor:
     """Fuse H3 RMSNorm with its indexed AdaLN affine transform."""
+    if x.is_cpu:
+        input_dtype = x.dtype
+        normalized = x.float()
+        variance = normalized.pow(2).mean(-1, keepdim=True)
+        normalized = normalized * torch.rsqrt(variance + eps)
+        normalized = (weight.float() * normalized).to(input_dtype)
+        return (normalized * (1.0 + scale.index_select(0, indices)) + shift.index_select(0, indices)).to(input_dtype)
     output = torch.empty_like(x)
     rows, hidden_size = x.shape
     if rows:
@@ -246,6 +258,17 @@ def indexed_gate_rms_norm_scale_shift(
     eps: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Fuse gated residual, the following RMSNorm, and AdaLN affine."""
+    if residual.is_cpu:
+        input_dtype = residual.dtype
+        residual_out = (residual + gate.index_select(0, indices) * branch).to(input_dtype)
+        normalized = residual_out.float()
+        variance = normalized.pow(2).mean(-1, keepdim=True)
+        normalized = normalized * torch.rsqrt(variance + eps)
+        normalized = (weight.float() * normalized).to(input_dtype)
+        modulated_out = (normalized * (1.0 + scale.index_select(0, indices)) + shift.index_select(0, indices)).to(
+            input_dtype
+        )
+        return residual_out, modulated_out
     residual_out = torch.empty_like(residual)
     modulated_out = torch.empty_like(residual)
     rows, hidden_size = residual.shape
