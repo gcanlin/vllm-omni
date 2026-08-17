@@ -498,6 +498,7 @@ def test_sub_config_fields_match_structured_scopes():
         # legacy engine-args path.
         "model_subdir",
         "tokenizer_subdir",
+        "model_path_resolver",
     }
     assert {f.name for f in fields(OmniStageLoadConfig)} == {
         "tokenizer",

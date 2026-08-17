@@ -12,6 +12,11 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
+from vllm_omni.errors import OmniClientError
+from vllm_omni.model_executor.models.minimax_h3.conditioning import (
+    MINIMAX_H3_CONDITION_LABELS_KEY,
+    MINIMAX_H3_PRESENTATION_TASK_KEY,
+)
 from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
     MINIMAX_H3_OUTPUT_SHORT_EDGE,
     load_minimax_h3_images,
@@ -23,11 +28,6 @@ from vllm_omni.model_executor.models.minimax_h3.reference_video import (
     MINIMAX_H3_QWEN_VIDEO_SAMPLE_FPS,
     prepare_reference_videos,
     sample_reference_video_frames,
-)
-from vllm_omni.errors import OmniClientError
-from vllm_omni.model_executor.models.minimax_h3.conditioning import (
-    MINIMAX_H3_CONDITION_LABELS_KEY,
-    MINIMAX_H3_PRESENTATION_TASK_KEY,
 )
 
 MINIMAX_H3_DIT_STAGE_ID = 1
@@ -233,7 +233,7 @@ def text_encoder2diffusion(
 
     payload = source_outputs[0].outputs[0].multimodal_output
     conditioning = {
-        "hidden_states": payload["hidden"],
+        "hidden_states": payload["latent"],
         "token_tags": payload["meta"]["token_role_ids"].squeeze(-1),
     }
 

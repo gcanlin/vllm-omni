@@ -990,9 +990,7 @@ def test_model_path_resolver_is_generic_and_model_owned(tmp_path):
     from vllm_omni.engine.stage_init_utils import _resolve_model_path
 
     engine_args = {
-        "model_path_resolver": (
-            "vllm_omni.model_executor.models.minimax_h3.checkpoint.resolve_minimax_h3_model_root"
-        ),
+        "model_path_resolver": ("vllm_omni.model_executor.models.minimax_h3.checkpoint.resolve_minimax_h3_model_root"),
         "revision": None,
         "task_type": "ref2va",
     }

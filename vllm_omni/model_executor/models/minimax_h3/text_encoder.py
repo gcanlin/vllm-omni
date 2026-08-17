@@ -20,16 +20,16 @@ from vllm.model_executor.models.qwen3_vl import (
 from vllm.model_executor.models.utils import AutoWeightsLoader
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
+from vllm_omni.model_executor.models.minimax_h3.conditioning import (
+    MINIMAX_H3_CONDITION_LABELS_KEY,
+    MINIMAX_H3_PRESENTATION_TASK_KEY,
+)
 from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
     IMAGE_PAD,
     VIDEO_PAD,
     VISION_END,
     VISION_START,
     build_minimax_h3_presentation,
-)
-from vllm_omni.model_executor.models.minimax_h3.conditioning import (
-    MINIMAX_H3_CONDITION_LABELS_KEY,
-    MINIMAX_H3_PRESENTATION_TASK_KEY,
 )
 from vllm_omni.model_executor.models.output_templates import OmniOutput
 
