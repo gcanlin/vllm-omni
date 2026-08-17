@@ -8,5 +8,4 @@ stages:
 
   - stage_id: 1
     devices: "0,1,2,3"
-    parallel_config:
-      ulysses_degree: 4
+    ulysses_degree: 4
