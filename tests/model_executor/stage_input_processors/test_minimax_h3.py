@@ -12,17 +12,17 @@ from vllm_omni.diffusion.models.minimax_h3.pipeline_minimax_h3 import (
     _load_audio,
     resolve_minimax_h3_diffusion_model_path,
 )
-from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
-    build_minimax_h3_presentation,
-    minimax_h3_ref2va_presentation,
-    minimax_h3_ref2va_video_presentation,
-)
 from vllm_omni.model_executor.models.minimax_h3.checkpoint import (
     resolve_minimax_h3_model_root,
 )
 from vllm_omni.model_executor.models.minimax_h3.conditioning import (
     MINIMAX_H3_CONDITION_LABELS_KEY,
     MINIMAX_H3_PRESENTATION_TASK_KEY,
+)
+from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
+    build_minimax_h3_presentation,
+    minimax_h3_ref2va_presentation,
+    minimax_h3_ref2va_video_presentation,
 )
 from vllm_omni.model_executor.models.minimax_h3.text_encoder import (
     MiniMaxH3MultiModalProcessor,
@@ -230,7 +230,7 @@ def _text_encoder_source(payload, *, request_id="request-1"):
 def test_text_encoder_bridge_reads_hidden_and_token_role_metadata():
     hidden = torch.randn(4, 8)
     roles = torch.tensor([[0], [0], [1], [1]])
-    source = _text_encoder_source({"hidden": hidden, "meta": {"token_role_ids": roles}})
+    source = _text_encoder_source({"latent": hidden, "meta": {"token_role_ids": roles}})
 
     result = text_encoder2diffusion([source], {"prompt": "hello"})
 

@@ -71,8 +71,7 @@ def load_minimax_h3_images(value: Any) -> list[Image.Image]:
             image_format = str(image.format or "").lower()
             if image_format and image_format not in MINIMAX_H3_REFERENCE_IMAGE_FORMATS:
                 raise OmniClientError(
-                    "MiniMax H3 reference image must use JPG, JPEG, PNG, WEBP, "
-                    f"HEIC, or HEIF, got {image.format}"
+                    f"MiniMax H3 reference image must use JPG, JPEG, PNG, WEBP, HEIC, or HEIF, got {image.format}"
                 )
             return [image.convert("RGB")]
     if isinstance(value, Image.Image):
@@ -441,9 +440,7 @@ def build_minimax_h3_presentation(
 
     merge_length = int(merge_size) ** 2
     image_counts = (
-        [int(grid.prod().item()) // merge_length for grid in image_grid_thw]
-        if image_grid_thw is not None
-        else []
+        [int(grid.prod().item()) // merge_length for grid in image_grid_thw] if image_grid_thw is not None else []
     )
     if task == "fl2va":
         return minimax_h3_multi_image_presentation(
@@ -459,9 +456,7 @@ def build_minimax_h3_presentation(
             tokens_per_block = int(grid[1:].prod().item()) // merge_length
             video_counts.append([tokens_per_block] * block_count)
     timestamps = (
-        [[float(value) for value in group] for group in video_timestamps]
-        if video_timestamps is not None
-        else []
+        [[float(value) for value in group] for group in video_timestamps] if video_timestamps is not None else []
     )
     if video_counts:
         return minimax_h3_ref2va_video_presentation(

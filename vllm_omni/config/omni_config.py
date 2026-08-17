@@ -957,7 +957,8 @@ def _stage_engine_values(
     topology: StagePipelineConfig,
     stage_cli_overrides: Mapping[str, Any] | None = None,
 ) -> _StageEngineValues:
-    engine = _stage_engine_overrides(stage_deploy)
+    engine = _copy_value(topology.engine_defaults)
+    engine.update(_stage_engine_overrides(stage_deploy))
     # Preserve legacy ordering: topology-owned KV roles override deploy
     # extras, while an explicit CLI override remains highest priority.
     if topology.omni_kv_config:

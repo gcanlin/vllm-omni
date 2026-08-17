@@ -127,10 +127,7 @@ def _resolve_model_path(model: str, engine_args: dict[str, Any]) -> str:
         task_type=engine_args.get("task_type"),
     )
     if not isinstance(resolved, (str, os.PathLike)):
-        raise TypeError(
-            f"model path resolver {resolver_path!r} returned "
-            f"{type(resolved).__name__}, expected a path"
-        )
+        raise TypeError(f"model path resolver {resolver_path!r} returned {type(resolved).__name__}, expected a path")
     return os.fspath(resolved)
 
 
