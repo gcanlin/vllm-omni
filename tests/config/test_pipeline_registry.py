@@ -68,8 +68,8 @@ def test_register_resolver_requires_model_type(custom_resolver, clean_pipeline_r
         register_pipeline(custom_resolver)
 
 
-def test_minimax_h3_disaggregation_is_explicit_opt_in():
-    assert "minimax_h3" not in OMNI_PIPELINES
+def test_minimax_h3_uses_disaggregated_pipeline():
+    assert OMNI_PIPELINES["minimax_h3"] is OMNI_PIPELINES["minimax_h3_disaggregated"]
     pipeline = OMNI_PIPELINES["minimax_h3_disaggregated"]
     assert isinstance(pipeline, PipelineConfig)
     assert pipeline.model_type == "minimax_h3_disaggregated"

@@ -18,20 +18,14 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 from PIL import Image
-from transformers import Qwen2TokenizerFast, Qwen3VLProcessor
 from vllm.logger import init_logger
-from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
 
-from vllm_omni.diffusion import envs
 from vllm_omni.diffusion.cache.cachedit import (
     CacheDiTBackend,
     RequestScopedCacheDiTRuntime,
 )
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
-from vllm_omni.diffusion.distributed.parallel_state import (
-    get_dit_group,
-    init_world_group,
-)
+from vllm_omni.diffusion.distributed.parallel_state import get_dit_group
 from vllm_omni.diffusion.distributed.utils import get_local_device
 from vllm_omni.diffusion.forward_context import DenoiseProgressMixin
 from vllm_omni.diffusion.model_loader.diffusers_loader import (
@@ -60,10 +54,6 @@ from vllm_omni.model_executor.models.minimax_h3.conditioning import (
 from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
     MINIMAX_H3_OUTPUT_SHORT_EDGE,
     load_minimax_h3_images,
-    minimax_h3_multi_image_presentation,
-    minimax_h3_ref2va_presentation,
-    minimax_h3_ref2va_video_presentation,
-    minimax_h3_text_only_ids,
     resolve_minimax_h3_aspect_ratio,
     resolve_minimax_h3_output_canvas,
     resolve_minimax_h3_reference_image_shape,
@@ -73,7 +63,6 @@ from vllm_omni.model_executor.models.minimax_h3.reference_video import (
     load_video_audio,
     load_video_frames,
     prepare_reference_videos,
-    sample_reference_video_frames,
     validate_reference_audio_files,
     validate_reference_audio_waveforms,
 )
@@ -81,16 +70,12 @@ from vllm_omni.platforms import current_omni_platform
 from vllm_omni.quantization import (
     resolve_component_quant_config as _resolve_component_quant_config,
 )
-from vllm_omni.quantization.component_config import (
-    resolve_encoder_quant_config as _resolve_encoder_quant_config,
-)
 
 from .condition_noise import (
     minimax_h3_audio_cond_noise_aug_rows,
     minimax_h3_imgvid_cond_noise_aug_rows,
 )
 from .denoise_loop import MiniMaxH3DenoiseBranch, minimax_h3_denoise_loop
-from .encoder import MiniMaxH3Qwen3VLEncoder
 from .minimax_h3_transformer import MiniMaxH3DiTModel
 from .packed_sequence import (
     minimax_h3_packed_sequence,
@@ -126,28 +111,6 @@ MINIMAX_H3_TASK_DOWNLOAD_PATTERNS = {
     "fl2va": ["FL2VA/**"],
     "ref2va": ["Ref2VA/**"],
 }
-MINIMAX_H3_DIFFUSION_DOWNLOAD_PATTERNS = {
-    "fl2va": [
-        "FL2VA/model_index.json",
-        "FL2VA/transformer/**",
-        "FL2VA/video_vae/**",
-        "FL2VA/audio_vae/**",
-    ],
-    "ref2va": [
-        "Ref2VA/model_index.json",
-        "Ref2VA/transformer/**",
-        "Ref2VA/video_vae/**",
-        "Ref2VA/audio_vae/**",
-    ],
-    "combined": [
-        "FL2VA/model_index.json",
-        "FL2VA/transformer/**",
-        "FL2VA/video_vae/**",
-        "FL2VA/audio_vae/**",
-        "Ref2VA/model_index.json",
-        "Ref2VA/transformer/**",
-    ],
-}
 
 
 def _load_image(value: Any) -> Image.Image:
@@ -156,13 +119,6 @@ def _load_image(value: Any) -> Image.Image:
     if len(images) != 1:
         raise OmniClientError(f"MiniMax H3 expected one image, got {len(images)}")
     return images[0]
-
-
-def _resolve_minimax_h3_text_encoder_quant_config(
-    quant_config: QuantizationConfig | None,
-) -> QuantizationConfig | None:
-    resolved = _resolve_component_quant_config(quant_config, "text_encoder")
-    return _resolve_encoder_quant_config(resolved)
 
 
 def _minimax_h3_partition_for_task(
@@ -187,20 +143,15 @@ def _resolve_minimax_h3_model_root(
     model: str,
     revision: str | None,
     partition: str,
-    *,
-    load_text_encoder: bool,
 ) -> Path:
     path = Path(model)
     if path.is_dir():
         if path.name in {"FL2VA", "Ref2VA"} and (path / "model_index.json").is_file():
             return path.parent
         return path
-    if load_text_encoder:
-        allow_patterns = (
-            MINIMAX_H3_DOWNLOAD_PATTERNS if partition == "combined" else MINIMAX_H3_TASK_DOWNLOAD_PATTERNS[partition]
-        )
-    else:
-        allow_patterns = MINIMAX_H3_DIFFUSION_DOWNLOAD_PATTERNS[partition]
+    allow_patterns = (
+        MINIMAX_H3_DOWNLOAD_PATTERNS if partition == "combined" else MINIMAX_H3_TASK_DOWNLOAD_PATTERNS[partition]
+    )
     return Path(
         download_weights_from_hf_specific(
             model_name_or_path=model,
@@ -223,7 +174,6 @@ def resolve_minimax_h3_diffusion_model_path(
         model,
         revision,
         partition,
-        load_text_encoder=False,
     )
     subdir = "Ref2VA" if partition == "ref2va" else "FL2VA"
     return str(model_root / subdir)
@@ -411,23 +361,6 @@ def _broadcast_tensor(
     return output
 
 
-class _SingleRankEncoderGroup:
-    """Lightweight encoder group for ``text_encoder_tp_size == 1``.
-
-    Avoids creating a distributed ``GroupCoordinator`` with a single-member
-    rank set, which would assert on every other DiT rank that is not part of
-    the group.  The pipeline and encoder only use the attributes below, and
-    all ``world_size == 1`` code paths short-circuit before any collective.
-    """
-
-    world_size: int = 1
-    ranks: list[int] = [0]
-
-    def __init__(self, rank: int) -> None:
-        self.rank_in_group = 0 if rank == 0 else -1
-        self.device_group = None
-
-
 class MiniMaxH3Pipeline(
     nn.Module,
     DenoiseProgressMixin,
@@ -441,17 +374,15 @@ class MiniMaxH3Pipeline(
     """CFG-distilled joint video/audio generation for MiniMax H3."""
 
     _dit_modules: ClassVar[list[str]] = ["transformer", "transformers_ref"]
-    _encoder_modules: ClassVar[list[str]] = ["text_encoder"]
+    _encoder_modules: ClassVar[list[str]] = []
     _vae_modules: ClassVar[list[str]] = ["video_vae", "audio_vae"]
     _offload_plan: ClassVar[OffloadPlan] = OffloadPlan(
         offload_submodules={"token_refiner": "blocks"},
         resident_dit_paths=frozenset({"transformer"}),
-        encoder_block_attrs={"text_encoder": ("vision.blocks", "text_model.layers")},
-        on_demand_component_paths=frozenset({"text_encoder", "video_vae", "audio_vae"}),
+        on_demand_component_paths=frozenset({"video_vae", "audio_vae"}),
     )
     _PROFILER_TARGETS: ClassVar[list[str]] = [
         "_prepare_reference_videos",
-        "encode_prompt",
         "_encode_video_conditions",
         "_encode_video_audio_conditions",
         "_encode_audio_conditions",
@@ -489,7 +420,6 @@ class MiniMaxH3Pipeline(
         if int(self.parallel_config.cfg_parallel_size) != 1:
             raise ValueError("MiniMax-H3 is CFG-distilled and has no negative branch; cfg_parallel_size must be 1")
         self.device = get_local_device()
-        self.load_text_encoder = od_config.model_loaded.get("text_encoder", True)
         self.partition = _minimax_h3_partition_for_task(
             getattr(od_config, "task_type", None),
             str(od_config.model),
@@ -498,7 +428,6 @@ class MiniMaxH3Pipeline(
             str(od_config.model),
             od_config.revision,
             self.partition,
-            load_text_encoder=self.load_text_encoder,
         )
         model_path = model_root / ("Ref2VA" if self.partition == "ref2va" else "FL2VA")
         model_index = json.loads((model_path / "model_index.json").read_text(encoding="utf-8"))
@@ -570,62 +499,6 @@ class MiniMaxH3Pipeline(
                 quant_config=transformer_quant_config,
             )
 
-        if self.load_text_encoder:
-            self.tokenizer = Qwen2TokenizerFast.from_pretrained(
-                str(model_path),
-                subfolder="tokenizer",
-                local_files_only=os.path.isdir(model_path),
-            )
-            self.processor = Qwen3VLProcessor.from_pretrained(
-                str(model_path),
-                subfolder="processor",
-                local_files_only=os.path.isdir(model_path),
-            )
-        else:
-            self.tokenizer = None
-            self.processor = None
-
-        _, rank, dit_world = _dit_rank_world()
-        self._dit_rank = rank
-        if self.load_text_encoder:
-            text_encoder_tp_size = int(getattr(self.parallel_config, "text_encoder_tp_size", 1))
-            if text_encoder_tp_size < 1:
-                raise ValueError(f"text_encoder_tp_size must be >= 1, got {text_encoder_tp_size}")
-            if text_encoder_tp_size > dit_world:
-                raise ValueError(
-                    f"text_encoder_tp_size must not exceed the DiT group size ({dit_world}), got {text_encoder_tp_size}"
-                )
-            # The Qwen3-VL text model uses 64 attention heads / 8 KV heads.
-            if 64 % text_encoder_tp_size or 8 % text_encoder_tp_size:
-                raise ValueError(
-                    "text_encoder_tp_size must divide both Qwen3-VL "
-                    f"num_attention_heads (64) and num_key_value_heads (8), "
-                    f"got {text_encoder_tp_size}"
-                )
-            self.text_encoder_tp_size = text_encoder_tp_size
-            self.text_encoder_group = self._build_text_encoder_group(text_encoder_tp_size)
-            self.text_encoder = MiniMaxH3Qwen3VLEncoder(
-                os.path.join(model_path, "text_encoder"),
-                device=self.device,
-                load_model=rank < text_encoder_tp_size,
-                encoder_group=self.text_encoder_group,
-                quant_config=_resolve_minimax_h3_text_encoder_quant_config(od_config.quantization_config),
-            )
-            if rank < text_encoder_tp_size:
-                self.weights_sources.append(
-                    DiffusersPipelineLoader.ComponentSource(
-                        model_or_path=str(model_path),
-                        subfolder="text_encoder",
-                        revision=od_config.revision,
-                        prefix="text_encoder.",
-                        fall_back_to_pt=False,
-                    )
-                )
-        else:
-            self.text_encoder_tp_size = 0
-            self.text_encoder_group = None
-            self.text_encoder = None
-            self._encoder_modules = []
         stage_components = bool(
             od_config.enable_layerwise_offload or getattr(od_config, "enable_distributed_layerwise_offload", False)
         )
@@ -657,7 +530,7 @@ class MiniMaxH3Pipeline(
         def source_prefix(item: tuple[str, torch.Tensor]) -> str:
             name, _ = item
             prefix = name.partition(".")[0] + "."
-            if prefix in {"transformer.", "transformers_ref.", "text_encoder."}:
+            if prefix in {"transformer.", "transformers_ref."}:
                 return prefix
             raise ValueError(f"unexpected MiniMax-H3 weight {name!r}")
 
@@ -669,13 +542,10 @@ class MiniMaxH3Pipeline(
             loaded_prefixes.add(prefix)
             component = getattr(self, prefix.removesuffix("."))
             loaded = component.load_weights((name[len(prefix) :], tensor) for name, tensor in grouped_weights)
-            if prefix != "text_encoder.":
-                component.post_load_weights()
+            component.post_load_weights()
             loaded_with_prefix.update(prefix + name for name in loaded)
         # Both VAEs load eagerly in ``__init__`` rather than through
-        # ``weights_sources``. The text encoder uses the shared component
-        # loader so online quantization and offload processing follow the same
-        # path as the DiT.
+        # ``weights_sources``.
         for component_name in ("video_vae", "audio_vae"):
             component = getattr(self, component_name)
             if component is None:
@@ -788,240 +658,6 @@ class MiniMaxH3Pipeline(
         audio_t = MINIMAX_H3_SHAPE_PLANNER.audio_latent_t(num_frames / fps)
         return height, width, num_frames, latent_t, audio_t
 
-    def encode_prompt(
-        self,
-        *,
-        task: str,
-        prompt: str,
-        image: Image.Image | None = None,
-        images: list[Image.Image] | None = None,
-        prepared_videos: list[dict[str, Any]] | None = None,
-        condition_labels: list[tuple[str, int]] | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        _, rank, _ = _dit_rank_world()
-        hidden = None
-        tags = None
-        ids = None
-        vision_kwargs: dict[str, torch.Tensor] = {}
-        images = list(images) if images is not None else ([image] if image is not None else [])
-        if rank == 0:
-            if task == "t2va":
-                ids = minimax_h3_text_only_ids(self.tokenizer, prompt)
-                tags = torch.ones(ids.shape[0], dtype=torch.long)
-                vision_kwargs = {}
-            else:
-                image_token_counts: list[int] = []
-                if images:
-                    vision = self.processor.image_processor(
-                        images=images,
-                        return_tensors="pt",
-                    )
-                    image_grid = vision["image_grid_thw"]
-                    merge = int(self.processor.image_processor.merge_size) ** 2
-                    image_token_counts = [int(grid.prod().item()) // merge for grid in image_grid]
-                    vision_kwargs.update(
-                        {
-                            "pixel_values": vision["pixel_values"],
-                            "image_grid_thw": image_grid,
-                        }
-                    )
-
-                video_block_counts: list[list[int]] = []
-                video_block_timestamps: list[list[float]] = []
-                if prepared_videos:
-                    videos = []
-                    sampled_videos = []
-                    for index, item in enumerate(prepared_videos):
-                        sampled = sample_reference_video_frames(item["prepared_path"])
-                        videos.append(np.stack(sampled["frames"]))
-                        sampled_videos.append(sampled)
-                    vision = self.processor.video_processor(
-                        videos=videos,
-                        do_sample_frames=False,
-                        return_tensors="pt",
-                    )
-                    video_grid = vision["video_grid_thw"]
-                    merge = int(self.processor.image_processor.merge_size) ** 2
-                    for index, sampled in enumerate(sampled_videos):
-                        blocks = int(video_grid[index, 0])
-                        per_block = int(video_grid[index, 1]) * int(video_grid[index, 2]) // merge
-                        timestamps = sampled["block_timestamps"]
-                        if len(timestamps) != blocks:
-                            raise ValueError(
-                                f"video block count mismatch: processor={blocks}, timestamps={len(timestamps)}"
-                            )
-                        video_block_counts.append([per_block] * blocks)
-                        video_block_timestamps.append(timestamps)
-                    vision_kwargs.update(
-                        {
-                            "pixel_values_videos": vision["pixel_values_videos"],
-                            "video_grid_thw": video_grid,
-                        }
-                    )
-
-                if not images and not prepared_videos:
-                    raise OmniClientError(f"{task} requires an image or video condition")
-                if condition_labels is None:
-                    condition_labels = []
-                    for image_index in range(1, len(images) + 1):
-                        condition_labels.append(("image", image_index))
-                    audio_index = 0
-                    for video_index, item in enumerate(prepared_videos or (), start=1):
-                        if item["input_has_audio"]:
-                            audio_index += 1
-                            condition_labels.append(("audio", audio_index))
-                        condition_labels.append(("video", video_index))
-
-                if task == "fl2va":
-                    if prepared_videos:
-                        raise OmniClientError("fl2va does not accept video conditions")
-                    ids, tags = minimax_h3_multi_image_presentation(
-                        self.tokenizer,
-                        prompt=prompt,
-                        image_token_counts=image_token_counts,
-                    )
-                elif prepared_videos:
-                    ids, tags = minimax_h3_ref2va_video_presentation(
-                        self.tokenizer,
-                        prompt=prompt,
-                        condition_labels=condition_labels,
-                        image_token_count=image_token_counts or None,
-                        video_block_token_counts=video_block_counts,
-                        video_block_timestamps=video_block_timestamps,
-                    )
-                else:
-                    ids, tags = minimax_h3_ref2va_presentation(
-                        self.tokenizer,
-                        prompt=prompt,
-                        condition_labels=condition_labels,
-                        image_token_count=image_token_counts or None,
-                    )
-
-            logger.info(
-                "MiniMax H3 %s Qwen presentation: %d tokens%s",
-                task,
-                int(ids.shape[0]),
-                (
-                    f", {len(images)} reference images"
-                    + (f", {len(prepared_videos)} reference videos" if prepared_videos else "")
-                    if images
-                    else (f", {len(prepared_videos)} reference videos" if prepared_videos else "")
-                ),
-            )
-
-        if rank < self.text_encoder_tp_size:
-            # Distribute the encode inputs from the DiT main rank to the other
-            # encoder TP ranks, then run the distributed encode on all of them.
-            ids = self._distribute_encode_inputs(ids, vision_kwargs)
-            hidden = self._encode_text_hidden(ids, vision_kwargs)
-
-        hidden = _broadcast_tensor(
-            hidden,
-            dtype=torch.bfloat16,
-            device=self.device,
-        )
-        tags = _broadcast_tensor(
-            tags,
-            dtype=torch.long,
-            device=self.device,
-        )
-        return hidden, tags
-
-    def _build_text_encoder_group(self, text_encoder_tp_size: int) -> Any:
-        """Create the encoder tensor-parallel process group.
-
-        The encoder group covers the first ``text_encoder_tp_size`` DiT ranks
-        (the DiT group is always global ranks ``[0, dit_world)``).  Every rank
-        participates in ``new_group`` so the collective completes; ranks
-        outside the group never run encoder collectives.  For a single-rank
-        encoder we return a lightweight placeholder so non-encoder ranks do
-        not need to join a ``GroupCoordinator`` that would assert on ranks
-        outside the group.
-        """
-        if text_encoder_tp_size == 1:
-            return _SingleRankEncoderGroup(rank=self._dit_rank)
-        ranks = list(range(text_encoder_tp_size))
-        return init_world_group(
-            ranks=ranks,
-            local_rank=envs.LOCAL_RANK,
-            backend=current_omni_platform.dist_backend,
-        )
-
-    def _encoder_group_broadcast_tensor(
-        self,
-        tensor: torch.Tensor | None,
-        *,
-        dtype: torch.dtype,
-        device: torch.device,
-    ) -> torch.Tensor:
-        """Broadcast a tensor from encoder rank 0 over the encoder TP group."""
-        group = self.text_encoder_group
-        if group.world_size == 1:
-            if tensor is None:
-                raise ValueError("source tensor is required for single-rank execution")
-            return tensor.to(device=device, dtype=dtype)
-
-        shape = torch.zeros(8, dtype=torch.long, device=device)
-        if group.rank_in_group == 0:
-            if tensor is None:
-                raise ValueError("encoder rank 0 must provide a tensor to broadcast")
-            shape[0] = tensor.ndim
-            shape[1 : tensor.ndim + 1] = torch.tensor(tensor.shape, device=device)
-        torch.distributed.broadcast(shape, src=group.ranks[0], group=group.device_group)
-        ndim = int(shape[0].item())
-        tensor_shape = tuple(int(value) for value in shape[1 : ndim + 1].tolist())
-        if group.rank_in_group == 0:
-            output = tensor.to(device=device, dtype=dtype).contiguous()
-        else:
-            output = torch.empty(tensor_shape, device=device, dtype=dtype)
-        torch.distributed.broadcast(output, src=group.ranks[0], group=group.device_group)
-        return output
-
-    def _distribute_encode_inputs(
-        self,
-        ids: torch.Tensor | None,
-        vision_kwargs: dict[str, torch.Tensor],
-    ) -> torch.Tensor:
-        """Fan out encode inputs from encoder rank 0 to the encoder TP ranks.
-
-        Mutates ``vision_kwargs`` in place so every encoder rank ends up with
-        the same vision tensors, and returns the broadcast ``input_ids``.
-        """
-        keys = ("pixel_values", "image_grid_thw", "pixel_values_videos", "video_grid_thw")
-        key_dtypes = {
-            "pixel_values": torch.bfloat16,
-            "pixel_values_videos": torch.bfloat16,
-            "image_grid_thw": torch.long,
-            "video_grid_thw": torch.long,
-        }
-        group = self.text_encoder_group
-        device = self.device
-        if group.world_size == 1:
-            if ids is None:
-                raise ValueError("encoder rank 0 must produce input ids")
-            return ids.to(device=device, dtype=torch.long)
-
-        mask = torch.zeros(len(keys), dtype=torch.long, device=device)
-        if group.rank_in_group == 0:
-            for index, key in enumerate(keys):
-                mask[index] = 1 if key in vision_kwargs else 0
-        torch.distributed.broadcast(mask, src=group.ranks[0], group=group.device_group)
-
-        if group.rank_in_group == 0:
-            ids = self._encoder_group_broadcast_tensor(ids, dtype=torch.long, device=device)
-        else:
-            ids = self._encoder_group_broadcast_tensor(None, dtype=torch.long, device=device)
-        for index, key in enumerate(keys):
-            if mask[index].item() == 0:
-                continue
-            source = vision_kwargs.get(key) if group.rank_in_group == 0 else None
-            vision_kwargs[key] = self._encoder_group_broadcast_tensor(
-                source,
-                dtype=key_dtypes[key],
-                device=device,
-            )
-        return ids
-
     def _prepare_reference_videos(
         self,
         values: Any,
@@ -1039,35 +675,6 @@ class MiniMaxH3Pipeline(
             workdir=workdir,
             start_time_seconds=start_time_seconds,
         )
-
-    def _encode_text_hidden(
-        self,
-        input_ids: torch.Tensor,
-        vision_kwargs: dict[str, torch.Tensor],
-    ) -> torch.Tensor:
-        if self.od_config.enable_cpu_offload and not getattr(
-            self.od_config, "enable_distributed_layerwise_offload", False
-        ):
-            # Invoke nn.Module.__call__ so the generic model-level offloader
-            # swaps the resident DiT and encoder.
-            return self.text_encoder(input_ids, **vision_kwargs)
-
-        if self.od_config.enable_layerwise_offload or getattr(
-            self.od_config, "enable_distributed_layerwise_offload", False
-        ):
-            # Layerwise DiT offload already provides the low-residency encoder
-            # phase used by the checkpoint reference.
-            self.text_encoder.load_to_device()
-            try:
-                return self.text_encoder.encode_ids(input_ids, **vision_kwargs)
-            finally:
-                self.text_encoder.offload_to_cpu()
-
-        # Keep both Qwen and DiT resident across requests. Moving either model
-        # here makes encoder latency include a tens-of-gigabytes PCIe transfer,
-        # which defeats the no-offload contract.
-        self.text_encoder.load_to_device()
-        return self.text_encoder.encode_ids(input_ids, **vision_kwargs)
 
     def _uses_manual_component_offload(self) -> bool:
         od_config = getattr(self, "od_config", None)
@@ -1649,40 +1256,16 @@ class MiniMaxH3Pipeline(
                 validate_reference_audio_files(raw_audio)
             standalone_audios = _load_audios(raw_audio) if raw_audio is not None else []
             validate_reference_audio_waveforms(standalone_audios)
-            condition_labels: list[tuple[str, int]] = []
-            for image_index in range(1, len(prepared_images) + 1):
-                condition_labels.append(("image", image_index))
-            audio_index = 0
-            for video_index, item in enumerate(prepared_videos or (), start=1):
-                if item["input_has_audio"]:
-                    audio_index += 1
-                    condition_labels.append(("audio", audio_index))
-                condition_labels.append(("video", video_index))
-            for _ in standalone_audios:
-                audio_index += 1
-                condition_labels.append(("audio", audio_index))
-
-            if text_conditioning is not None:
-                text_embeddings = text_conditioning.hidden_states.to(
-                    device=self.device,
-                    dtype=torch.bfloat16,
-                )
-                text_tags = text_conditioning.token_tags.to(
-                    device=self.device,
-                    dtype=torch.long,
-                )
-            elif not hasattr(self, "text_encoder") or self.text_encoder is not None:
-                text_embeddings, text_tags = self.encode_prompt(
-                    task=task,
-                    prompt=prompt,
-                    images=prepared_images,
-                    prepared_videos=prepared_videos,
-                    condition_labels=condition_labels if task == "ref2va" else None,
-                )
-            else:
-                raise OmniClientError(
-                    "MiniMax H3 diffusion stage requires text_encoder_output when text_encoder is not loaded"
-                )
+            if text_conditioning is None:
+                raise OmniClientError("MiniMax H3 diffusion stage requires text_encoder_output")
+            text_embeddings = text_conditioning.hidden_states.to(
+                device=self.device,
+                dtype=torch.bfloat16,
+            )
+            text_tags = text_conditioning.token_tags.to(
+                device=self.device,
+                dtype=torch.long,
+            )
 
             # ``prepared_videos`` is intentionally ``None`` on non-zero DiT
             # ranks; the distributed video encoder broadcasts the prepared
