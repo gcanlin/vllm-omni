@@ -124,6 +124,19 @@ def _apply_diffusion_parallel_runtime_overrides(
         engine_args["parallel_config"] = parallel_config_dict
 
 
+def _normalize_diffusion_parallel_engine_args(engine_args: dict[str, Any]) -> None:
+    """Move flat diffusion parallel deploy fields into ``parallel_config``."""
+    from vllm_omni.diffusion.data import DiffusionParallelConfig
+
+    parallel_fields = frozenset(f.name for f in fields(DiffusionParallelConfig))
+    flat_overrides = {
+        key: engine_args.pop(key)
+        for key in list(engine_args)
+        if key in parallel_fields and engine_args[key] is not None
+    }
+    _apply_diffusion_parallel_runtime_overrides(engine_args, flat_overrides)
+
+
 class StageType(str, Enum):
     """Type of processing stage in the Omni pipeline."""
 
@@ -138,6 +151,27 @@ class StageExecutionType(str, Enum):
     LLM_AR = "llm_ar"
     LLM_GENERATION = "llm_generation"
     DIFFUSION = "diffusion"
+
+
+def _normalize_cpu_offload_engine_args(
+    execution_type: StageExecutionType,
+    engine_args: dict[str, Any],
+) -> None:
+    """Map the stage-level CPU offload flag to the native stage backend."""
+    if execution_type == StageExecutionType.DIFFUSION:
+        return
+
+    enable_cpu_offload = bool(engine_args.pop("enable_cpu_offload", False))
+    if not enable_cpu_offload:
+        return
+
+    offload_backend = engine_args.setdefault("offload_backend", "prefetch")
+    if offload_backend == "prefetch":
+        # Offload every decoder layer and retain two rank-local layer buffers
+        # on the accelerator so H2D copies can overlap with layer execution.
+        engine_args.setdefault("offload_group_size", 1)
+        engine_args.setdefault("offload_num_in_group", 1)
+        engine_args.setdefault("offload_prefetch_step", 2)
 
 
 def _resolve_scheduler(
@@ -384,10 +418,11 @@ class StageDeployConfig:
     diffusion_kv_cache_skip_layers: str | None = None
     auxiliary_text_encoder: str | None = None
 
-    # Runtime optimizations used by diffusion loading/execution.
+    # Runtime optimizations used by stage loading/execution.
     enable_multithread_weight_load: bool | None = None
     num_weight_load_threads: int | None = None
     enable_cpu_offload: bool | None = None
+    # Diffusion-specific offload strategies.
     enable_layerwise_offload: bool | None = None
 
     enable_distributed_layerwise_offload: bool | None = None
@@ -846,6 +881,9 @@ def _build_engine_args(
                 continue
             engine_args[k] = v
         engine_args.update(ds.engine_extras)
+    _normalize_cpu_offload_engine_args(ps.execution_type, engine_args)
+    if ps.execution_type == StageExecutionType.DIFFUSION:
+        _normalize_diffusion_parallel_engine_args(engine_args)
     # Materialize the resolved pipeline-wide async_chunk value into every
     # stage so explicit False overrides do not get lost downstream.
     engine_args["async_chunk"] = bool(deploy.async_chunk)
