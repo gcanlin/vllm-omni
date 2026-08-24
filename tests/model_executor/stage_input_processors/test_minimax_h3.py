@@ -12,6 +12,10 @@ from vllm_omni.diffusion.models.minimax_h3.pipeline_minimax_h3 import (
     _load_audio,
     resolve_minimax_h3_diffusion_model_path,
 )
+from vllm_omni.diffusion.models.minimax_h3.presentation import (
+    minimax_h3_ref2va_presentation,
+    minimax_h3_ref2va_video_presentation,
+)
 from vllm_omni.model_executor.models.minimax_h3.checkpoint import (
     resolve_minimax_h3_model_root,
     resolve_minimax_h3_partition,
@@ -20,14 +24,9 @@ from vllm_omni.model_executor.models.minimax_h3.conditioning import (
     MINIMAX_H3_CONDITION_LABELS_KEY,
     MINIMAX_H3_PRESENTATION_TASK_KEY,
 )
-from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
-    build_minimax_h3_presentation,
-    minimax_h3_ref2va_presentation,
-    minimax_h3_ref2va_video_presentation,
-)
 from vllm_omni.model_executor.models.minimax_h3.text_encoder import (
     MiniMaxH3MultiModalProcessor,
-    MiniMaxH3TextEncoder,
+    _build_minimax_h3_presentation,
 )
 from vllm_omni.model_executor.stage_input_processors.minimax_h3 import (
     _audio_items,
@@ -71,21 +70,6 @@ def test_h3_processor_reprocesses_media_instead_of_using_partial_sender_cache(mo
     apply_processor.assert_called_once_with(inputs, timing_ctx)
 
 
-def test_text_encoder_uses_standard_hidden_wire_and_role_metadata():
-    encoder = object.__new__(MiniMaxH3TextEncoder)
-    object.__setattr__(encoder, "_token_tags", torch.tensor([0, 1, 1]))
-    model_outputs = torch.randn(3, 8)
-
-    output = encoder.make_omni_output(model_outputs)
-
-    assert output.text_hidden_states is model_outputs
-    assert set(output.multimodal_outputs) == {"meta"}
-    torch.testing.assert_close(
-        output.multimodal_outputs["meta"]["token_role_ids"],
-        torch.tensor([[0], [1], [1]]),
-    )
-
-
 @pytest.mark.parametrize(
     ("value", "expected_count"),
     [
@@ -119,7 +103,7 @@ def test_prepare_ref2va_keeps_original_text_and_exact_condition_order():
         extra_args={"task": "ref2va"},
     )
 
-    transformed = prepare_text_encoder_prompt(prompt, [SimpleNamespace(), sampling])
+    transformed = prepare_text_encoder_prompt(prompt, [sampling])
 
     assert transformed["prompt"] == "hello"
     assert len(transformed["multi_modal_data"]["image"]) == 1
@@ -185,7 +169,7 @@ def test_ref2va_one_image_tokens_and_tags_match_fused_presentation():
     labels = [("image", 1), ("audio", 1)]
     image_grid = torch.tensor([[1, 4, 4]])
 
-    actual = build_minimax_h3_presentation(
+    actual = _build_minimax_h3_presentation(
         tokenizer,
         prompt="hello",
         task="ref2va",
@@ -212,7 +196,7 @@ def test_ref2va_video_tokens_and_tags_match_fused_without_outer_markers():
     video_grid = torch.tensor([[2, 4, 4]])
     timestamps = [[0.2, 0.4]]
 
-    actual = build_minimax_h3_presentation(
+    actual = _build_minimax_h3_presentation(
         tokenizer,
         prompt="hello",
         task="ref2va",
@@ -275,25 +259,3 @@ def test_diffusion_resolver_selects_startup_partition(tmp_path):
     assert resolve_minimax_h3_diffusion_model_path(str(root), None, "fl2va") == str(fl2va)
     assert resolve_minimax_h3_diffusion_model_path(str(root), None, "ref2va") == str(ref2va)
     assert resolve_minimax_h3_diffusion_model_path(str(ref2va), None, None) == str(ref2va)
-
-
-def _text_encoder_source(payload, *, request_id="request-1"):
-    completion = SimpleNamespace(multimodal_output=payload)
-    request_output = SimpleNamespace(request_id=request_id, outputs=[completion])
-    return SimpleNamespace(
-        request_id=request_id,
-        request_output=request_output,
-        outputs=request_output.outputs,
-    )
-
-
-def test_text_encoder_bridge_reads_hidden_and_token_role_metadata():
-    hidden = torch.randn(4, 8)
-    roles = torch.tensor([[0], [0], [1], [1]])
-    source = _text_encoder_source({"latent": hidden, "meta": {"token_role_ids": roles}})
-
-    result = text_encoder2diffusion([source], {"prompt": "hello"})
-
-    payload = result["additional_information"]["text_encoder_output"]
-    torch.testing.assert_close(payload["hidden_states"], hidden)
-    torch.testing.assert_close(payload["token_tags"], roles.squeeze(-1))

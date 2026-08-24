@@ -164,7 +164,6 @@ OMNI_PIPELINES: dict[str, PipelineConfig | PipelineResolverFunc] = {
     "ming_flash_omni_thinker_only": MING_FLASH_OMNI_THINKER_ONLY_PIPELINE,
     "ming_flash_omni_image": MING_FLASH_OMNI_IMAGE_PIPELINE,
     "moss_tts_nano": MOSS_TTS_NANO_PIPELINE,
-    "minimax_h3": MINIMAX_H3_PIPELINE,
     "minimax_h3_disaggregated": MINIMAX_H3_PIPELINE,
     "omnivoice": OMNIVOICE_PIPELINE,
     "moss_tts_delay": MOSS_TTS_PIPELINE,

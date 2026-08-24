@@ -135,7 +135,6 @@ class _ModelEngineOverrides(TypedDict, total=False):
     model_arch: str
     model_subdir: str
     tokenizer_subdir: str
-    model_path_resolver: str
     revision: str
     tokenizer_revision: str
     code_revision: str
@@ -216,6 +215,7 @@ class _ParallelConfigEngineOverrides(TypedDict, total=False):
     cfg_parallel_size: int
     vae_patch_parallel_size: int
     vae_parallel_mode: str
+    text_encoder_tp_size: int
     use_hsdp: bool
     mask_sp_padding: bool
     hsdp_shard_size: int
@@ -404,7 +404,6 @@ class OmniStageModelConfig:
     # StagePipelineConfig.model_subdir/tokenizer_subdir on the legacy path.
     model_subdir: str | None = None
     tokenizer_subdir: str | None = None
-    model_path_resolver: str | None = None
 
 
 @_enforce_keyword_only_init
@@ -573,6 +572,7 @@ class OmniStageDiffusionParallelConfig(OmniStageParallelConfig):
     ulysses_mode: str = "strict"
     cfg_parallel_size: int = Field(default=1, ge=1)
     vae_patch_parallel_size: int = Field(default=1, ge=1)
+    text_encoder_tp_size: int = Field(default=1, ge=1)
     vae_parallel_mode: str = "tile"
     use_hsdp: bool = False
     mask_sp_padding: bool = False
@@ -725,6 +725,7 @@ class _DiffusionConfigProjection:
         default_factory=lambda: {
             "transformer": True,
             "vae": True,
+            "text_encoder": True,
         }
     )
     override_transformer_cls_name: str | None = None
@@ -1179,8 +1180,7 @@ def _stage_engine_values(
     topology: StagePipelineConfig,
     stage_cli_overrides: Mapping[str, Any] | None = None,
 ) -> _StageEngineValues:
-    engine = _copy_value(topology.engine_defaults)
-    engine.update(_stage_engine_overrides(stage_deploy))
+    engine = _stage_engine_overrides(stage_deploy)
     # Preserve legacy ordering: topology-owned KV roles override deploy
     # extras, while an explicit CLI override remains highest priority.
     if topology.omni_kv_config:
@@ -1617,8 +1617,6 @@ def _build_model_config(
         kwargs["model_subdir"] = topology.model_subdir
     if "tokenizer_subdir" not in kwargs and topology.tokenizer_subdir is not None:
         kwargs["tokenizer_subdir"] = topology.tokenizer_subdir
-    if "model_path_resolver" not in kwargs and topology.model_path_resolver is not None:
-        kwargs["model_path_resolver"] = topology.model_path_resolver
     return cast(Any, OmniStageModelConfig)(
         default_sampling_params=default_sampling_params,
         duplex_max_sessions=duplex_max_sessions,

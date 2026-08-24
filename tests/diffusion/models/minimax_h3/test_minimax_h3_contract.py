@@ -576,6 +576,7 @@ def _distilled_pipeline(diffuse_calls, base_schedule_by_partition):
     pipeline.default_audio_shift = 3.0
     pipeline.device = torch.device("cpu")
     pipeline.od_config = SimpleNamespace()
+    pipeline.text_encoder = Mock()
     pipeline._base_schedule_by_partition = schedules
     pipeline._quality_policy = Mock()
     pipeline._quality_policy.resolve.return_value = SimpleNamespace(cache_dit=None)

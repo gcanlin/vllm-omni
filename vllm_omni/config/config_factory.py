@@ -31,8 +31,7 @@ from vllm_omni.config.stage_config import (
     merge_pipeline_deploy,
 )
 from vllm_omni.config.yaml_util import create_config
-from vllm_omni.diffusion.io_support import supports_audio_output
-from vllm_omni.diffusion.model_metadata import get_diffusion_model_metadata
+from vllm_omni.diffusion.io_support import get_diffusion_output_type
 from vllm_omni.diffusion.utils.hf_utils import _looks_like_dreamzero
 
 logger = init_logger(__name__)
@@ -114,16 +113,6 @@ class StageConfigFactory:
     reports ``qwen2``) should declare ``hf_architectures=(...)`` on their
     ``PipelineConfig`` so the factory can disambiguate via ``hf_config.architectures``.
     """
-
-    @staticmethod
-    def get_diffusion_output_type(model_class_name: str | None) -> str:
-        """Return the declared final modality for a diffusion model."""
-        declared = get_diffusion_model_metadata(model_class_name).final_output_type
-        if declared is not None:
-            return declared
-        if model_class_name and supports_audio_output(model_class_name):
-            return "audio"
-        return "image"
 
     @classmethod
     def get_pipeline_endpoint_restrictions(
@@ -651,7 +640,7 @@ class StageConfigFactory:
             },
             "engine_args": create_config(engine_args),
             "final_output": True,
-            "final_output_type": cls.get_diffusion_output_type(model_class_name),
+            "final_output_type": get_diffusion_output_type(model_class_name),
         }
 
         return [config_dict]
