@@ -119,6 +119,7 @@ _TTS_MODEL_STAGES: set[str] = (
 )
 _SAMPLING_MAX_TOKENS_TTS_MODEL_TYPES = {
     "fish_tts",
+    "moss_tts",
     "qwen3_tts",
     "voxtral_tts",
     "cosyvoice3",

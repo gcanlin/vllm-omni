@@ -2935,6 +2935,52 @@ def fish_speech_server(mocker: MockerFixture):
     server.shutdown()
 
 
+@pytest.fixture
+def moss_tts_server(mocker: MockerFixture):
+    mocker.patch.object(OmniOpenAIServingSpeech, "_load_supported_speakers", return_value=set())
+    mocker.patch.object(OmniOpenAIServingSpeech, "_load_codec_frame_rate", return_value=None)
+
+    mock_engine_client = mocker.MagicMock()
+    mock_engine_client.errored = False
+    mock_engine_client.model_config = mocker.MagicMock(model="MOSS-TTS-Local-Transformer-v1.5")
+    mock_engine_client.default_sampling_params_list = [SimpleNamespace(max_tokens=4096, seed=42)]
+    mock_engine_client.tts_batch_max_items = 32
+    mock_engine_client.generate = mocker.MagicMock(return_value="generator")
+    mock_engine_client.stage_configs = [
+        SimpleNamespace(
+            engine_args=SimpleNamespace(model_stage="moss_tts_local"),
+            tts_args={},
+        )
+    ]
+
+    mock_models = mocker.MagicMock()
+    mock_models.is_base_model.return_value = True
+
+    server = OmniOpenAIServingSpeech(
+        engine_client=mock_engine_client,
+        models=mock_models,
+        request_logger=mocker.MagicMock(),
+    )
+    yield server
+    server.shutdown()
+
+
+def test_prepare_speech_generation_overrides_moss_tts_default_max_tokens(moss_tts_server, mocker: MockerFixture):
+    moss_tts_server._build_moss_tts_params = mocker.AsyncMock(return_value={"prompt_token_ids": [1, 2, 3]})
+    request = OpenAICreateSpeechRequest(
+        input="hello moss",
+        ref_audio="https://example.com/ref.wav",
+        max_new_tokens=76,
+    )
+
+    _, generator, _ = asyncio.run(moss_tts_server._prepare_speech_generation(request))
+
+    assert generator == "generator"
+    sampling_params_list = moss_tts_server.engine_client.generate.call_args.kwargs["sampling_params_list"]
+    assert sampling_params_list[0].max_tokens == 76
+    assert moss_tts_server.engine_client.default_sampling_params_list[0].max_tokens == 4096
+
+
 class TestFishSpeechServing:
     def test_build_fish_prompt_normalizes_legacy_speaker_tags(self, fish_speech_server):
         tokenizer = _FakeFishTokenizer()
