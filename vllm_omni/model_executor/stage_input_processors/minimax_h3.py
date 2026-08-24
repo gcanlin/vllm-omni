@@ -6,31 +6,40 @@ from __future__ import annotations
 import copy
 import tempfile
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 from typing import Any
 
 import numpy as np
+import torch
 from PIL import Image
 
-from vllm_omni.errors import OmniClientError
-from vllm_omni.model_executor.models.minimax_h3.conditioning import (
-    MINIMAX_H3_CONDITION_LABELS_KEY,
-    MINIMAX_H3_PRESENTATION_TASK_KEY,
-)
-from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
+from vllm_omni.diffusion.models.minimax_h3.pipeline_minimax_h3 import (
     MINIMAX_H3_OUTPUT_SHORT_EDGE,
-    load_minimax_h3_images,
-    resolve_minimax_h3_aspect_ratio,
-    resolve_minimax_h3_output_canvas,
-    resolve_minimax_h3_reference_image_shape,
+    _load_images,
+    _reference_image_shape,
+    _resolve_minimax_h3_aspect_ratio,
+    _resolve_output_canvas,
 )
-from vllm_omni.model_executor.models.minimax_h3.reference_video import (
+from vllm_omni.diffusion.models.minimax_h3.reference_video import (
     MINIMAX_H3_QWEN_VIDEO_SAMPLE_FPS,
     prepare_reference_videos,
     sample_reference_video_frames,
 )
+from vllm_omni.errors import OmniClientError
+from vllm_omni.model_executor.models.minimax_h3.conditioning import (
+    MINIMAX_H3_CONDITION_LABELS_KEY,
+    MINIMAX_H3_PRESENTATION_TASK_KEY,
+    MiniMaxH3TextConditioning,
+)
 
-MINIMAX_H3_DIT_STAGE_ID = 1
+
+def _items(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple) and not (len(value) == 2 and isinstance(value[1], Mapping)):
+        return list(value)
+    return [value]
 
 
 def _audio_items(value: Any) -> list[Any]:
@@ -39,6 +48,15 @@ def _audio_items(value: Any) -> list[Any]:
     if isinstance(value, (list, tuple)) and len(value) == 2 and isinstance(value[1], (int, np.integer)):
         return [value]
     return list(value) if isinstance(value, (list, tuple)) else [value]
+
+
+def _request_extra_args(sampling_params_list: Sequence[Any]) -> Mapping[str, Any]:
+    merged: dict[str, Any] = {}
+    for sampling_params in sampling_params_list:
+        extra_args = getattr(sampling_params, "extra_args", None)
+        if extra_args:
+            merged.update(extra_args)
+    return merged
 
 
 def _resolve_task(
@@ -55,18 +73,25 @@ def _resolve_task(
     return "t2va"
 
 
+def _diffusion_sampling_params(sampling_params_list: Sequence[Any]) -> Any:
+    for sampling_params in reversed(sampling_params_list):
+        if hasattr(sampling_params, "height") and hasattr(sampling_params, "width"):
+            return sampling_params
+    raise RuntimeError("MiniMax H3 text encoding requires diffusion sampling parameters")
+
+
 def _prepare_qwen_images(
     task: str,
-    values: Any,
-    sampling: Any,
+    values: list[Any],
+    sampling_params_list: Sequence[Any],
 ) -> list[Any]:
-    if values is None:
+    if not values:
         return []
-    images = load_minimax_h3_images(values)
+    images = _load_images(values)
     if task == "ref2va":
         return [
             image.resize(
-                resolve_minimax_h3_reference_image_shape(image),
+                _reference_image_shape(image),
                 Image.Resampling.LANCZOS,
             )
             for image in images
@@ -74,12 +99,13 @@ def _prepare_qwen_images(
     if task != "fl2va":
         return images
 
+    sampling = _diffusion_sampling_params(sampling_params_list)
     extra_args = sampling.extra_args or {}
     target = extra_args.get("target")
     if target is not None and not isinstance(target, Mapping):
         raise OmniClientError("MiniMax H3 extra_args['target'] must be an object")
     target = target if isinstance(target, Mapping) else {}
-    aspect_ratio = resolve_minimax_h3_aspect_ratio(
+    aspect_ratio = _resolve_minimax_h3_aspect_ratio(
         task,
         target.get("aspect_ratio", extra_args.get("aspect_ratio")),
         images[0],
@@ -97,7 +123,7 @@ def _prepare_qwen_images(
             raise OmniClientError(
                 f"MiniMax H3 target.short_edge must be {MINIMAX_H3_OUTPUT_SHORT_EDGE}, got {short_edge!r}"
             )
-        height, width = resolve_minimax_h3_output_canvas(aspect_ratio, int(short_edge))
+        height, width = _resolve_output_canvas(aspect_ratio, int(short_edge))
     height = int(height) // 32 * 32
     width = int(width) // 32 * 32
     if min(height, width) <= 0:
@@ -130,28 +156,28 @@ def prepare_text_encoder_prompt(
     if not isinstance(multi_modal_data, Mapping):
         raise TypeError("multi_modal_data must be a mapping")
 
-    videos = multi_modal_data.get("video")
+    image_values = _items(multi_modal_data.get("image"))
+    videos = _items(multi_modal_data.get("video"))
     audios = _audio_items(multi_modal_data.get("audio"))
-    diffusion_sampling = sampling_params_list[MINIMAX_H3_DIT_STAGE_ID]
-    extra_args = diffusion_sampling.extra_args or {}
+    extra_args = _request_extra_args(sampling_params_list)
     task = _resolve_task(extra_args, multi_modal_data)
-    images = _prepare_qwen_images(task, multi_modal_data.get("image"), diffusion_sampling)
+    images = _prepare_qwen_images(task, image_values, sampling_params_list)
     qwen_video_inputs: list[tuple[np.ndarray, dict[str, Any]]] = []
     condition_labels: list[tuple[str, int]] = []
 
     if task == "t2va":
-        if images or videos is not None or audios:
+        if images or videos or audios:
             raise OmniClientError("t2va does not accept image, video, or audio conditions")
     elif task == "fl2va":
-        if not images or videos is not None or audios:
+        if not images or videos or audios:
             raise OmniClientError("fl2va requires image conditions only")
         condition_labels.extend(("image", index) for index in range(1, len(images) + 1))
     elif task == "ref2va":
-        if not images and videos is None:
+        if not images and not videos:
             raise OmniClientError("ref2va requires an image or video condition")
         condition_labels.extend(("image", index) for index in range(1, len(images) + 1))
         prepared_videos: list[dict[str, Any]] = []
-        if videos is not None:
+        if videos:
             with tempfile.TemporaryDirectory(prefix="minimax_h3_text_encoder_") as workdir:
                 prepared_videos = prepare_reference_videos(
                     videos,
@@ -159,11 +185,8 @@ def prepare_text_encoder_prompt(
                     workdir=workdir,
                     start_time_seconds=extra_args.get("start_time_seconds"),
                 )
-                for index, item in enumerate(prepared_videos):
-                    sampled = sample_reference_video_frames(
-                        item["prepared_path"],
-                        workdir=str(Path(workdir) / f"qwen_frames_{index}"),
-                    )
+                for item in prepared_videos:
+                    sampled = sample_reference_video_frames(item["prepared_path"])
                     frames = np.stack(sampled["frames"])
                     frame_count = int(frames.shape[0])
                     qwen_video_inputs.append(
@@ -220,25 +243,66 @@ def _original_prompt(prompt: Any) -> dict[str, Any]:
     raise TypeError(f"invalid MiniMax H3 prompt type {type(prompt)!r}")
 
 
+def _global_request_id(prompt: Mapping[str, Any]) -> str | None:
+    additional_information = prompt.get("additional_information")
+    if not isinstance(additional_information, Mapping):
+        return None
+    value = additional_information.get("global_request_id")
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else None
+    return str(value) if value is not None else None
+
+
 def text_encoder2diffusion(
     source_outputs: list[Any],
     prompt: Any = None,
     requires_multimodal_data: bool = False,
     streaming_context: Any | None = None,
 ) -> dict[str, Any] | None:
-    """Attach Stage 0 conditioning to the original request."""
+    """Attach Stage 0 hidden states and token tags to the original request."""
     del requires_multimodal_data, streaming_context
     if not source_outputs:
         return None
-
-    payload = source_outputs[0].outputs[0].multimodal_output
-    conditioning = {
-        "hidden_states": payload["latent"],
-        "token_tags": payload["meta"]["token_role_ids"].squeeze(-1),
-    }
+    if len(source_outputs) != 1:
+        raise RuntimeError(f"MiniMax H3 diffusion requires exactly one text-encoder source, got {len(source_outputs)}")
 
     diffusion_prompt = _original_prompt(prompt)
+    source_output = source_outputs[0]
+    source_request_id = getattr(source_output, "request_id", None)
+    expected_request_id = _global_request_id(diffusion_prompt)
+    if source_request_id is not None and expected_request_id is not None and str(source_request_id) != expected_request_id:
+        raise RuntimeError(
+            "MiniMax H3 text-encoder request ID does not match the diffusion request: "
+            f"source={source_request_id!r}, expected={expected_request_id!r}"
+        )
+
+    outputs = getattr(source_output, "outputs", None)
+    if not isinstance(outputs, list) or len(outputs) != 1:
+        output_count = len(outputs) if isinstance(outputs, list) else 0
+        raise RuntimeError(f"MiniMax H3 text encoder must return exactly one completion, got {output_count}")
+
+    completion = outputs[0]
+    payload = completion.multimodal_output
+    if not isinstance(payload, Mapping):
+        raise RuntimeError("MiniMax H3 text encoder returned no conditioning payload")
+    token_tags = payload.get("token_tags")
+    if not isinstance(token_tags, torch.Tensor):
+        raise RuntimeError("MiniMax H3 text encoder returned no token_tags tensor")
+    if token_tags.ndim != 2 or token_tags.shape[-1] != 1:
+        raise RuntimeError(
+            f"MiniMax H3 stage-wire token_tags must have shape [tokens, 1], got {tuple(token_tags.shape)}"
+        )
+    try:
+        conditioning = MiniMaxH3TextConditioning.from_payload(
+            {
+                "hidden_states": payload.get("encoder_hidden_states"),
+                "token_tags": token_tags.squeeze(-1),
+            }
+        )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+
     additional_information = dict(diffusion_prompt.get("additional_information") or {})
-    additional_information["text_encoder_output"] = conditioning
+    additional_information["text_encoder_output"] = conditioning.to_payload()
     diffusion_prompt["additional_information"] = additional_information
     return diffusion_prompt

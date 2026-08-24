@@ -14,6 +14,7 @@ from vllm_omni.diffusion.models.minimax_h3.pipeline_minimax_h3 import (
 )
 from vllm_omni.model_executor.models.minimax_h3.checkpoint import (
     resolve_minimax_h3_model_root,
+    resolve_minimax_h3_partition,
 )
 from vllm_omni.model_executor.models.minimax_h3.conditioning import (
     MINIMAX_H3_CONDITION_LABELS_KEY,
@@ -130,6 +131,55 @@ def test_prepare_ref2va_keeps_original_text_and_exact_condition_order():
     ]
 
 
+def test_prepare_ref2va_video_uses_shared_frame_sampler_once(mocker):
+    prepare_videos = mocker.patch(
+        "vllm_omni.model_executor.stage_input_processors.minimax_h3.prepare_reference_videos",
+        return_value=[{"prepared_path": "/tmp/prepared.mp4", "input_has_audio": True}],
+    )
+    sample_frames = mocker.patch(
+        "vllm_omni.model_executor.stage_input_processors.minimax_h3.sample_reference_video_frames",
+        return_value={"frames": [np.zeros((4, 4, 3), dtype=np.uint8)]},
+    )
+    prompt = {
+        "prompt": "hello",
+        "multi_modal_data": {"video": "/tmp/input.mp4"},
+    }
+    sampling = SimpleNamespace(height=256, width=448, extra_args={"task": "ref2va"})
+
+    transformed = prepare_text_encoder_prompt(prompt, [sampling])
+
+    prepare_videos.assert_called_once()
+    sample_frames.assert_called_once_with("/tmp/prepared.mp4")
+    assert prompt["multi_modal_data"]["video"] == "/tmp/input.mp4"
+    assert transformed["mm_processor_kwargs"][MINIMAX_H3_CONDITION_LABELS_KEY] == [
+        ("audio", 1),
+        ("video", 1),
+    ]
+
+
+def test_stage_wire_rejects_multiple_text_encoder_sources():
+    with pytest.raises(RuntimeError, match="exactly one text-encoder source"):
+        text_encoder2diffusion([SimpleNamespace(), SimpleNamespace()], prompt={"prompt": "hello"})
+
+
+def test_stage_wire_rejects_request_id_mismatch():
+    source = SimpleNamespace(request_id="other", outputs=[SimpleNamespace()])
+    prompt = {
+        "prompt": "hello",
+        "additional_information": {"global_request_id": ["req-1"]},
+    }
+
+    with pytest.raises(RuntimeError, match="request ID does not match"):
+        text_encoder2diffusion([source], prompt=prompt)
+
+
+def test_stage_wire_rejects_multiple_completions():
+    source = SimpleNamespace(request_id="req-1", outputs=[SimpleNamespace(), SimpleNamespace()])
+
+    with pytest.raises(RuntimeError, match="exactly one completion"):
+        text_encoder2diffusion([source], prompt={"prompt": "hello"})
+
+
 def test_ref2va_one_image_tokens_and_tags_match_fused_presentation():
     tokenizer = _SegmentTokenizer()
     labels = [("image", 1), ("audio", 1)]
@@ -201,6 +251,16 @@ def test_checkpoint_resolver_selects_local_partition(tmp_path):
 def test_checkpoint_resolver_rejects_unknown_task(tmp_path):
     with pytest.raises(ValueError, match="task_type must be one of"):
         resolve_minimax_h3_model_root(str(tmp_path), None, "unknown")
+
+
+def test_partition_resolver_preserves_consumer_auto_default(tmp_path):
+    root = tmp_path / "MiniMax-H3"
+    ref2va = root / "Ref2VA"
+    ref2va.mkdir(parents=True)
+
+    assert resolve_minimax_h3_partition(str(root), "auto", auto_partition="fl2va") == "fl2va"
+    assert resolve_minimax_h3_partition(str(root), "auto", auto_partition="combined") == "combined"
+    assert resolve_minimax_h3_partition(str(ref2va), "auto", auto_partition="combined") == "ref2va"
 
 
 def test_diffusion_resolver_selects_startup_partition(tmp_path):
