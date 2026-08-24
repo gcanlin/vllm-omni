@@ -1931,7 +1931,7 @@ class MiniMaxH3Pipeline(
                     device=self.device,
                     dtype=torch.long,
                 )
-            elif self.text_encoder is not None:
+            elif getattr(self, "text_encoder", None) is not None:
                 text_embeddings, text_tags = self.encode_prompt(
                     task=task,
                     prompt=prompt,

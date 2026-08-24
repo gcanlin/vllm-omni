@@ -42,6 +42,7 @@ from vllm_omni.diffusion.data import (
     parse_attention_config,
     resolve_model_class_name,
 )
+from vllm_omni.diffusion.io_support import get_diffusion_output_type
 from vllm_omni.engine.async_engine_utils import (
     SHUTDOWN_ENQUEUE_TIMEOUT_S,
     SHUTDOWN_JOIN_TIMEOUT_S,
@@ -1011,6 +1012,7 @@ class AsyncOmniEngine:
             pipeline_parallel_size = normalized_kwargs.get("pipeline_parallel_size") or 1
             vae_patch_parallel_size = normalized_kwargs.get("vae_patch_parallel_size") or 1
             vae_parallel_mode = normalized_kwargs.get("vae_parallel_mode") or "tile"
+            text_encoder_tp_size = normalized_kwargs.get("text_encoder_tp_size") or 1
             enable_expert_parallel = normalized_kwargs.get("enable_expert_parallel") or False
             use_hsdp = normalized_kwargs.get("use_hsdp", False)
             hsdp_shard_size = normalized_kwargs.get("hsdp_shard_size", -1)
@@ -1031,6 +1033,7 @@ class AsyncOmniEngine:
                 cfg_parallel_size=cfg_parallel_size,
                 vae_patch_parallel_size=vae_patch_parallel_size,
                 vae_parallel_mode=vae_parallel_mode,
+                text_encoder_tp_size=text_encoder_tp_size,
                 use_hsdp=use_hsdp,
                 hsdp_shard_size=hsdp_shard_size,
                 hsdp_replicate_size=hsdp_replicate_size,
@@ -1044,7 +1047,7 @@ class AsyncOmniEngine:
         num_devices = max(1, int(parallel_config.world_size))
         devices = ",".join(str(i) for i in range(num_devices))
         model_class_name = kwargs.get("model_class_name", None)
-        final_output_type = StageConfigFactory.get_diffusion_output_type(model_class_name)
+        final_output_type = get_diffusion_output_type(model_class_name)
 
         attention_config = None
         if (
