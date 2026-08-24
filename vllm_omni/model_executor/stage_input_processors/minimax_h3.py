@@ -270,7 +270,11 @@ def text_encoder2diffusion(
     source_output = source_outputs[0]
     source_request_id = getattr(source_output, "request_id", None)
     expected_request_id = _global_request_id(diffusion_prompt)
-    if source_request_id is not None and expected_request_id is not None and str(source_request_id) != expected_request_id:
+    if (
+        source_request_id is not None
+        and expected_request_id is not None
+        and str(source_request_id) != expected_request_id
+    ):
         raise RuntimeError(
             "MiniMax H3 text-encoder request ID does not match the diffusion request: "
             f"source={source_request_id!r}, expected={expected_request_id!r}"

@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import copy
-import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
+import regex as re
 import torch
 import torch.nn as nn
 from vllm.config import VllmConfig

@@ -140,7 +140,9 @@ class OmniOpenAIServingVideo:
         model_class_name = getattr(od_config, "model_class_name", None)
         model_archs = [model_class_name]
         for stage_config in self.stage_configs or ():
-            stage_get = stage_config.get if isinstance(stage_config, Mapping) else lambda key: getattr(stage_config, key, None)
+            stage_get = (
+                stage_config.get if isinstance(stage_config, Mapping) else lambda key: getattr(stage_config, key, None)
+            )
             engine_args = stage_get("engine_args") or {}
             model_archs.extend(
                 (
