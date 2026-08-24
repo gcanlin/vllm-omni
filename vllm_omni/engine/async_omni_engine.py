@@ -688,6 +688,15 @@ class AsyncOmniEngine:
         output_prompt_text: Any = None
         _preprocess_ms = 0.0
         if stage_type != "diffusion" and not isinstance(prompt, EngineCoreRequest):
+            # Stage transforms and downstream stages must share the same
+            # request identity, including when the transform replaces the
+            # prompt object.
+            if isinstance(prompt, dict):
+                inject_global_id(prompt, request_id)
+            elif isinstance(prompt, list):
+                for item in prompt:
+                    inject_global_id(item, request_id)
+
             prompt_transform_func = getattr(self, "prompt_transform_func", None)
             if prompt_transform_func is not None:
                 prompt = prompt_transform_func(
@@ -695,7 +704,6 @@ class AsyncOmniEngine:
                     effective_sampling_params_list,
                 )
 
-            # Inject global_request_id into the raw prompt.
             if isinstance(prompt, dict):
                 inject_global_id(prompt, request_id)
             elif isinstance(prompt, list):

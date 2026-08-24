@@ -203,12 +203,15 @@ class MiniMaxH3TextEncoder(Qwen3VLForConditionalGeneration):
             | (input_ids == self.config.image_token_id)
             | (input_ids == self.config.video_token_id)
         )
-        self._token_tags = (~visual_token).long()
-        return super().embed_input_ids(
+        token_tags = (~visual_token).long()
+        self._token_tags = None
+        embeddings = super().embed_input_ids(
             input_ids,
             multimodal_embeddings,
             is_multimodal=is_multimodal,
         )
+        self._token_tags = token_tags
+        return embeddings
 
     def make_omni_output(
         self,

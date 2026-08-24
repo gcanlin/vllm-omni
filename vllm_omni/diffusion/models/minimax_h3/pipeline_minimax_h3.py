@@ -61,6 +61,9 @@ from vllm_omni.errors import OmniClientError
 from vllm_omni.model_executor.model_loader.weight_utils import (
     download_weights_from_hf_specific,
 )
+from vllm_omni.model_executor.models.minimax_h3.checkpoint import (
+    resolve_minimax_h3_partition,
+)
 from vllm_omni.model_executor.models.minimax_h3.conditioning import (
     MiniMaxH3TextConditioning,
 )
@@ -188,18 +191,7 @@ def _minimax_h3_partition_for_task(
     task_type: str | None,
     model: str | None = None,
 ) -> str:
-    task = str(task_type or "auto").lower()
-    if task == "auto" and model is not None:
-        path = Path(model)
-        if path.is_dir() and path.name in {"FL2VA", "Ref2VA"} and (path / "model_index.json").is_file():
-            return path.name.lower()
-    if task in {"auto", "combined"}:
-        return "combined"
-    if task in {"t2va", "fl2va"}:
-        return "fl2va"
-    if task == "ref2va":
-        return "ref2va"
-    raise ValueError(f"MiniMax-H3 task_type must be one of auto, t2va, fl2va, or ref2va; got {task_type!r}")
+    return resolve_minimax_h3_partition(model or "", task_type, auto_partition="combined")
 
 
 def _resolve_minimax_h3_model_root(
@@ -251,12 +243,6 @@ def resolve_minimax_h3_diffusion_model_path(
     )
     subdir = "Ref2VA" if partition == "ref2va" else "FL2VA"
     return str(model_root / subdir)
-
-
-def _resolve_component_quant_config(quant_config, component: str):
-    if hasattr(quant_config, "resolve"):
-        return quant_config.resolve(component)
-    return quant_config
 
 
 def _minimax_h3_post_process(output, output_type: str = "np"):
