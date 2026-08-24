@@ -1526,6 +1526,28 @@ def test_r7_r8_ref2va_video_segment_matrix(monkeypatch, tmp_path, case, start_ti
     assert transcode_calls[0][1]["target_frame_count"] == 209
 
 
+def test_ref2va_transcode_zero_frame_count_keeps_video_stream(monkeypatch, tmp_path):
+    from vllm_omni.diffusion.models.minimax_h3 import reference_video as reference_video_module
+
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        reference_video_module.subprocess,
+        "run",
+        lambda command, **_kwargs: commands.append(command),
+    )
+
+    reference_video_module._transcode_reference_video(
+        "input.mp4",
+        target_width=768,
+        target_height=448,
+        target_frame_count=0,
+        workdir=str(tmp_path),
+        duration_seconds=4.0,
+    )
+
+    assert "-frames:v" not in commands[0]
+
+
 def test_ref2va_qwen_sampling_uses_one_selective_decode(monkeypatch):
     from vllm_omni.diffusion.models.minimax_h3 import reference_video as reference_video_module
 

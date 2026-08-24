@@ -834,6 +834,18 @@ def test_multi_video_generation_preserves_uploaded_files_until_generation(
     assert engine.captured_sampling_params_list[0].extra_args["duration"] == 15.0
 
 
+def test_mixed_reference_capability_uses_model_metadata_when_config_defaults_false(test_client):
+    handler = test_client.app.state.openai_serving_video
+    handler._engine_client.model_class_name = None
+    handler._engine_client.stage_configs = [
+        SimpleNamespace(engine_args={"model_class_name": "MiniMaxH3TextEncoder"}),
+        SimpleNamespace(engine_args={"model_class_name": "MiniMaxH3Pipeline"}),
+    ]
+    handler._stage_configs = handler._engine_client.stage_configs
+
+    assert handler.supports_mixed_reference_inputs
+
+
 def test_decode_video_bytes_can_keep_first_frames():
     from vllm_omni.entrypoints.openai.video_api_utils import _decode_video_bytes
 

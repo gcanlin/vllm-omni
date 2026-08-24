@@ -280,6 +280,7 @@ def _transcode_reference_video(
 ) -> str:
     output = str(Path(workdir) / "prepared.mp4")
     duration_args = ["-t", f"{float(duration_seconds):.6f}"] if duration_seconds is not None else []
+    frame_count_args = ["-frames:v", str(int(target_frame_count))] if target_frame_count > 0 else []
     subprocess.run(
         [
             "ffmpeg",
@@ -296,8 +297,7 @@ def _transcode_reference_video(
             "-vf",
             (f"fps={MINIMAX_H3_FPS:g},scale={target_width}:{target_height}:flags=lanczos,setsar=1"),
             *duration_args,
-            "-frames:v",
-            str(int(target_frame_count)),
+            *frame_count_args,
             "-metadata:s:v:0",
             "rotate=0",
             # Keep the transformed RGB pixels lossless. The same prepared
@@ -394,7 +394,7 @@ def prepare_reference_videos(
                 # bounded duration separately for audio extraction.
                 "audio_duration_seconds": min(
                     duration,
-                    float(target_frame_count) / MINIMAX_H3_FPS,
+                    float(target_frame_count) / MINIMAX_H3_FPS if target_frame_count > 0 else duration,
                 ),
             }
         )

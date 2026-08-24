@@ -11,8 +11,8 @@ Choose the topology explicitly and load its deployment defaults:
 
 ```bash
 vllm-omni serve MiniMaxAI/MiniMax-H3 \
-  --pipeline minimax_h3_disaggregated \
-  --config-file vllm_omni/deploy/minimax_h3_disaggregated.yaml
+  --omni \
+  --deploy-config vllm_omni/deploy/minimax_h3_disaggregated.yaml
 ```
 
 The default deployment assigns stage 0 to GPUs 0-1 with tensor parallel size
