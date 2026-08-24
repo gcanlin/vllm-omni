@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Stage configuration system for vLLM-Omni."""
 
 from __future__ import annotations
@@ -124,19 +124,6 @@ def _apply_diffusion_parallel_runtime_overrides(
         engine_args["parallel_config"] = parallel_config_dict
 
 
-def _normalize_diffusion_parallel_engine_args(engine_args: dict[str, Any]) -> None:
-    """Move flat diffusion parallel deploy fields into ``parallel_config``."""
-    from vllm_omni.diffusion.data import DiffusionParallelConfig
-
-    parallel_fields = frozenset(f.name for f in fields(DiffusionParallelConfig))
-    flat_overrides = {
-        key: engine_args.pop(key)
-        for key in list(engine_args)
-        if key in parallel_fields and engine_args[key] is not None
-    }
-    _apply_diffusion_parallel_runtime_overrides(engine_args, flat_overrides)
-
-
 class StageType(str, Enum):
     """Type of processing stage in the Omni pipeline."""
 
@@ -151,27 +138,6 @@ class StageExecutionType(str, Enum):
     LLM_AR = "llm_ar"
     LLM_GENERATION = "llm_generation"
     DIFFUSION = "diffusion"
-
-
-def _normalize_cpu_offload_engine_args(
-    execution_type: StageExecutionType,
-    engine_args: dict[str, Any],
-) -> None:
-    """Map the stage-level CPU offload flag to the native stage backend."""
-    if execution_type == StageExecutionType.DIFFUSION:
-        return
-
-    enable_cpu_offload = bool(engine_args.pop("enable_cpu_offload", False))
-    if not enable_cpu_offload:
-        return
-
-    offload_backend = engine_args.setdefault("offload_backend", "prefetch")
-    if offload_backend == "prefetch":
-        # Offload every decoder layer and retain two rank-local layer buffers
-        # on the accelerator so H2D copies can overlap with layer execution.
-        engine_args.setdefault("offload_group_size", 1)
-        engine_args.setdefault("offload_num_in_group", 1)
-        engine_args.setdefault("offload_prefetch_step", 2)
 
 
 def _resolve_scheduler(
@@ -219,9 +185,6 @@ class StagePipelineConfig:
     # The model keeps per-request execution state while awaiting the next
     # async chunk, so the parked request continues to consume model capacity.
     retains_state_across_chunks: bool = False
-    # Model-recommended engine defaults. Deployment YAML and CLI arguments
-    # remain authoritative and may override any value declared here.
-    engine_defaults: dict[str, Any] = field(default_factory=dict)
     sampling_constraints: dict[str, Any] = field(default_factory=dict)
     custom_process_input_func: str | None = None
     custom_process_next_stage_input_func: str | None = None
@@ -242,9 +205,6 @@ class StagePipelineConfig:
     # by ``stage_init_utils._resolve_model_tokenizer_paths``.
     model_subdir: str | None = None
     tokenizer_subdir: str | None = None
-    # Optional model-owned resolver for task-dependent checkpoint layouts.
-    # The callable receives ``model``, ``revision``, and ``task_type``.
-    model_path_resolver: str | None = None
     extras: dict[str, Any] = field(default_factory=dict)
 
 
@@ -346,6 +306,7 @@ class StageDeployConfig:
     default_sampling_params: dict[str, Any] | None = None
     default_pooling_params: dict[str, Any] | None = None
     subtalker_sampling_params: dict[str, Any] | None = None
+    silence_ban_frames: int = 0
 
     # === Generic stage engine fields ===
     # Parallelism, scheduler, and memory-capacity controls.
@@ -385,6 +346,7 @@ class StageDeployConfig:
     cfg_parallel_size: int | None = None
     vae_patch_parallel_size: int | None = None
     vae_parallel_mode: str | None = None
+    text_encoder_tp_size: int | None = None
     use_hsdp: bool | None = None
     hsdp_shard_size: int | None = None
     hsdp_replicate_size: int | None = None
@@ -399,6 +361,7 @@ class StageDeployConfig:
     diffusers_call_kwargs: dict[str, Any] | None = None
     diffusion_quantization_config: str | None = None
     diffusion_attention_backend: str | None = None
+    fastvideo_vsa_topk: int | None = None
     diffusion_attention_config: dict[str, Any] | None = None
 
     # Diffusion execution, cache, and VAE behavior.
@@ -418,11 +381,10 @@ class StageDeployConfig:
     diffusion_kv_cache_skip_layers: str | None = None
     auxiliary_text_encoder: str | None = None
 
-    # Runtime optimizations used by stage loading/execution.
+    # Runtime optimizations used by diffusion loading/execution.
     enable_multithread_weight_load: bool | None = None
     num_weight_load_threads: int | None = None
     enable_cpu_offload: bool | None = None
-    # Diffusion-specific offload strategies.
     enable_layerwise_offload: bool | None = None
 
     enable_distributed_layerwise_offload: bool | None = None
@@ -577,7 +539,13 @@ def _parse_stage_deploy(stage_data: dict[str, Any]) -> StageDeployConfig:
 
 
 _DEEP_MERGE_KEYS = frozenset(
-    {"default_sampling_params", "default_pooling_params", "subtalker_sampling_params", "engine_extras", "engine_args"}
+    {
+        "default_sampling_params",
+        "default_pooling_params",
+        "subtalker_sampling_params",
+        "engine_extras",
+        "engine_args",
+    }
 )
 
 
@@ -849,8 +817,7 @@ def _build_engine_args(
     per-stage StageDeployConfig overrides take precedence when present (e.g.
     ``engine_extras`` can still carry a stage-specific ``dtype``).
     """
-    engine_args: dict[str, Any] = dict(ps.engine_defaults)
-    engine_args["model_arch"] = ps.model_arch or pipeline.model_arch or None
+    engine_args: dict[str, Any] = {"model_arch": ps.model_arch or pipeline.model_arch or None}
     engine_args["retains_state_across_chunks"] = ps.retains_state_across_chunks
     if ps.execution_type == StageExecutionType.DIFFUSION and ps.model_arch:
         engine_args.setdefault("model_class_name", ps.model_arch)
@@ -865,8 +832,6 @@ def _build_engine_args(
         engine_args["model_subdir"] = ps.model_subdir
     if ps.tokenizer_subdir:
         engine_args["tokenizer_subdir"] = ps.tokenizer_subdir
-    if ps.model_path_resolver:
-        engine_args["model_path_resolver"] = ps.model_path_resolver
 
     # Pipeline-wide top-level DeployConfig settings, applied to every stage.
     for name in _PIPELINE_WIDE_ENGINE_FIELDS:
@@ -881,9 +846,6 @@ def _build_engine_args(
                 continue
             engine_args[k] = v
         engine_args.update(ds.engine_extras)
-    _normalize_cpu_offload_engine_args(ps.execution_type, engine_args)
-    if ps.execution_type == StageExecutionType.DIFFUSION:
-        _normalize_diffusion_parallel_engine_args(engine_args)
     # Materialize the resolved pipeline-wide async_chunk value into every
     # stage so explicit False overrides do not get lost downstream.
     engine_args["async_chunk"] = bool(deploy.async_chunk)
@@ -1005,6 +967,7 @@ def merge_pipeline_deploy(
                 scheduler_cls=ps.scheduler_cls or _scheduler_path(sched_cls),
                 hf_config_name=ps.hf_config_name,
                 is_comprehension=ps.owns_tokenizer,
+                sampling_constraints=dict(ps.sampling_constraints),
                 yaml_engine_args=engine_args,
                 yaml_runtime=runtime,
                 yaml_extras=extras,
@@ -1032,6 +995,7 @@ class StageConfig:
     scheduler_cls: str | None = None
     hf_config_name: str | None = None
     is_comprehension: bool = False
+    sampling_constraints: dict[str, Any] = field(default_factory=dict)
     yaml_engine_args: dict[str, Any] = field(default_factory=dict)
     yaml_runtime: dict[str, Any] = field(default_factory=dict)
     yaml_extras: dict[str, Any] = field(default_factory=dict)
@@ -1092,6 +1056,7 @@ class StageConfig:
             "final_output": self.final_output,
             "final_output_type": self.final_output_type,
             "is_comprehension": self.is_comprehension,
+            "sampling_constraints": dict(self.sampling_constraints),
         }
 
         if self.custom_process_input_func:

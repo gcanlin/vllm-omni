@@ -13,23 +13,32 @@ MINIMAX_H3_TEXT_ENCODER_DOWNLOAD_PATTERNS = {
 }
 
 
+def resolve_minimax_h3_partition(
+    model: str,
+    task_type: str | None,
+    *,
+    auto_partition: str,
+) -> str:
+    task = str(task_type or "auto").lower()
+    if task not in {"auto", "combined", "t2va", "fl2va", "ref2va"}:
+        raise ValueError(
+            f"MiniMax-H3 task_type must be one of auto, combined, t2va, fl2va, or ref2va; got {task_type!r}"
+        )
+    path = Path(model)
+    if task == "auto" and path.is_dir() and path.name in {"FL2VA", "Ref2VA"}:
+        return path.name.lower()
+    if task in {"auto", "combined"}:
+        return auto_partition
+    return "ref2va" if task == "ref2va" else "fl2va"
+
+
 def resolve_minimax_h3_model_root(
     model: str,
     revision: str | None,
     task_type: str | None,
 ) -> str:
-    task = str(task_type or "auto").lower()
     path = Path(model)
-    if task == "auto" and path.is_dir() and path.name in {"FL2VA", "Ref2VA"}:
-        partition = path.name.lower()
-    elif task in {"auto", "combined", "t2va", "fl2va"}:
-        partition = "fl2va"
-    elif task == "ref2va":
-        partition = "ref2va"
-    else:
-        raise ValueError(
-            f"MiniMax-H3 task_type must be one of auto, combined, t2va, fl2va, or ref2va; got {task_type!r}"
-        )
+    partition = resolve_minimax_h3_partition(model, task_type, auto_partition="fl2va")
 
     if path.is_dir():
         if path.name == "text_encoder" and (path / "config.json").is_file():
@@ -50,4 +59,4 @@ def resolve_minimax_h3_model_root(
     return str(Path(snapshot) / subdir / "text_encoder")
 
 
-__all__ = ["resolve_minimax_h3_model_root"]
+__all__ = ["resolve_minimax_h3_model_root", "resolve_minimax_h3_partition"]

@@ -11,26 +11,18 @@ _PROCESSOR = "vllm_omni.model_executor.stage_input_processors.minimax_h3"
 
 MINIMAX_H3_PIPELINE = PipelineConfig(
     model_type="minimax_h3_disaggregated",
-    diffusers_class_name="MiniMaxH3ModularPipeline",
-    diffusers_class_aliases=("MiniMaxH3Pipeline",),
     default_deploy_config_name="minimax_h3_disaggregated.yaml",
     model_arch="MiniMaxH3TextEncoder",
     stages=(
         StagePipelineConfig(
             stage_id=0,
-            model_stage="encoder",
+            model_stage="text_encoder",
             execution_type=StageExecutionType.LLM_AR,
             input_sources=(),
             owns_tokenizer=True,
             requires_multimodal_data=True,
             model_arch="MiniMaxH3TextEncoder",
-            model_path_resolver=("vllm_omni.model_executor.models.minimax_h3.checkpoint.resolve_minimax_h3_model_root"),
             engine_output_type="latent",
-            engine_defaults={
-                "max_num_seqs": 16,
-                "max_model_len": 16_384,
-                "kv_cache_memory_bytes": 16 * 1024**3,
-            },
             prompt_transform_func=f"{_PROCESSOR}.prepare_text_encoder_prompt",
             sampling_constraints={
                 "max_tokens": 1,
@@ -47,9 +39,6 @@ MINIMAX_H3_PIPELINE = PipelineConfig(
             final_output_type="video",
             requires_multimodal_data=True,
             model_arch="MiniMaxH3Pipeline",
-            model_path_resolver=(
-                "vllm_omni.diffusion.models.minimax_h3.pipeline_minimax_h3.resolve_minimax_h3_diffusion_model_path"
-            ),
             custom_process_input_func=f"{_PROCESSOR}.text_encoder2diffusion",
             omni_kv_config={"need_recv_cache": False},
         ),
