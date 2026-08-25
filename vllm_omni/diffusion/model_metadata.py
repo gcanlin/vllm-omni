@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from dataclasses import dataclass
 
@@ -82,6 +82,7 @@ _DIFFUSION_MODEL_METADATA: dict[str, DiffusionModelMetadata] = {
     "HunyuanVideo15Pipeline": DiffusionModelMetadata(final_output_type="video"),
     "HunyuanVideo15ImageToVideoPipeline": DiffusionModelMetadata(final_output_type="video"),
     "LingBotVideoPipeline": DiffusionModelMetadata(final_output_type="video"),
+    "LongCatVideoAvatarPipeline": DiffusionModelMetadata(final_output_type="video"),
     "MagiHumanPipeline": DiffusionModelMetadata(final_output_type="video"),
     "DreamIDOmniPipeline": DiffusionModelMetadata(final_output_type="video"),
     "Cosmos3OmniDiffusersPipeline": DiffusionModelMetadata(final_output_type="video"),
@@ -90,6 +91,13 @@ _DIFFUSION_MODEL_METADATA: dict[str, DiffusionModelMetadata] = {
         supports_multimodal_inputs=True,
         max_multimodal_image_inputs=1,
     ),
+}
+
+_DIFFUSION_MODEL_METADATA_ALIASES = {
+    "WanDMDPipeline": "WanPipeline",
+    "LTX2TwoStagePipeline": "LTX2Pipeline",
+    "LTX2DistilledOneStagePipeline": "LTX2DistilledPipeline",
+    "LingBotWorldCausalDMDPipeline": "LingBotVideoPipeline",
 }
 
 
@@ -101,6 +109,9 @@ def get_diffusion_model_metadata(model_class_name: str | None) -> DiffusionModel
     metadata = _DIFFUSION_MODEL_METADATA.get(model_class_name)
     if metadata is not None:
         return metadata
+    canonical_name = _DIFFUSION_MODEL_METADATA_ALIASES.get(model_class_name)
+    if canonical_name is not None:
+        return _DIFFUSION_MODEL_METADATA[canonical_name]
     # Some checkpoints report the HF architecture name diff from internal pipeline class name
     # (e.g. HunyuanImage3ForCausalMM, WanVACEPipeline, OmniVoice ...).
     from vllm_omni.diffusion.registry import _DIFFUSION_MODELS
@@ -114,5 +125,6 @@ def get_diffusion_model_metadata(model_class_name: str | None) -> DiffusionModel
         # key spaces. Aliases whose pipeline class has no metadata entry (e.g.
         # Wan22VACEPipeline, OmniVoicePipeline) still fall back to the defaults;
         # that is not a regression, it just means no capability override.
-        return _DIFFUSION_MODEL_METADATA.get(pipeline_cls_name, DiffusionModelMetadata())
+        canonical_name = _DIFFUSION_MODEL_METADATA_ALIASES.get(pipeline_cls_name, pipeline_cls_name)
+        return _DIFFUSION_MODEL_METADATA.get(canonical_name, DiffusionModelMetadata())
     return DiffusionModelMetadata()

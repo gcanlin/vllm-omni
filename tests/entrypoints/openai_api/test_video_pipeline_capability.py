@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from types import SimpleNamespace
 
 import pytest
 
+from vllm_omni.diffusion.io_support import get_diffusion_output_type
 from vllm_omni.entrypoints.openai.utils import is_video_generation_pipeline
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
@@ -48,3 +50,17 @@ def test_video_pipeline_requires_declared_final_video_stage():
 )
 def test_video_pipeline_rejects_non_video_final_outputs(stage_configs):
     assert not is_video_generation_pipeline(stage_configs)
+
+
+@pytest.mark.parametrize(
+    "model_class_name",
+    [
+        "LTX2TwoStagePipeline",
+        "LTX2DistilledOneStagePipeline",
+        "WanDMDPipeline",
+        "LingBotWorldCausalDMDPipeline",
+        "LongCatVideoAvatarPipeline",
+    ],
+)
+def test_registered_video_aliases_declare_video_output(model_class_name):
+    assert get_diffusion_output_type(model_class_name) == "video"
