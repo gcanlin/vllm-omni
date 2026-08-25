@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Regression tests for MiniMax H3's disaggregated text-encoder contract."""
 
 from types import SimpleNamespace
@@ -258,4 +259,13 @@ def test_diffusion_resolver_selects_startup_partition(tmp_path):
 
     assert resolve_minimax_h3_diffusion_model_path(str(root), None, "fl2va") == str(fl2va)
     assert resolve_minimax_h3_diffusion_model_path(str(root), None, "ref2va") == str(ref2va)
+    assert resolve_minimax_h3_diffusion_model_path(str(root), None, None) == str(root)
     assert resolve_minimax_h3_diffusion_model_path(str(ref2va), None, None) == str(ref2va)
+
+
+def test_diffusion_resolver_normalizes_partial_partition_directory(tmp_path):
+    root = tmp_path / "MiniMax-H3"
+    ref2va = root / "Ref2VA"
+    (ref2va / "text_encoder").mkdir(parents=True)
+
+    assert resolve_minimax_h3_diffusion_model_path(str(ref2va), None, "ref2va") == str(ref2va)

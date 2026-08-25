@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+
 """
 Stage initialization helpers for vLLM-Omni multi-stage runtime.
 
@@ -120,6 +123,23 @@ def _resolve_model_tokenizer_paths(model: str, engine_args: dict[str, Any]) -> s
         logger.info("[stage_init] Using tokenizer from base model path: %s", resolved_base)
 
     return model
+
+
+def _resolve_model_path(model: str, engine_args: dict[str, Any]) -> str:
+    """Apply a model-owned path resolver from stage engine args."""
+    resolver_path = engine_args.pop("model_path_resolver", None)
+    if resolver_path is None:
+        return model
+    resolver = _resolve_omni_metadata_hook(str(resolver_path))
+    if resolver is None:
+        return model
+    return str(
+        resolver(
+            model,
+            engine_args.get("revision"),
+            engine_args.get("task_type"),
+        )
+    )
 
 
 def apply_cli_tokenizer(
@@ -968,26 +988,7 @@ def _finalize_engine_args_dict(
     stage_defines_tokenizer = (
         engine_args_dict.get("tokenizer") is not None or engine_args_dict.get("tokenizer_subdir") is not None
     )
-    if engine_args_dict.get("model_arch") == "MiniMaxH3TextEncoder":
-        from vllm_omni.model_executor.models.minimax_h3.checkpoint import (
-            resolve_minimax_h3_model_root,
-        )
-
-        model = resolve_minimax_h3_model_root(
-            model,
-            engine_args_dict.get("revision"),
-            engine_args_dict.get("task_type"),
-        )
-    elif engine_args_dict.get("model_arch") == "MiniMaxH3Pipeline":
-        from vllm_omni.diffusion.models.minimax_h3.pipeline_minimax_h3 import (
-            resolve_minimax_h3_diffusion_model_path,
-        )
-
-        model = resolve_minimax_h3_diffusion_model_path(
-            model,
-            engine_args_dict.get("revision"),
-            engine_args_dict.get("task_type"),
-        )
+    model = _resolve_model_path(model, engine_args_dict)
     audex_stage = str(engine_args_dict.get("model_stage") or "")
     if audex_stage == "audex_xcodec":
         # TTA stage 1 decodes with the external XCodec1 checkpoint, not a

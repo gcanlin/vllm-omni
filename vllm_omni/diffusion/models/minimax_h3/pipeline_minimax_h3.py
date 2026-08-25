@@ -221,7 +221,7 @@ def _resolve_minimax_h3_model_root(
 ) -> Path:
     path = Path(model)
     if path.is_dir():
-        if path.name in {"FL2VA", "Ref2VA"} and (path / "model_index.json").is_file():
+        if path.name in {"FL2VA", "Ref2VA"}:
             return path.parent
         return path
     if load_text_encoder:
@@ -321,6 +321,8 @@ def resolve_minimax_h3_diffusion_model_path(
         partition,
         load_text_encoder=False,
     )
+    if partition == "combined":
+        return str(model_root)
     subdir = "Ref2VA" if partition == "ref2va" else "FL2VA"
     return str(model_root / subdir)
 

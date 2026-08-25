@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Two-stage MiniMax H3 topology."""
 
 from vllm_omni.config.stage_config import (
@@ -8,6 +9,8 @@ from vllm_omni.config.stage_config import (
 )
 
 _PROCESSOR = "vllm_omni.model_executor.stage_input_processors.minimax_h3"
+_CHECKPOINT = "vllm_omni.model_executor.models.minimax_h3.checkpoint"
+_DIFFUSION_PIPELINE = "vllm_omni.diffusion.models.minimax_h3.pipeline_minimax_h3"
 
 MINIMAX_H3_PIPELINE = PipelineConfig(
     model_type="minimax_h3_disaggregated",
@@ -29,6 +32,7 @@ MINIMAX_H3_PIPELINE = PipelineConfig(
                 "temperature": 0.0,
                 "detokenize": False,
             },
+            extras={"model_path_resolver": f"{_CHECKPOINT}.resolve_minimax_h3_model_root"},
         ),
         StagePipelineConfig(
             stage_id=1,
@@ -41,6 +45,7 @@ MINIMAX_H3_PIPELINE = PipelineConfig(
             model_arch="MiniMaxH3Pipeline",
             custom_process_input_func=f"{_PROCESSOR}.text_encoder2diffusion",
             omni_kv_config={"need_recv_cache": False},
+            extras={"model_path_resolver": f"{_DIFFUSION_PIPELINE}.resolve_minimax_h3_diffusion_model_path"},
         ),
     ),
 )
