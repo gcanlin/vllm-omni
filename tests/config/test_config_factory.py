@@ -1319,6 +1319,26 @@ stages:
         if deploy.trust_remote_code is not None:
             assert {s.yaml_engine_args.get("trust_remote_code") for s in stages} == {deploy.trust_remote_code}
 
+    def test_minimax_h3_disaggregated_defaults_match_validated_topology(self):
+        pipeline = OMNI_PIPELINES["minimax_h3_disaggregated"]
+        deploy = load_deploy_config(Path(get_deploy_config_path("minimax_h3_disaggregated.yaml")))
+        stages = merge_pipeline_deploy(pipeline, deploy)
+
+        assert stages[0].yaml_engine_args["max_num_seqs"] == 1
+        assert stages[0].yaml_extras["model_path_resolver"].endswith(".resolve_minimax_h3_model_root")
+        assert stages[1].yaml_extras["model_path_resolver"].endswith(".resolve_minimax_h3_diffusion_model_path")
+        parallel = stages[1].yaml_engine_args["parallel_config"]
+        assert parallel["tensor_parallel_size"] == 1
+        assert parallel["ulysses_degree"] == 4
+        assert parallel["vae_patch_parallel_size"] == 4
+        assert stages[1].yaml_extras["default_sampling_params"]["num_inference_steps"] == 50
+
+        turbo = load_deploy_config(Path(get_deploy_config_path("minimax_h3_disaggregated_turbo.yaml")))
+        turbo_stages = merge_pipeline_deploy(pipeline, turbo)
+        turbo_sampling = turbo_stages[1].yaml_extras["default_sampling_params"]
+        assert turbo_sampling["num_inference_steps"] == 5
+        assert turbo_sampling["extra_args"] == {"flow_shift": 6.0, "audio_flow_shift": 3.0}
+
     @pytest.mark.parametrize(
         ("config_json", "model_index", "expected_pipeline"),
         [

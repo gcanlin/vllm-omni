@@ -1,4 +1,4 @@
-# MiniMax H3: vLLM Qwen3-VL text encoder + diffusion video/audio generation.
+# MiniMax H3 Turbo: five-sigma defaults for the disaggregated topology.
 pipeline: minimax_h3_disaggregated
 async_chunk: false
 trust_remote_code: true
@@ -27,4 +27,7 @@ stages:
       vae_patch_parallel_size: 4
     default_sampling_params:
       seed: 42
-      num_inference_steps: 50
+      num_inference_steps: 5
+      extra_args:
+        flow_shift: 6.0
+        audio_flow_shift: 3.0
