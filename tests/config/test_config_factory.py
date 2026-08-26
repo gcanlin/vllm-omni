@@ -15,7 +15,11 @@ from transformers import PretrainedConfig, Qwen3OmniMoeConfig
 
 from tests.helpers.stage_config import get_deploy_config_path, get_deploy_config_stage
 from vllm_omni.config import config_factory as config_factory_module
-from vllm_omni.config.config_factory import StageConfigFactory, _materialize_object_storage_configs
+from vllm_omni.config.config_factory import (
+    StageConfigFactory,
+    _materialize_object_storage_configs,
+    _name_match_candidate,
+)
 from vllm_omni.config.endpoint_policy import EndpointRestriction, OmniServingCapability
 from vllm_omni.config.omni_config import VllmOmniConfig
 from vllm_omni.config.pipeline_registry import OMNI_PIPELINES, register_pipeline, resolve_pipeline_config
@@ -1123,8 +1127,35 @@ class TestDeployConfigLoading:
         with pytest.raises(ValueError, match=r"stage_args.*PipelineConfig.*stages"):
             load_deploy_config(deploy_path)
 
-    def test_load_minicpmo_duplex_deploy_config(self):
-        deploy_path = Path(get_deploy_config_path("minicpmo_4_5_duplex.yaml"))
+    @pytest.mark.parametrize(
+        ("filename", "max_sessions"),
+        [
+            ("minicpmo_4_5.yaml", 4),
+            ("minicpmo_4_5_2gpu.yaml", 4),
+            ("minicpmo_4_5_3gpu.yaml", 4),
+            ("minicpmo_4_5_8x4090.yaml", 1),
+            ("minicpmo_4_5_3gpu_stage1_replicas.yaml", 4),
+            ("minicpmo_4_5_4gpu_stage1_replicas.yaml", 4),
+            ("minicpmo_4_5_8x4090_stage1_replicas.yaml", 1),
+        ],
+    )
+    def test_minicpmo_deploy_configs_enable_duplex(self, filename: str, max_sessions: int):
+        """Every MiniCPM-o profile serves /v1/realtime, so the retired
+        minicpmo_4_5_duplex.yaml overlay has no replacement to fall back on.
+        """
+        deploy = load_deploy_config(Path(get_deploy_config_path(filename)))
+        pipeline = resolve_pipeline_config("minicpmo_4_5")
+        assert isinstance(pipeline, PipelineConfig)
+        stages = merge_pipeline_deploy(pipeline, deploy)
+
+        assert deploy.session_mode == "duplex"
+        assert deploy.active_stream_window == 1
+        assert deploy.duplex_session.max_sessions == max_sessions
+        assert [stage.session_mode for stage in stages] == ["duplex", "duplex", "duplex"]
+        assert [stage.to_omegaconf().session_mode for stage in stages] == ["duplex", "duplex", "duplex"]
+
+    def test_load_minicpmo_default_deploy_config(self):
+        deploy_path = Path(get_deploy_config_path("minicpmo_4_5.yaml"))
 
         deploy = load_deploy_config(deploy_path)
         pipeline = resolve_pipeline_config("minicpmo_4_5")
@@ -1132,17 +1163,15 @@ class TestDeployConfigLoading:
 
         stages = merge_pipeline_deploy(pipeline, deploy)
 
-        assert deploy.session_mode == "duplex"
         assert deploy.async_chunk is True
-        assert deploy.active_stream_window == 1
-        assert [stage.session_mode for stage in stages] == ["duplex", "duplex", "duplex"]
-        assert [stage.to_omegaconf().session_mode for stage in stages] == ["duplex", "duplex", "duplex"]
-        assert [stage.yaml_engine_args["async_scheduling"] for stage in stages] == [False, False, False]
-        assert all("Async" not in (stage.scheduler_cls or "") for stage in stages)
+        assert stages[0].yaml_engine_args["async_scheduling"] is True
+        assert stages[1].yaml_engine_args["async_scheduling"] is True
+        assert "Async" in (stages[0].scheduler_cls or "")
+        assert "Async" in (stages[1].scheduler_cls or "")
         assert [stage.devices for stage in deploy.stages] == ["0", "0", "0"]
         assert deploy.stages[1].enforce_eager is False
         assert stages[1].yaml_extras["default_sampling_params"]["max_tokens"] == 4096
-        assert stages[1].yaml_extras["default_sampling_params"]["min_tokens"] == 0
+        assert stages[1].yaml_extras["default_sampling_params"]["min_tokens"] == 50
         assert stages[1].yaml_extras["default_sampling_params"]["temperature"] == 0.8
         assert stages[1].yaml_extras["default_sampling_params"]["stop_token_ids"] == [6561]
         assert "codec_sampling_params" not in stages[1].yaml_engine_args
@@ -2180,7 +2209,8 @@ class TestBaseConfigInheritance:
     def test_minicpmo_overlays_inherit_talker_sampling_params(self):
         """Overlays must keep the base Talker codec Sampler knobs."""
         for filename in (
-            "minicpmo_4_5_duplex.yaml",
+            "minicpmo_4_5_2gpu.yaml",
+            "minicpmo_4_5_3gpu.yaml",
             "minicpmo_4_5_3gpu_stage1_replicas.yaml",
             "minicpmo_4_5_4gpu_stage1_replicas.yaml",
             "minicpmo_4_5_8x4090_stage1_replicas.yaml",
@@ -2192,9 +2222,6 @@ class TestBaseConfigInheritance:
             sampling = deploy.stages[1].default_sampling_params
             assert sampling is not None, f"{filename} stage 1 lost default_sampling_params"
             assert sampling["temperature"] == 0.8, filename
-            # Upstream utils.TTSSamplingParams. min_tokens is not checked here:
-            # the duplex overlay drops it to 0 because the model budgets each
-            # generate_chunk itself.
             assert sampling["top_k"] == 25, filename
             assert sampling["top_p"] == 0.85, filename
             assert sampling["repetition_penalty"] == 1.05, filename
@@ -2973,3 +3000,44 @@ class TestObjectStorageConfigResolution:
 
         matching = "s3://any-bucket/my-cosyvoice3-model"
         assert StageConfigFactory.try_infer_model_type(model=matching, trust_remote_code=False) == "cosyvoice3"
+
+
+class TestNameMatchCandidateSnapshotPaths:
+    """Name-based matching must survive resolved HF cache snapshot paths."""
+
+    _SNAPSHOT_REV = "29e01c4e8d000f4bcd70751be16fa94bf3d85a18"
+
+    def test_candidate_recovers_repo_name_from_hf_cache_layout(self):
+        path = f"/data/hub/models--FunAudioLLM--Fun-CosyVoice3-0.5B-2512/snapshots/{self._SNAPSHOT_REV}"
+        assert _name_match_candidate(path) == "Fun-CosyVoice3-0.5B-2512"
+        assert _name_match_candidate(path + "/") == "Fun-CosyVoice3-0.5B-2512"
+
+    def test_candidate_keeps_basename_for_non_cache_paths(self):
+        assert _name_match_candidate("org/My-Model") == "My-Model"
+        assert _name_match_candidate("/data/snapshots-of/My-Model") == "My-Model"
+        # A ``snapshots`` parent without the ``models--<org>--<name>`` encoding
+        # falls back to the basename, same as before.
+        assert _name_match_candidate(f"/data/notcache/snapshots/{self._SNAPSHOT_REV}") == self._SNAPSHOT_REV
+
+    def test_candidate_recovers_bare_repo_name_from_hf_cache_layout(self):
+        # Legacy un-namespaced repos (e.g. ``gpt2``) cache as ``models--<name>``.
+        path = f"/data/hub/models--my-cosyvoice3-model/snapshots/{self._SNAPSHOT_REV}"
+        assert _name_match_candidate(path) == "my-cosyvoice3-model"
+
+    def test_candidate_ignores_malformed_cache_repo_dirs(self):
+        # Hub validation rejects ``--`` inside repo ids, so more than three
+        # ``--``-separated segments cannot be a real cache dir; keep basename.
+        assert _name_match_candidate("/hub/models--a--b--c/snapshots/abc123") == "abc123"
+        assert _name_match_candidate("/hub/models--/snapshots/abc123") == "abc123"
+
+    def test_try_infer_model_type_matches_cosyvoice3_snapshot_dir(self, tmp_path):
+        """Regression for the HF-cache path shape: CosyVoice3 ships an empty
+        config.json and relies on name matching, but a resolved snapshot dir
+        basename is a bare revision hash, so basename-only matching (#5036)
+        misclassified it as a diffusion pipeline and stage init crashed with
+        "Diffusers pipeline index not found"."""
+        snapshot = tmp_path / "hub" / "models--FunAudioLLM--Fun-CosyVoice3-0.5B-2512" / "snapshots" / self._SNAPSHOT_REV
+        snapshot.mkdir(parents=True)
+        (snapshot / "config.json").write_text("{}")
+
+        assert StageConfigFactory.try_infer_model_type(model=str(snapshot), trust_remote_code=False) == "cosyvoice3"
