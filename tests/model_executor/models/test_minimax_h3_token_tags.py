@@ -43,3 +43,17 @@ def test_invalid_output_length_consumes_token_tags():
         model.make_omni_output(torch.zeros(1, 8))
 
     assert model._token_tags is None
+
+
+def test_make_omni_output_uses_shared_stage_payload_fields():
+    model = _model_without_weights()
+    model._token_tags = torch.tensor([1, 0])
+    hidden = torch.zeros(2, 5120)
+
+    output = model.make_omni_output(hidden)
+
+    assert output.multimodal_outputs is not None
+    assert torch.equal(output.multimodal_outputs["hidden_states"]["output"], hidden)
+    assert torch.equal(output.multimodal_outputs["meta"]["token_role_ids"], torch.tensor([[1], [0]]))
+    assert "encoder_hidden_states" not in output.multimodal_outputs
+    assert "token_tags" not in output.multimodal_outputs

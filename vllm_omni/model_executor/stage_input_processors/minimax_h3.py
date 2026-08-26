@@ -289,9 +289,18 @@ def text_encoder2diffusion(
     payload = completion.multimodal_output
     if not isinstance(payload, Mapping):
         raise RuntimeError("MiniMax H3 text encoder returned no conditioning payload")
-    token_tags = payload.get("token_tags")
+    hidden_states = payload.get("hidden_states")
+    if not isinstance(hidden_states, Mapping):
+        raise RuntimeError("MiniMax H3 text encoder returned no hidden_states payload")
+    hidden = hidden_states.get("output")
+    if not isinstance(hidden, torch.Tensor):
+        raise RuntimeError("MiniMax H3 text encoder returned no hidden_states.output tensor")
+    meta = payload.get("meta")
+    if not isinstance(meta, Mapping):
+        raise RuntimeError("MiniMax H3 text encoder returned no conditioning metadata")
+    token_tags = meta.get("token_role_ids")
     if not isinstance(token_tags, torch.Tensor):
-        raise RuntimeError("MiniMax H3 text encoder returned no token_tags tensor")
+        raise RuntimeError("MiniMax H3 text encoder returned no token_role_ids tensor")
     if token_tags.ndim != 2 or token_tags.shape[-1] != 1:
         raise RuntimeError(
             f"MiniMax H3 stage-wire token_tags must have shape [tokens, 1], got {tuple(token_tags.shape)}"
@@ -299,7 +308,7 @@ def text_encoder2diffusion(
     try:
         conditioning = MiniMaxH3TextConditioning.from_payload(
             {
-                "hidden_states": payload.get("encoder_hidden_states"),
+                "hidden_states": hidden,
                 "token_tags": token_tags.squeeze(-1),
             }
         )

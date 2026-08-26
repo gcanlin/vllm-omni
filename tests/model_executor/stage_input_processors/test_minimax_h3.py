@@ -165,6 +165,61 @@ def test_stage_wire_rejects_multiple_completions():
         text_encoder2diffusion([source], prompt={"prompt": "hello"})
 
 
+def _source_output(payload: dict) -> SimpleNamespace:
+    completion = SimpleNamespace(multimodal_output=payload)
+    return SimpleNamespace(request_id="request-1", outputs=[completion])
+
+
+def _diffusion_prompt() -> dict:
+    return {
+        "request_id": "request-1",
+        "prompt": "test prompt",
+        "additional_information": {},
+    }
+
+
+def test_text_encoder2diffusion_reads_hidden_states_output_and_token_role_ids() -> None:
+    hidden = torch.randn(4, 5120)
+    token_role_ids = torch.tensor([[1], [1], [0], [0]])
+
+    result = text_encoder2diffusion(
+        [
+            _source_output(
+                {
+                    "hidden_states": {"output": hidden},
+                    "meta": {"token_role_ids": token_role_ids},
+                }
+            )
+        ],
+        _diffusion_prompt(),
+    )
+
+    conditioning = result["additional_information"]["text_encoder_output"]
+    torch.testing.assert_close(conditioning["hidden_states"], hidden)
+    torch.testing.assert_close(conditioning["token_tags"], token_role_ids.squeeze(-1))
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({"meta": {"token_role_ids": torch.ones(4, 1)}}, "no hidden_states payload"),
+        ({"hidden_states": {}, "meta": {"token_role_ids": torch.ones(4, 1)}}, "no hidden_states.output tensor"),
+        ({"hidden_states": {"output": torch.randn(4, 5120)}}, "no conditioning metadata"),
+        ({"hidden_states": {"output": torch.randn(4, 5120)}, "meta": {}}, "no token_role_ids tensor"),
+        (
+            {
+                "hidden_states": {"output": torch.randn(4, 5120)},
+                "meta": {"token_role_ids": torch.ones(4)},
+            },
+            r"must have shape \[tokens, 1\]",
+        ),
+    ],
+)
+def test_text_encoder2diffusion_rejects_invalid_conditioning_payload(payload: dict, message: str) -> None:
+    with pytest.raises(RuntimeError, match=message):
+        text_encoder2diffusion([_source_output(payload)], _diffusion_prompt())
+
+
 def test_ref2va_one_image_tokens_and_tags_match_fused_presentation():
     tokenizer = _SegmentTokenizer()
     labels = [("image", 1), ("audio", 1)]

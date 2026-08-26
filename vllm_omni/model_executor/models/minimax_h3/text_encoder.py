@@ -311,8 +311,8 @@ class MiniMaxH3TextEncoder(Qwen3VLForConditionalGeneration):
         return OmniOutput(
             text_hidden_states=model_outputs,
             multimodal_outputs={
-                "encoder_hidden_states": model_outputs,
-                "token_tags": token_tags,
+                "hidden_states": {"output": model_outputs},
+                "meta": {"token_role_ids": token_tags},
             },
         )
 

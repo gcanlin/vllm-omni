@@ -98,17 +98,16 @@ class OmniPayloadMeta(TypedDict, total=False):
     # reproducible, and the producing stage's SamplingParams do not travel
     # with the payload.
     audio_seed: int
+    token_role_ids: torch.Tensor
 
 
 class OmniPayload(TypedDict, total=False):
     hidden_states: HiddenStates
-    encoder_hidden_states: torch.Tensor
     embed: Embeddings
     ids: Ids
     codes: Codes
     meta: OmniPayloadMeta
     latent: torch.Tensor
-    token_tags: torch.Tensor
     generated_len: int
     model_outputs: list[torch.Tensor]
     mtp_inputs: tuple[torch.Tensor, torch.Tensor]
@@ -202,18 +201,17 @@ class MetaStruct(_StructBase):
     code_flat_numel: int | None = None
     omni_final_stage_id: int | None = None
     audio_seed: int | None = None
+    token_role_ids: torch.Tensor | None = None
 
 
 class OmniPayloadStruct(_StructBase):
     hidden: torch.Tensor | None = None
     hidden_states: HiddenStatesStruct | None = None
-    encoder_hidden_states: torch.Tensor | None = None
     embed: EmbeddingsStruct | None = None
     ids: IdsStruct | None = None
     codes: CodesStruct | None = None
     meta: MetaStruct | None = None
     latent: torch.Tensor | None = None
-    token_tags: torch.Tensor | None = None
     generated_len: int | None = None
     model_outputs: list[torch.Tensor] | None = None
     mtp_inputs: tuple[torch.Tensor, torch.Tensor] | None = None
