@@ -23,10 +23,28 @@ deployment override for the available hardware. Diffusion quantization,
 layerwise offload, distributed layerwise offload, VAE parallelism, and USP
 settings use the same stage 1 options documented in [MiniMax-H3.md](MiniMax-H3.md).
 
+For example, this five-GPU topology assigns one GPU to the encoder and four
+to the diffusion stage. `--stage-overrides` keeps placement and parallelism
+scoped to the owning stage rather than broadcasting an override to both:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4 \
+vllm-omni serve MiniMaxAI/MiniMax-H3 \
+  --omni \
+  --deploy-config vllm_omni/deploy/minimax_h3_disaggregated.yaml \
+  --stage-overrides '{"0":{"devices":"0","tensor_parallel_size":1},"1":{"devices":"1,2,3,4","tensor_parallel_size":1,"ulysses_degree":4,"vae_patch_parallel_size":4}}'
+```
+
+For memory-constrained deployments, start from the CPU-offload or distributed
+layerwise-offload profiles in [MiniMax-H3.md](MiniMax-H3.md). Apply those
+diffusion options to stage 1 with `--stage-overrides`; retain the encoder's
+BF16 configuration and the video/audio VAEs' FP32 precision.
+
 Stage 1 sets `model_loaded.text_encoder: false`; it must not load or download
-text-encoder weights. The initial topology uses the standard stage subprocess
-transport and expects all stages to run in one deployment. Cross-node payload
-transport and inline multi-stage diffusion are outside this configuration.
+text-encoder weights. This H3 topology explicitly keeps its single-replica
+diffusion stage inline, avoiding serialization of decoded video through a
+subprocess. It expects both stages to run in one deployment; cross-node payload
+transport is outside this configuration.
 
 The `/v1/videos` request schema and `extra_params.task` values (`t2va`,
 `fl2va`, and `ref2va`) are unchanged from the single-stage recipe.
