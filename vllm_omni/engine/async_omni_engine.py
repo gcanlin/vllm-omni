@@ -69,6 +69,7 @@ from vllm_omni.engine.messages import (
 )
 from vllm_omni.engine.orchestrator import Orchestrator
 from vllm_omni.engine.rpc_result_router import CorrelatedRpcClient
+from vllm_omni.engine.serialization import deserialize_additional_information
 from vllm_omni.engine.stage_client import StageClient
 from vllm_omni.engine.stage_init_utils import build_stage0_input_processor
 from vllm_omni.engine.stage_pool import StagePool
@@ -1437,7 +1438,9 @@ class AsyncOmniEngine:
                 effective_spl = msg.sampling_params_list
                 stage0_params = effective_spl[0] if effective_spl else None
                 if stage0_params is not None:
-                    companions = self._build_cfg_companions(request_id, msg.original_prompt, stage0_params, effective_spl)
+                    companions = self._build_cfg_companions(
+                        request_id, msg.original_prompt, stage0_params, effective_spl
+                    )
 
             self.request_queue.sync_q.put(msg)
         except BaseException:
