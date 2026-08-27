@@ -1034,7 +1034,7 @@ def test_text_attention_routes_local_gqa_heads_through_sdpa_helper(monkeypatch):
         config.hidden_size,
         bias=False,
     )
-    attn_call = {}
+    attn_call: dict[str, object] = {}
 
     def fake_attention(query, key, value):
         attn_call.update(query_shape=query.shape, key_shape=key.shape, value_shape=value.shape)
@@ -1056,7 +1056,7 @@ def test_text_attention_routes_local_gqa_heads_through_sdpa_helper(monkeypatch):
 def test_text_attention_sdpa_helper_preserves_expanded_kv_fallback(monkeypatch):
     from vllm_omni.diffusion.models.minimax_h3 import encoder as encoder_module
 
-    sdpa_call = {}
+    sdpa_call: dict[str, object] = {}
 
     def fake_sdpa(query, key, value, **kwargs):
         sdpa_call.update(query_shape=query.shape, key_shape=key.shape, value_shape=value.shape, kwargs=kwargs)

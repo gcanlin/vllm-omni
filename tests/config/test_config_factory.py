@@ -1365,11 +1365,9 @@ stages:
         assert stages[-1].final_output is True
         assert stages[-1].final_output_type == final_output_type
         if pipeline_name == "minimax_h3_disaggregated":
-            assert stages[0].yaml_engine_args["model_path_resolver"].endswith(
-                ".resolve_minimax_h3_model_root"
-            )
-            assert stages[1].yaml_engine_args["model_path_resolver"].endswith(
-                ".resolve_minimax_h3_diffusion_model_path"
+            assert stages[0].yaml_engine_args["model_path_resolver"].endswith(".resolve_minimax_h3_model_root")
+            assert (
+                stages[1].yaml_engine_args["model_path_resolver"].endswith(".resolve_minimax_h3_diffusion_model_path")
             )
             assert "model_path_resolver" not in stages[0].yaml_extras
             assert "model_path_resolver" not in stages[1].yaml_extras
@@ -1387,10 +1385,7 @@ stages:
         deploy = load_deploy_config(get_deploy_config_path("minimax_h3_disaggregated.yaml"))
         assert deploy.stages[1].engine_extras["model_loaded"] == {"text_encoder": False}
         stages = merge_pipeline_deploy(OMNI_PIPELINES["minimax_h3_disaggregated"], deploy)
-        resolved = [
-            stage_init_utils.build_engine_args_dict(stage.to_omegaconf(), str(model_root))
-            for stage in stages
-        ]
+        resolved = [stage_init_utils.build_engine_args_dict(stage.to_omegaconf(), str(model_root)) for stage in stages]
 
         assert resolved[0]["model"] == str(model_root / "FL2VA" / "text_encoder")
         assert resolved[1]["model"] == str(model_root / "FL2VA")

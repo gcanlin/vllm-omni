@@ -68,6 +68,35 @@ from vllm_omni.model_executor.models.minimax_h3.checkpoint import (
 from vllm_omni.model_executor.models.minimax_h3.conditioning import (
     MiniMaxH3TextConditioning,
 )
+from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
+    load_minimax_h3_images as _load_images,
+)
+from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
+    minimax_h3_multi_image_presentation,
+    minimax_h3_ref2va_presentation,
+    minimax_h3_ref2va_video_presentation,
+    minimax_h3_text_only_ids,
+)
+from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
+    resolve_minimax_h3_aspect_ratio as _resolve_minimax_h3_aspect_ratio,
+)
+from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
+    resolve_minimax_h3_output_canvas as _resolve_output_canvas,
+)
+from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
+    resolve_minimax_h3_reference_image_shape as _reference_image_shape,
+)
+from vllm_omni.model_executor.models.minimax_h3.reference_video import (
+    MINIMAX_H3_PREPARED_REFERENCE_VIDEOS_KEY,
+    deserialize_prepared_reference_videos,
+    load_audio_file,
+    load_video_audio,
+    load_video_frames,
+    prepare_reference_videos,
+    sample_reference_video_frames,
+    validate_reference_audio_files,
+    validate_reference_audio_waveforms,
+)
 from vllm_omni.platforms import current_omni_platform
 from vllm_omni.quantization import (
     resolve_component_quant_config as _resolve_component_quant_config,
@@ -103,28 +132,7 @@ from .packed_tokens import (
     minimax_h3_unpack_audio_tokens,
     minimax_h3_unpatchify_video_tokens,
 )
-from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
-    load_minimax_h3_images as _load_images,
-    minimax_h3_multi_image_presentation,
-    minimax_h3_ref2va_presentation,
-    minimax_h3_ref2va_video_presentation,
-    minimax_h3_text_only_ids,
-    resolve_minimax_h3_aspect_ratio as _resolve_minimax_h3_aspect_ratio,
-    resolve_minimax_h3_output_canvas as _resolve_output_canvas,
-    resolve_minimax_h3_reference_image_shape as _reference_image_shape,
-)
 from .quality_policy import MINIMAX_H3_GENERIC_CACHE_KEY, MiniMaxH3QualityPolicy
-from vllm_omni.model_executor.models.minimax_h3.reference_video import (
-    MINIMAX_H3_PREPARED_REFERENCE_VIDEOS_KEY,
-    deserialize_prepared_reference_videos,
-    load_audio_file,
-    load_video_audio,
-    load_video_frames,
-    prepare_reference_videos,
-    sample_reference_video_frames,
-    validate_reference_audio_files,
-    validate_reference_audio_waveforms,
-)
 from .scheduling_minimax_h3_euler_ancestral import (
     minimax_h3_euler_eta0_step,
     minimax_h3_rf_v_to_x0,

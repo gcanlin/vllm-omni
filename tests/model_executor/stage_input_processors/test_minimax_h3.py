@@ -16,14 +16,7 @@ from vllm_omni.diffusion.models.minimax_h3.pipeline_minimax_h3 import (
     _load_audio,
     resolve_minimax_h3_diffusion_model_path,
 )
-from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
-    minimax_h3_ref2va_presentation,
-    minimax_h3_ref2va_video_presentation,
-)
-from vllm_omni.model_executor.models.minimax_h3.reference_video import (
-    MINIMAX_H3_PREPARED_REFERENCE_VIDEOS_KEY,
-    deserialize_prepared_reference_videos,
-)
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.model_executor.models.minimax_h3.checkpoint import (
     resolve_minimax_h3_model_root,
     resolve_minimax_h3_partition,
@@ -31,6 +24,14 @@ from vllm_omni.model_executor.models.minimax_h3.checkpoint import (
 from vllm_omni.model_executor.models.minimax_h3.conditioning import (
     MINIMAX_H3_CONDITION_LABELS_KEY,
     MINIMAX_H3_PRESENTATION_TASK_KEY,
+)
+from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
+    minimax_h3_ref2va_presentation,
+    minimax_h3_ref2va_video_presentation,
+)
+from vllm_omni.model_executor.models.minimax_h3.reference_video import (
+    MINIMAX_H3_PREPARED_REFERENCE_VIDEOS_KEY,
+    deserialize_prepared_reference_videos,
 )
 from vllm_omni.model_executor.models.minimax_h3.text_encoder import (
     MiniMaxH3MultiModalProcessor,
@@ -42,7 +43,6 @@ from vllm_omni.model_executor.stage_input_processors.minimax_h3 import (
     prepare_text_encoder_prompt,
     text_encoder2diffusion,
 )
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -142,9 +142,7 @@ def test_prepare_ref2va_keeps_original_text_and_exact_condition_order():
 def test_text_encoder_prompt_rejects_injected_prepared_video_descriptor():
     prompt = {
         "prompt": "hello",
-        "additional_information": {
-            "meta": {MINIMAX_H3_PREPARED_REFERENCE_VIDEOS_KEY: '{"artifact_dir":"/tmp/user"}'}
-        },
+        "additional_information": {"meta": {MINIMAX_H3_PREPARED_REFERENCE_VIDEOS_KEY: '{"artifact_dir":"/tmp/user"}'}},
     }
     sampling = OmniDiffusionSamplingParams(height=256, width=448, extra_args={"task": "t2va"})
 
@@ -196,7 +194,7 @@ def test_prepare_ref2va_video_uses_shared_frame_sampler_once(monkeypatch):
     assert described_dir == artifact_dir
     assert os.path.isfile(described_videos[0]["prepared_path"])
     sample_frames.assert_called_once_with(described_videos[0]["prepared_path"])
-    assert prompt["multi_modal_data"]["video"] == "/tmp/input.mp4"
+    assert prompt["multi_modal_data"] == {"video": "/tmp/input.mp4"}
     assert transformed["mm_processor_kwargs"][MINIMAX_H3_CONDITION_LABELS_KEY] == [
         ("audio", 1),
         ("video", 1),

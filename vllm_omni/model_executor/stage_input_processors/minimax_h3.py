@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """MiniMax H3 text-encoder stage input and output adapters."""
 
 from __future__ import annotations
@@ -17,6 +18,11 @@ from vllm_omni.data_entry_keys import REQUEST_ARTIFACT_DIRS_KEY
 from vllm_omni.diffusion.models.minimax_h3.time_request import minimax_h3_align_frame_count
 from vllm_omni.errors import OmniClientError
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
+from vllm_omni.model_executor.models.minimax_h3.conditioning import (
+    MINIMAX_H3_CONDITION_LABELS_KEY,
+    MINIMAX_H3_PRESENTATION_TASK_KEY,
+    MiniMaxH3TextConditioning,
+)
 from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
     MINIMAX_H3_OUTPUT_SHORT_EDGE,
     load_minimax_h3_images,
@@ -25,16 +31,11 @@ from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
     resolve_minimax_h3_reference_image_shape,
 )
 from vllm_omni.model_executor.models.minimax_h3.reference_video import (
-    MINIMAX_H3_QWEN_VIDEO_SAMPLE_FPS,
     MINIMAX_H3_PREPARED_REFERENCE_VIDEOS_KEY,
+    MINIMAX_H3_QWEN_VIDEO_SAMPLE_FPS,
     prepare_reference_videos,
     sample_reference_video_frames,
     serialize_prepared_reference_videos,
-)
-from vllm_omni.model_executor.models.minimax_h3.conditioning import (
-    MINIMAX_H3_CONDITION_LABELS_KEY,
-    MINIMAX_H3_PRESENTATION_TASK_KEY,
-    MiniMaxH3TextConditioning,
 )
 
 
