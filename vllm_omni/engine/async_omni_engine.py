@@ -1103,6 +1103,17 @@ class AsyncOmniEngine:
                 fastvideo_vsa_topk=kwargs.get("fastvideo_vsa_topk"),
             )
 
+        extras = dict(kwargs.get("extras") or {})
+        for key, default in (
+            ("auxiliary_text_encoder", None),
+            ("default_llama_model_id", "meta-llama/Meta-Llama-3.1-8B-Instruct"),
+        ):
+            top_level_value = kwargs.get(key)
+            if top_level_value is not None:
+                extras[key] = top_level_value
+            else:
+                extras.setdefault(key, default)
+
         stage_engine_args = {
             "max_num_seqs": kwargs.get("max_num_seqs") or 1,
             "parallel_config": parallel_config,
@@ -1163,10 +1174,7 @@ class AsyncOmniEngine:
             "enable_diffusion_pipeline_profiler": kwargs.get("enable_diffusion_pipeline_profiler", False),
             "streaming_output": kwargs.get("diffusion_streaming_output", False),
             "enable_ar_profiler": kwargs.get("enable_ar_profiler", False),
-            "extras": {
-                "auxiliary_text_encoder": kwargs.get("auxiliary_text_encoder", None),
-                "default_llama_model_id": kwargs.get("default_llama_model_id", "meta-llama/Meta-Llama-3.1-8B-Instruct"),
-            },
+            "extras": extras,
             **(
                 {
                     "profiler_config": asdict(kwargs["profiler_config"])
@@ -1256,16 +1264,34 @@ class AsyncOmniEngine:
         # Parse --stage-overrides JSON string if provided
         stage_overrides = parse_stage_overrides(stage_overrides_json)
 
+        # Unregistered diffusion checkpoints use the single-stage fallback
+        # below instead of StageConfigFactory, so fold stage-0 model extras
+        # into the fallback's input as well.  Registered pipelines still get
+        # the complete override mapping through load_and_resolve_stage_configs.
+        default_stage_kwargs = kwargs
+        stage_zero_overrides = (stage_overrides or {}).get("0", {})
+        if "extras" in stage_zero_overrides:
+            override_extras = stage_zero_overrides["extras"]
+            if not isinstance(override_extras, Mapping):
+                raise TypeError("stage 0 extras must be a mapping")
+            default_stage_kwargs = {
+                **kwargs,
+                "extras": {
+                    **(kwargs.get("extras") or {}),
+                    **override_extras,
+                },
+            }
+
         def create_default_stage_config() -> list:
-            default_stage_kwargs = dict(kwargs)
-            if not default_stage_kwargs.get("model_class_name"):
+            fallback_kwargs = dict(default_stage_kwargs)
+            if not fallback_kwargs.get("model_class_name"):
                 model_class_name = resolve_model_class_name(
                     model,
-                    default_stage_kwargs.get("diffusion_load_format", "default"),
+                    fallback_kwargs.get("diffusion_load_format", "default"),
                 )
                 if model_class_name is not None:
-                    default_stage_kwargs["model_class_name"] = model_class_name
-            return self._create_default_diffusion_stage_cfg(default_stage_kwargs)
+                    fallback_kwargs["model_class_name"] = model_class_name
+            return self._create_default_diffusion_stage_cfg(fallback_kwargs)
 
         config_path, stage_configs, strategy_lb_policy = load_and_resolve_stage_configs(
             model,
