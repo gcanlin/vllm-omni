@@ -240,7 +240,7 @@ def _diffusion_prompt() -> dict:
     }
 
 
-def test_text_encoder2diffusion_reads_hidden_states_output_and_token_role_ids() -> None:
+def test_text_encoder2diffusion_reads_hidden_and_token_role_ids() -> None:
     hidden = torch.randn(4, 5120)
     token_role_ids = torch.tensor([[1], [1], [0], [0]])
 
@@ -248,7 +248,7 @@ def test_text_encoder2diffusion_reads_hidden_states_output_and_token_role_ids() 
         [
             _source_output(
                 {
-                    "hidden_states": {"output": hidden},
+                    "hidden": hidden,
                     "meta": {"token_role_ids": token_role_ids},
                 }
             )
@@ -264,13 +264,12 @@ def test_text_encoder2diffusion_reads_hidden_states_output_and_token_role_ids() 
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
-        ({"meta": {"token_role_ids": torch.ones(4, 1)}}, "no hidden_states payload"),
-        ({"hidden_states": {}, "meta": {"token_role_ids": torch.ones(4, 1)}}, "no hidden_states.output tensor"),
-        ({"hidden_states": {"output": torch.randn(4, 5120)}}, "no conditioning metadata"),
-        ({"hidden_states": {"output": torch.randn(4, 5120)}, "meta": {}}, "no token_role_ids tensor"),
+        ({"meta": {"token_role_ids": torch.ones(4, 1)}}, "no hidden tensor"),
+        ({"hidden": torch.randn(4, 5120)}, "no conditioning metadata"),
+        ({"hidden": torch.randn(4, 5120), "meta": {}}, "no token_role_ids tensor"),
         (
             {
-                "hidden_states": {"output": torch.randn(4, 5120)},
+                "hidden": torch.randn(4, 5120),
                 "meta": {"token_role_ids": torch.ones(4)},
             },
             r"must have shape \[tokens, 1\]",

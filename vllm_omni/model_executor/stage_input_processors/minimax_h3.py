@@ -331,12 +331,9 @@ def text_encoder2diffusion(
     payload = completion.multimodal_output
     if not isinstance(payload, Mapping):
         raise RuntimeError("MiniMax H3 text encoder returned no conditioning payload")
-    hidden_states = payload.get("hidden_states")
-    if not isinstance(hidden_states, Mapping):
-        raise RuntimeError("MiniMax H3 text encoder returned no hidden_states payload")
-    hidden = hidden_states.get("output")
+    hidden = payload.get("hidden")
     if not isinstance(hidden, torch.Tensor):
-        raise RuntimeError("MiniMax H3 text encoder returned no hidden_states.output tensor")
+        raise RuntimeError("MiniMax H3 text encoder returned no hidden tensor")
     meta = payload.get("meta")
     if not isinstance(meta, Mapping):
         raise RuntimeError("MiniMax H3 text encoder returned no conditioning metadata")
