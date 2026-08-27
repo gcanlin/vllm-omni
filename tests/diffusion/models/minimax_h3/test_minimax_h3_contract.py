@@ -132,6 +132,19 @@ def test_encoder_free_stage_skips_text_encoder_during_dlo_discovery():
     assert discovered.vae_names == ["video_vae", "audio_vae"]
 
 
+def test_encoder_free_stage_skips_missing_component_during_dlo_registration():
+    from vllm_omni.diffusion.models.minimax_h3 import pipeline_minimax_h3 as pipeline_module
+
+    cache = Mock()
+    video_vae = Mock()
+    audio_vae = Mock()
+
+    pipeline_module._register_dlo_component_cache(cache, None, video_vae, audio_vae)
+
+    video_vae.set_omni_component_cache.assert_called_once_with(cache)
+    audio_vae.set_omni_component_cache.assert_called_once_with(cache)
+
+
 def _write_partition_index(path, *, partition, tasks):
     path.mkdir(parents=True)
     (path / "model_index.json").write_text(

@@ -1420,6 +1420,7 @@ stages:
         assert parallel["tensor_parallel_size"] == 1
         assert parallel["ulysses_degree"] == 4
         assert parallel["vae_patch_parallel_size"] == 4
+        assert stages[1].yaml_engine_args["inline_diffusion"] is True
         assert stages[1].yaml_extras["default_sampling_params"]["num_inference_steps"] == 50
 
         turbo = load_deploy_config(Path(get_deploy_config_path("minimax_h3_disaggregated_turbo.yaml")))

@@ -245,6 +245,10 @@ class StagePipelineConfig:
     # Model-owned hook that resolves a pipeline root to this stage's checkpoint.
     # Consumed and removed before backend engine args are constructed.
     model_path_resolver: str | None = None
+    # Keep a single-replica diffusion stage in the orchestrator process.
+    # Disabled by default so existing multi-stage pipelines retain subprocess
+    # isolation unless their topology explicitly opts in.
+    inline_diffusion: bool = False
     # Whether the non-async path waits for a complete upstream payload from
     # the model-runner connector before scheduling this stage.
     requires_full_payload_input: bool = False
@@ -882,6 +886,7 @@ def _build_engine_args(
         engine_args["tokenizer_subdir"] = ps.tokenizer_subdir
     if ps.model_path_resolver:
         engine_args["model_path_resolver"] = ps.model_path_resolver
+    engine_args["inline_diffusion"] = ps.inline_diffusion
 
     # Pipeline-wide top-level DeployConfig settings, applied to every stage.
     for name in _PIPELINE_WIDE_ENGINE_FIELDS:

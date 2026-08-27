@@ -360,6 +360,12 @@ def _minimax_h3_post_process(output, output_type: str = "np"):
     }
 
 
+def _register_dlo_component_cache(cache: BoundedAllocatorCache, *components: Any) -> None:
+    for component in components:
+        if component is not None:
+            component.set_omni_component_cache(cache)
+
+
 def get_minimax_h3_post_process_func(
     od_config: OmniDiffusionConfig,
 ):
@@ -904,8 +910,12 @@ class MiniMaxH3Pipeline(
         self._dlo_component_cache = None
         if getattr(od_config, "enable_distributed_layerwise_offload", False):
             self._dlo_component_cache = BoundedAllocatorCache(self.device)
-            for component in (self.text_encoder, self.video_vae, self.audio_vae):
-                component.set_omni_component_cache(self._dlo_component_cache)
+            _register_dlo_component_cache(
+                self._dlo_component_cache,
+                self.text_encoder,
+                self.video_vae,
+                self.audio_vae,
+            )
 
         self._quality_policy = MiniMaxH3QualityPolicy(od_config)
         self._cache_dit_runtime = RequestScopedCacheDiTRuntime(self)

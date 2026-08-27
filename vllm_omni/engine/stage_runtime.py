@@ -660,12 +660,10 @@ class StageRuntime:
                     metadata=plan.metadata,
                     stage_init_timeout=stage_init_timeout,
                     batch_size=self._diffusion_batch_size,
-                    # A colocated single-replica diffusion stage can stay in
-                    # the orchestrator process even when an upstream stage is
-                    # present. This avoids serializing large diffusion outputs
-                    # through StageDiffusionProc solely because the pipeline
-                    # has more than one logical stage.
-                    use_inline=plan.num_replicas == 1,
+                    use_inline=(
+                        plan.num_replicas == 1
+                        and bool(getattr(plan.stage_cfg, "engine_args", {}).get("inline_diffusion", False))
+                    ),
                     replica_id=plan.replica_id,
                     omni_master_server=self._get_omni_master_server(),
                     omni_coordinator_address=self._get_coordinator_address(),

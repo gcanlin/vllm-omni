@@ -47,6 +47,7 @@ MINIMAX_H3_PIPELINE = PipelineConfig(
             custom_process_input_func=f"{_PROCESSOR}.text_encoder2diffusion",
             omni_kv_config={"need_recv_cache": False},
             model_path_resolver=f"{_DIFFUSION_PIPELINE}.resolve_minimax_h3_diffusion_model_path",
+            inline_diffusion=True,
         ),
     ),
 )
