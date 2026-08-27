@@ -36,9 +36,25 @@ vllm-omni serve MiniMaxAI/MiniMax-H3 \
 ```
 
 For memory-constrained deployments, start from the CPU-offload or distributed
-layerwise-offload profiles in [MiniMax-H3.md](MiniMax-H3.md). Apply those
-diffusion options to stage 1 with `--stage-overrides`; retain the encoder's
-BF16 configuration and the video/audio VAEs' FP32 precision.
+layerwise-offload profiles in [MiniMax-H3.md](MiniMax-H3.md). Apply memory and
+quantization options only to Stage 1 with `--stage-overrides`; retain the
+encoder's BF16 configuration and the video/audio VAEs' FP32 precision. Select
+one offload strategy per deployment:
+
+```bash
+# Stage 1 model-level CPU offload.
+--stage-overrides '{"1":{"enable_cpu_offload":true}}'
+
+# Stage 1 distributed layerwise offload. Tune resident layers for available RAM.
+--stage-overrides '{"1":{"enable_distributed_layerwise_offload":true,"dlo_use_allgather":false,"dlo_resident_layers":20}}'
+
+# Stage 1 online FP8 quantization of the DiT only.
+--stage-overrides '{"1":{"diffusion_quantization_config":"{\"transformer\":{\"method\":\"fp8\"}}"}}'
+```
+
+The Stage 1 VAE patch-parallel options remain independent of offload and
+quantization. See [MiniMax-H3.md](MiniMax-H3.md) for memory requirements and
+hardware-qualified profiles before combining these options.
 
 Stage 1 sets `model_loaded.text_encoder: false`; it must not load or download
 text-encoder weights. This H3 topology explicitly keeps its single-replica
