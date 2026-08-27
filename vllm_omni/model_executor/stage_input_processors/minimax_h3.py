@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+import shutil
 import tempfile
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -12,19 +13,23 @@ import numpy as np
 import torch
 from PIL import Image
 
-from vllm_omni.diffusion.models.minimax_h3.pipeline_minimax_h3 import (
+from vllm_omni.data_entry_keys import REQUEST_ARTIFACT_DIRS_KEY
+from vllm_omni.diffusion.models.minimax_h3.time_request import minimax_h3_align_frame_count
+from vllm_omni.errors import OmniClientError
+from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
     MINIMAX_H3_OUTPUT_SHORT_EDGE,
-    _load_images,
-    _reference_image_shape,
-    _resolve_minimax_h3_aspect_ratio,
-    _resolve_output_canvas,
+    load_minimax_h3_images,
+    resolve_minimax_h3_aspect_ratio,
+    resolve_minimax_h3_output_canvas,
+    resolve_minimax_h3_reference_image_shape,
 )
-from vllm_omni.diffusion.models.minimax_h3.reference_video import (
+from vllm_omni.model_executor.models.minimax_h3.reference_video import (
     MINIMAX_H3_QWEN_VIDEO_SAMPLE_FPS,
+    MINIMAX_H3_PREPARED_REFERENCE_VIDEOS_KEY,
     prepare_reference_videos,
     sample_reference_video_frames,
+    serialize_prepared_reference_videos,
 )
-from vllm_omni.errors import OmniClientError
 from vllm_omni.model_executor.models.minimax_h3.conditioning import (
     MINIMAX_H3_CONDITION_LABELS_KEY,
     MINIMAX_H3_PRESENTATION_TASK_KEY,
@@ -80,6 +85,21 @@ def _diffusion_sampling_params(sampling_params_list: Sequence[Any]) -> Any:
     raise RuntimeError("MiniMax H3 text encoding requires diffusion sampling parameters")
 
 
+def _ref2va_target_frame_count(sampling_params_list: Sequence[Any]) -> int:
+    sampling = _diffusion_sampling_params(sampling_params_list)
+    extra_args = sampling.extra_args or {}
+    target = extra_args.get("target")
+    target = target if isinstance(target, Mapping) else {}
+    duration = target.get("duration_seconds", extra_args.get("duration_seconds", extra_args.get("duration")))
+    if duration is not None:
+        requested = int(round(float(duration) * 24))
+    elif int(getattr(sampling, "num_frames", None) or 1) > 1:
+        requested = int(sampling.num_frames)
+    else:
+        requested = 124
+    return minimax_h3_align_frame_count(requested)
+
+
 def _prepare_qwen_images(
     task: str,
     values: list[Any],
@@ -87,11 +107,11 @@ def _prepare_qwen_images(
 ) -> list[Any]:
     if not values:
         return []
-    images = _load_images(values)
+    images = load_minimax_h3_images(values)
     if task == "ref2va":
         return [
             image.resize(
-                _reference_image_shape(image),
+                resolve_minimax_h3_reference_image_shape(image),
                 Image.Resampling.LANCZOS,
             )
             for image in images
@@ -105,7 +125,7 @@ def _prepare_qwen_images(
     if target is not None and not isinstance(target, Mapping):
         raise OmniClientError("MiniMax H3 extra_args['target'] must be an object")
     target = target if isinstance(target, Mapping) else {}
-    aspect_ratio = _resolve_minimax_h3_aspect_ratio(
+    aspect_ratio = resolve_minimax_h3_aspect_ratio(
         task,
         target.get("aspect_ratio", extra_args.get("aspect_ratio")),
         images[0],
@@ -123,7 +143,7 @@ def _prepare_qwen_images(
             raise OmniClientError(
                 f"MiniMax H3 target.short_edge must be {MINIMAX_H3_OUTPUT_SHORT_EDGE}, got {short_edge!r}"
             )
-        height, width = _resolve_output_canvas(aspect_ratio, int(short_edge))
+        height, width = resolve_minimax_h3_output_canvas(aspect_ratio, int(short_edge))
     height = int(height) // 32 * 32
     width = int(width) // 32 * 32
     if min(height, width) <= 0:
@@ -148,6 +168,13 @@ def prepare_text_encoder_prompt(
         return prompt
     if not isinstance(prompt, dict):
         raise TypeError(f"MiniMax H3 expects a string or dict prompt, got {type(prompt)!r}")
+
+    prompt = copy.copy(prompt)
+    additional_information = dict(prompt.get("additional_information") or {})
+    meta = dict(additional_information.get("meta") or {})
+    meta.pop(MINIMAX_H3_PREPARED_REFERENCE_VIDEOS_KEY, None)
+    additional_information["meta"] = meta
+    prompt["additional_information"] = additional_information
 
     text = str(prompt.get("prompt") or "")
     if not text:
@@ -177,12 +204,14 @@ def prepare_text_encoder_prompt(
             raise OmniClientError("ref2va requires an image or video condition")
         condition_labels.extend(("image", index) for index in range(1, len(images) + 1))
         prepared_videos: list[dict[str, Any]] = []
+        artifact_dir: str | None = None
         if videos:
-            with tempfile.TemporaryDirectory(prefix="minimax_h3_text_encoder_") as workdir:
+            artifact_dir = tempfile.mkdtemp(prefix="minimax_h3_ref2va_")
+            try:
                 prepared_videos = prepare_reference_videos(
                     videos,
-                    target_frame_count=0,
-                    workdir=workdir,
+                    target_frame_count=_ref2va_target_frame_count(sampling_params_list),
+                    workdir=artifact_dir,
                     start_time_seconds=extra_args.get("start_time_seconds"),
                 )
                 for item in prepared_videos:
@@ -202,6 +231,9 @@ def prepare_text_encoder_prompt(
                             },
                         )
                     )
+            except BaseException:
+                shutil.rmtree(artifact_dir, ignore_errors=True)
+                raise
         audio_index = 0
         for video_index, item in enumerate(prepared_videos, start=1):
             if item["input_has_audio"]:
@@ -218,6 +250,16 @@ def prepare_text_encoder_prompt(
     if isinstance(prompt.get("additional_information"), Mapping):
         transformed["additional_information"] = dict(prompt["additional_information"])
     transformed["prompt"] = text
+    if task == "ref2va" and prepared_videos and artifact_dir is not None:
+        additional_information = dict(transformed.get("additional_information") or {})
+        meta = dict(additional_information.get("meta") or {})
+        meta[MINIMAX_H3_PREPARED_REFERENCE_VIDEOS_KEY] = serialize_prepared_reference_videos(
+            prepared_videos,
+            artifact_dir,
+        )
+        additional_information["meta"] = meta
+        transformed["additional_information"] = additional_information
+        transformed[REQUEST_ARTIFACT_DIRS_KEY] = [artifact_dir]
     qwen_mm_data = dict(multi_modal_data)
     qwen_mm_data.pop("audio", None)
     if images:

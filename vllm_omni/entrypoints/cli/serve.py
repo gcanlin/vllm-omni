@@ -821,7 +821,7 @@ class OmniServeCommand(CLISubcommand):
         omni_config_group.add_argument(
             "--text-encoder-tp-size",
             type=int,
-            default=1,
+            default=None,
             help="Tensor-parallel degree for the diffusion text encoder. "
             "Shards the encoder across the first N DiT ranks. "
             "Equivalent to setting DiffusionParallelConfig.text_encoder_tp_size.",

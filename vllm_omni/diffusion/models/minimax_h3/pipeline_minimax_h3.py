@@ -103,15 +103,20 @@ from .packed_tokens import (
     minimax_h3_unpack_audio_tokens,
     minimax_h3_unpatchify_video_tokens,
 )
-from .presentation import (
-    minimax_h3_multi_image_presentation_ids,
-    minimax_h3_multi_image_presentation_token_tags,
+from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
+    load_minimax_h3_images as _load_images,
+    minimax_h3_multi_image_presentation,
     minimax_h3_ref2va_presentation,
     minimax_h3_ref2va_video_presentation,
     minimax_h3_text_only_ids,
+    resolve_minimax_h3_aspect_ratio as _resolve_minimax_h3_aspect_ratio,
+    resolve_minimax_h3_output_canvas as _resolve_output_canvas,
+    resolve_minimax_h3_reference_image_shape as _reference_image_shape,
 )
 from .quality_policy import MINIMAX_H3_GENERIC_CACHE_KEY, MiniMaxH3QualityPolicy
-from .reference_video import (
+from vllm_omni.model_executor.models.minimax_h3.reference_video import (
+    MINIMAX_H3_PREPARED_REFERENCE_VIDEOS_KEY,
+    deserialize_prepared_reference_videos,
     load_audio_file,
     load_video_audio,
     load_video_frames,
@@ -315,7 +320,11 @@ def resolve_minimax_h3_diffusion_model_path(
     task_type: str | None,
 ) -> str:
     """Resolve a repository root or Hub ID to its startup partition."""
-    partition = _minimax_h3_partition_for_task(task_type, model)
+    partition = (
+        "combined"
+        if str(task_type or "").lower() == "combined"
+        else resolve_minimax_h3_partition(model, task_type, auto_partition="fl2va")
+    )
     model_root = _resolve_minimax_h3_model_root(
         model,
         revision,
@@ -367,39 +376,6 @@ def _load_image(value: Any) -> Image.Image:
     if len(images) != 1:
         raise OmniClientError(f"MiniMax H3 expected one image, got {len(images)}")
     return images[0]
-
-
-def _load_images(value: Any) -> list[Image.Image]:
-    if isinstance(value, (list, tuple)):
-        if not value:
-            raise OmniClientError("MiniMax H3 image input must not be empty")
-        return [_load_image(item) for item in value]
-    if isinstance(value, (str, os.PathLike)):
-        file_size = os.path.getsize(value)
-        if file_size > MINIMAX_H3_MAX_REFERENCE_IMAGE_BYTES:
-            raise OmniClientError("MiniMax H3 reference image exceeds the 30 MiB size limit")
-        with Image.open(value) as image:
-            image_format = str(image.format or "").lower()
-            if image_format and image_format not in MINIMAX_H3_REFERENCE_IMAGE_FORMATS:
-                raise OmniClientError(
-                    f"MiniMax H3 reference image must use JPG, JPEG, PNG, WEBP, HEIC, or HEIF, got {image.format}"
-                )
-            return [image.convert("RGB")]
-    if isinstance(value, Image.Image):
-        return [value.convert("RGB")]
-    if isinstance(value, torch.Tensor):
-        tensor = value.detach().float().cpu()
-        if tensor.ndim == 4 and tensor.shape[0] == 1:
-            tensor = tensor[0]
-        if tensor.ndim != 3:
-            raise OmniClientError(f"image tensor must be [C,H,W], got {tuple(tensor.shape)}")
-        if tensor.shape[0] in (1, 3, 4):
-            tensor = tensor.permute(1, 2, 0)
-        array = tensor.numpy()
-        if array.max(initial=0) <= 1.0:
-            array = array * 255.0
-        return [Image.fromarray(array.clip(0, 255).astype(np.uint8)).convert("RGB")]
-    raise OmniClientError(f"unsupported MiniMax H3 image input {type(value)!r}")
 
 
 def _load_audio(value: Any) -> tuple[torch.Tensor, int]:
@@ -464,6 +440,21 @@ def _resolve_fl2va_keyframe_indices(extra: Mapping[str, Any], image_count: int) 
     return raw_indices
 
 
+def _reuse_prepared_reference_videos(
+    prepared: list[dict[str, Any]] | None,
+    *,
+    expected_count: int,
+) -> list[dict[str, Any]] | None:
+    if prepared is None:
+        return None
+    if len(prepared) != expected_count:
+        raise OmniClientError("MiniMax H3 prepared-reference-video count does not match the request")
+    for item in prepared:
+        if not os.path.isfile(item["prepared_path"]):
+            raise OmniClientError(f"MiniMax H3 prepared reference video is unavailable: {item['prepared_path']}")
+    return prepared
+
+
 def _validate_ref2va_reference_counts(
     image_count: int,
     video_count: int,
@@ -482,55 +473,6 @@ def _validate_ref2va_reference_counts(
         raise OmniClientError("ref2va accepts at most 3 standalone audio references")
     if image_count + video_count + audio_count > 12:
         raise OmniClientError("ref2va accepts at most 12 total references")
-
-
-def _resolve_minimax_h3_aspect_ratio(
-    task: str,
-    value: Any,
-    image: Image.Image | None,
-) -> float:
-    """Resolve H3's task-specific ratio policy.
-
-    T2VA must name one of the official ratios.  FL2VA always follows the
-    first input image, even when a generic client sends ``aspect_ratio``.
-    Ref2VA defaults to 16:9; ``adaptive``/``auto`` are retained as aliases
-    for that default for compatibility with existing clients.
-    """
-    if task == "fl2va":
-        if image is None:
-            raise OmniClientError("fl2va requires an input image to resolve its aspect ratio")
-        return float(image.width) / float(image.height)
-
-    if value is None:
-        if task == "t2va":
-            raise OmniClientError("t2va requires an explicit aspect_ratio")
-        return MINIMAX_H3_SUPPORTED_ASPECT_RATIOS["16:9"]
-
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"adaptive", "auto"}:
-            if task == "t2va":
-                raise OmniClientError("t2va requires an explicit named aspect_ratio, not adaptive")
-            return MINIMAX_H3_SUPPORTED_ASPECT_RATIOS["16:9"]
-        if normalized in MINIMAX_H3_SUPPORTED_ASPECT_RATIOS:
-            return MINIMAX_H3_SUPPORTED_ASPECT_RATIOS[normalized]
-        try:
-            numeric_value = float(normalized)
-        except (TypeError, ValueError) as exc:
-            supported = ", ".join(MINIMAX_H3_SUPPORTED_ASPECT_RATIOS)
-            raise OmniClientError(f"MiniMax H3 aspect_ratio must be one of {supported}, got {value!r}") from exc
-    elif isinstance(value, (int, float, np.integer, np.floating)) and not isinstance(value, bool):
-        numeric_value = float(value)
-    else:
-        raise OmniClientError(f"MiniMax H3 aspect_ratio must be a string ratio, got {value!r}")
-
-    if not math.isfinite(numeric_value) or not any(
-        math.isclose(numeric_value, ratio, rel_tol=0.0, abs_tol=1e-6)
-        for ratio in MINIMAX_H3_SUPPORTED_ASPECT_RATIOS.values()
-    ):
-        supported = ", ".join(MINIMAX_H3_SUPPORTED_ASPECT_RATIOS)
-        raise OmniClientError(f"MiniMax H3 aspect_ratio must be one of {supported}, got {value!r}")
-    return numeric_value
 
 
 def _resolve_minimax_h3_num_outputs(value: Any) -> int:
@@ -648,49 +590,6 @@ def _broadcast_tensor(
         output = torch.empty(tensor_shape, device=device, dtype=dtype)
     dist.broadcast(output, src=0, group=group)
     return output
-
-
-def _reference_image_shape(image: Image.Image) -> tuple[int, int]:
-    width, height = image.size
-    ratio = width / height
-    if not 0.4 <= ratio <= 2.5:
-        raise OmniClientError(f"reference image aspect ratio must be in [0.4, 2.5], got {width}x{height}")
-    if min(width, height) < 256 or max(width, height) > 5760:
-        raise OmniClientError(f"reference image dimensions must be in [256, 5760] pixels, got {width}x{height}")
-    scale = MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE / min(width, height)
-    return (
-        _align_multiple(
-            width * scale,
-            MINIMAX_H3_REFERENCE_IMAGE_MULTIPLE,
-        ),
-        _align_multiple(
-            height * scale,
-            MINIMAX_H3_REFERENCE_IMAGE_MULTIPLE,
-        ),
-    )
-
-
-def _resolve_output_canvas(aspect_ratio: float, short_edge: int) -> tuple[int, int]:
-    """Resolve the official H3 ratio/area policy to a 32-pixel canvas."""
-    if not math.isfinite(float(aspect_ratio)) or float(aspect_ratio) <= 0:
-        raise OmniClientError(f"MiniMax H3 canvas aspect ratio must be positive, got {aspect_ratio!r}")
-    if short_edge != MINIMAX_H3_OUTPUT_SHORT_EDGE:
-        raise OmniClientError(f"MiniMax H3 target.short_edge must be {MINIMAX_H3_OUTPUT_SHORT_EDGE}, got {short_edge}")
-    if aspect_ratio >= 1.0:
-        width = float(short_edge) * aspect_ratio
-        height = float(short_edge)
-    else:
-        width = float(short_edge)
-        height = float(short_edge) / aspect_ratio
-    area = width * height
-    if area > MINIMAX_H3_OUTPUT_MAX_PIXELS:
-        scale = (MINIMAX_H3_OUTPUT_MAX_PIXELS / area) ** 0.5
-        width *= scale
-        height *= scale
-    return (
-        _align_multiple(height, 32),
-        _align_multiple(width, 32),
-    )
 
 
 class _SingleRankEncoderGroup:
@@ -1244,12 +1143,7 @@ class MiniMaxH3Pipeline(
                 if task == "fl2va":
                     if prepared_videos:
                         raise OmniClientError("fl2va does not accept video conditions")
-                    ids = minimax_h3_multi_image_presentation_ids(
-                        self.tokenizer,
-                        prompt=prompt,
-                        image_token_counts=image_token_counts,
-                    )
-                    tags = minimax_h3_multi_image_presentation_token_tags(
+                    ids, tags = minimax_h3_multi_image_presentation(
                         self.tokenizer,
                         prompt=prompt,
                         image_token_counts=image_token_counts,
@@ -2053,6 +1947,23 @@ class MiniMaxH3Pipeline(
         except ValueError as exc:
             raise OmniClientError(str(exc)) from exc
 
+    @staticmethod
+    def _extract_prepared_reference_videos(raw_prompt: Any) -> list[dict[str, Any]] | None:
+        if isinstance(raw_prompt, str):
+            return None
+        additional_information = raw_prompt.get("additional_information") or {}
+        meta = additional_information.get("meta") or {}
+        descriptor = meta.get(MINIMAX_H3_PREPARED_REFERENCE_VIDEOS_KEY)
+        if descriptor is None:
+            return None
+        if not isinstance(descriptor, str):
+            raise OmniClientError("MiniMax H3 prepared-reference-video descriptor must be a string")
+        try:
+            _, videos = deserialize_prepared_reference_videos(descriptor)
+        except ValueError as exc:
+            raise OmniClientError(str(exc)) from exc
+        return videos
+
     def _prepare_request_inputs(
         self,
         *,
@@ -2060,6 +1971,7 @@ class MiniMaxH3Pipeline(
         multi_modal_data: dict[str, Any],
         sampling: Any,
         text_conditioning: MiniMaxH3TextConditioning | None = None,
+        prepared_reference_videos: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Resolve the task and output shape, then run every request-level encode.
 
@@ -2152,12 +2064,20 @@ class MiniMaxH3Pipeline(
                 # before starting any subsequent collective.
                 prep_error: Exception | None = None
                 try:
-                    prepared_videos = self._prepare_reference_videos(
-                        raw_videos,
-                        target_frame_count=num_frames,
-                        workdir=workdir,
-                        start_time_seconds=extra.get("start_time_seconds"),
-                    )
+                    _, rank, _ = _dit_rank_world()
+                    if prepared_reference_videos is not None:
+                        if rank == 0:
+                            prepared_videos = _reuse_prepared_reference_videos(
+                                prepared_reference_videos,
+                                expected_count=video_count,
+                            )
+                    else:
+                        prepared_videos = self._prepare_reference_videos(
+                            raw_videos,
+                            target_frame_count=num_frames,
+                            workdir=workdir,
+                            start_time_seconds=extra.get("start_time_seconds"),
+                        )
                 except Exception as exc:
                     prep_error = exc
                 _broadcast_rank0_exception(prep_error)
@@ -2354,6 +2274,7 @@ class MiniMaxH3Pipeline(
             multi_modal_data=multi_modal_data,
             sampling=request.sampling_params,
             text_conditioning=self._extract_text_conditioning(raw_prompt),
+            prepared_reference_videos=self._extract_prepared_reference_videos(raw_prompt),
         )
         denoise_kwargs = self._denoise_kwargs(context)
         num_outputs = context["num_outputs"]
@@ -2443,6 +2364,7 @@ class MiniMaxH3Pipeline(
             multi_modal_data=multi_modal_data,
             sampling=state.sampling,
             text_conditioning=self._extract_text_conditioning(state.prompt),
+            prepared_reference_videos=self._extract_prepared_reference_videos(state.prompt),
         )
         inputs = self._build_denoise_inputs(**self._denoise_kwargs(context))
 

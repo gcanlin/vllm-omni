@@ -15,6 +15,7 @@ _DIFFUSION_PIPELINE = "vllm_omni.diffusion.models.minimax_h3.pipeline_minimax_h3
 MINIMAX_H3_PIPELINE = PipelineConfig(
     model_type="minimax_h3_disaggregated",
     default_deploy_config_name="minimax_h3_disaggregated.yaml",
+    stage_cli_aliases={"text_encoder_tp_size": (0, "tensor_parallel_size")},
     model_arch="MiniMaxH3TextEncoder",
     stages=(
         StagePipelineConfig(
@@ -32,7 +33,7 @@ MINIMAX_H3_PIPELINE = PipelineConfig(
                 "temperature": 0.0,
                 "detokenize": False,
             },
-            extras={"model_path_resolver": f"{_CHECKPOINT}.resolve_minimax_h3_model_root"},
+            model_path_resolver=f"{_CHECKPOINT}.resolve_minimax_h3_model_root",
         ),
         StagePipelineConfig(
             stage_id=1,
@@ -45,7 +46,7 @@ MINIMAX_H3_PIPELINE = PipelineConfig(
             model_arch="MiniMaxH3Pipeline",
             custom_process_input_func=f"{_PROCESSOR}.text_encoder2diffusion",
             omni_kv_config={"need_recv_cache": False},
-            extras={"model_path_resolver": f"{_DIFFUSION_PIPELINE}.resolve_minimax_h3_diffusion_model_path"},
+            model_path_resolver=f"{_DIFFUSION_PIPELINE}.resolve_minimax_h3_diffusion_model_path",
         ),
     ),
 )

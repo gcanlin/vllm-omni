@@ -416,3 +416,12 @@ class TestSerializeDeserializePayload:
         original: OmniPayload = {"meta": {"finished": None}}
         wire = serialize_payload(original)
         assert wire is None
+
+    def test_minimax_h3_prepared_reference_video_descriptor_round_trip(self):
+        descriptor = '{"artifact_dir":"/tmp/h3","videos":[]}'
+
+        wire = serialize_payload({"meta": {"minimax_h3_prepared_reference_videos": descriptor}})
+        assert wire is not None
+        restored = deserialize_payload(wire)
+
+        assert restored["meta"]["minimax_h3_prepared_reference_videos"] == descriptor

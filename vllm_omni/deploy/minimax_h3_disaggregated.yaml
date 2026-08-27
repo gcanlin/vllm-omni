@@ -18,8 +18,6 @@ stages:
     devices: "2,3,4,5"
     max_num_seqs: 1
     model_loaded:
-      transformer: true
-      vae: true
       text_encoder: false
     parallel_config:
       tensor_parallel_size: 1

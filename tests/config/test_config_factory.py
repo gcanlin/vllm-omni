@@ -34,6 +34,7 @@ from vllm_omni.config.stage_config import (
     build_stage_runtime_overrides,
     load_deploy_config,
     merge_pipeline_deploy,
+    normalize_pipeline_cli_overrides,
     pipeline_cfg_resolver,
 )
 from vllm_omni.engine.arg_utils import SHARED_FIELDS, internal_blacklist_keys
@@ -1341,8 +1342,49 @@ stages:
         assert len(stages) == stage_count
         assert stages[-1].final_output is True
         assert stages[-1].final_output_type == final_output_type
+        if pipeline_name == "minimax_h3_disaggregated":
+            assert stages[0].yaml_engine_args["model_path_resolver"].endswith(
+                ".resolve_minimax_h3_model_root"
+            )
+            assert stages[1].yaml_engine_args["model_path_resolver"].endswith(
+                ".resolve_minimax_h3_diffusion_model_path"
+            )
+            assert "model_path_resolver" not in stages[0].yaml_extras
+            assert "model_path_resolver" not in stages[1].yaml_extras
         if deploy.trust_remote_code is not None:
             assert {s.yaml_engine_args.get("trust_remote_code") for s in stages} == {deploy.trust_remote_code}
+
+    def test_minimax_h3_resolvers_reach_production_engine_args(self, tmp_path: Path, monkeypatch):
+        from vllm_omni.engine import stage_init_utils
+
+        model_root = tmp_path / "MiniMax-H3"
+        (model_root / "FL2VA" / "text_encoder").mkdir(parents=True)
+        (model_root / "Ref2VA" / "text_encoder").mkdir(parents=True)
+        monkeypatch.setattr(stage_init_utils, "resolve_worker_cls", lambda _engine_args: None)
+
+        deploy = load_deploy_config(get_deploy_config_path("minimax_h3_disaggregated.yaml"))
+        assert deploy.stages[1].engine_extras["model_loaded"] == {"text_encoder": False}
+        stages = merge_pipeline_deploy(OMNI_PIPELINES["minimax_h3_disaggregated"], deploy)
+        resolved = [
+            stage_init_utils.build_engine_args_dict(stage.to_omegaconf(), str(model_root))
+            for stage in stages
+        ]
+
+        assert resolved[0]["model"] == str(model_root / "FL2VA" / "text_encoder")
+        assert resolved[1]["model"] == str(model_root / "FL2VA")
+        assert all("model_path_resolver" not in engine_args for engine_args in resolved)
+
+    def test_minimax_h3_text_encoder_tp_reaches_only_stage_zero(self):
+        pipeline = OMNI_PIPELINES["minimax_h3_disaggregated"]
+        stages, _ = StageConfigFactory._create_legacy_from_registry(
+            pipeline,
+            {"text_encoder_tp_size": 4},
+        )
+
+        assert stages[0].runtime_overrides["tensor_parallel_size"] == 4
+        assert "text_encoder_tp_size" not in stages[0].runtime_overrides
+        assert "text_encoder_tp_size" not in stages[1].runtime_overrides
+        assert stages[1].yaml_engine_args["parallel_config"]["tensor_parallel_size"] == 1
 
     def test_minimax_h3_disaggregated_defaults_match_validated_topology(self):
         pipeline = OMNI_PIPELINES["minimax_h3_disaggregated"]
@@ -1350,8 +1392,8 @@ stages:
         stages = merge_pipeline_deploy(pipeline, deploy)
 
         assert stages[0].yaml_engine_args["max_num_seqs"] == 1
-        assert stages[0].yaml_extras["model_path_resolver"].endswith(".resolve_minimax_h3_model_root")
-        assert stages[1].yaml_extras["model_path_resolver"].endswith(".resolve_minimax_h3_diffusion_model_path")
+        assert stages[0].yaml_engine_args["model_path_resolver"].endswith(".resolve_minimax_h3_model_root")
+        assert stages[1].yaml_engine_args["model_path_resolver"].endswith(".resolve_minimax_h3_diffusion_model_path")
         parallel = stages[1].yaml_engine_args["parallel_config"]
         assert parallel["tensor_parallel_size"] == 1
         assert parallel["ulysses_degree"] == 4
@@ -1363,6 +1405,31 @@ stages:
         turbo_sampling = turbo_stages[1].yaml_extras["default_sampling_params"]
         assert turbo_sampling["num_inference_steps"] == 5
         assert turbo_sampling["extra_args"] == {"flow_shift": 6.0, "audio_flow_shift": 3.0}
+
+    def test_minimax_h3_text_encoder_tp_alias_targets_stage_zero(self):
+        pipeline = OMNI_PIPELINES["minimax_h3_disaggregated"]
+
+        assert normalize_pipeline_cli_overrides(pipeline, {}) == {}
+        assert normalize_pipeline_cli_overrides(pipeline, {"text_encoder_tp_size": 4}) == {
+            "stage_0_tensor_parallel_size": 4
+        }
+
+    def test_minimax_h3_stage_zero_tp_override_wins_alias_conflict(self):
+        pipeline = OMNI_PIPELINES["minimax_h3_disaggregated"]
+
+        with pytest.warns(UserWarning, match="stage_0_tensor_parallel_size=2 takes precedence"):
+            normalized = normalize_pipeline_cli_overrides(
+                pipeline,
+                {"text_encoder_tp_size": 4, "stage_0_tensor_parallel_size": 2},
+            )
+
+        assert normalized == {"stage_0_tensor_parallel_size": 2}
+
+    def test_minimax_h3_rejects_text_encoder_tp_on_diffusion_stage(self):
+        pipeline = OMNI_PIPELINES["minimax_h3_disaggregated"]
+
+        with pytest.raises(ValueError, match="stage_1_text_encoder_tp_size cannot be set"):
+            normalize_pipeline_cli_overrides(pipeline, {"stage_1_text_encoder_tp_size": 4})
 
     @pytest.mark.parametrize(
         ("config_json", "model_index", "expected_pipeline"),

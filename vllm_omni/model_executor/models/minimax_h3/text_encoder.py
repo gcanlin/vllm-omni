@@ -20,16 +20,12 @@ from vllm.model_executor.models.qwen3_vl import (
 from vllm.model_executor.models.utils import AutoWeightsLoader
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
-from vllm_omni.diffusion.models.minimax_h3.presentation import (
+from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
     IMAGE_PAD,
     VIDEO_PAD,
     VISION_END,
     VISION_START,
-    minimax_h3_multi_image_presentation_ids,
-    minimax_h3_multi_image_presentation_token_tags,
-    minimax_h3_ref2va_presentation,
-    minimax_h3_ref2va_video_presentation,
-    minimax_h3_text_only_ids,
+    build_minimax_h3_presentation,
 )
 from vllm_omni.model_executor.models.minimax_h3.conditioning import (
     MINIMAX_H3_CONDITION_LABELS_KEY,
@@ -50,50 +46,15 @@ def _build_minimax_h3_presentation(
     merge_size: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Build the same token stream consumed by the fused H3 encoder."""
-    if task == "t2va":
-        ids = minimax_h3_text_only_ids(tokenizer, prompt)
-        return ids, torch.ones_like(ids)
-
-    merge_length = int(merge_size) ** 2
-    image_counts = (
-        [int(grid.prod().item()) // merge_length for grid in image_grid_thw] if image_grid_thw is not None else []
-    )
-    if task == "fl2va":
-        ids = minimax_h3_multi_image_presentation_ids(
-            tokenizer,
-            prompt=prompt,
-            image_token_counts=image_counts,
-        )
-        tags = minimax_h3_multi_image_presentation_token_tags(
-            tokenizer,
-            prompt=prompt,
-            image_token_counts=image_counts,
-        )
-        return ids, tags
-
-    video_counts: list[list[int]] = []
-    if video_grid_thw is not None:
-        for grid in video_grid_thw:
-            block_count = int(grid[0].item())
-            tokens_per_block = int(grid[1:].prod().item()) // merge_length
-            video_counts.append([tokens_per_block] * block_count)
-    timestamps = (
-        [[float(value) for value in group] for group in video_timestamps] if video_timestamps is not None else []
-    )
-    if video_counts:
-        return minimax_h3_ref2va_video_presentation(
-            tokenizer,
-            prompt=prompt,
-            condition_labels=condition_labels,
-            image_token_count=image_counts or None,
-            video_block_token_counts=video_counts,
-            video_block_timestamps=timestamps,
-        )
-    return minimax_h3_ref2va_presentation(
+    return build_minimax_h3_presentation(
         tokenizer,
         prompt=prompt,
+        task=task,
         condition_labels=condition_labels,
-        image_token_count=image_counts or None,
+        image_grid_thw=image_grid_thw,
+        video_grid_thw=video_grid_thw,
+        video_timestamps=video_timestamps,
+        merge_size=merge_size,
     )
 
 

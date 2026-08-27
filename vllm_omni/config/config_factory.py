@@ -29,6 +29,7 @@ from vllm_omni.config.stage_config import (
     build_stage_runtime_overrides,
     load_deploy_config,
     merge_pipeline_deploy,
+    normalize_pipeline_cli_overrides,
 )
 from vllm_omni.config.yaml_util import create_config
 from vllm_omni.diffusion.io_support import get_diffusion_output_type
@@ -437,6 +438,7 @@ class StageConfigFactory:
         load-balancer policy (``None`` when no strategy set one) travels with the
         stages instead of through a mutable out-param.
         """
+        cli_overrides = normalize_pipeline_cli_overrides(pipeline_cfg, cli_overrides)
         deploy_cfg: DeployConfig | None
         if user_deploy_config is not None:
             deploy_cfg = user_deploy_config

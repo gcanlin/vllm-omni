@@ -2,7 +2,10 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Regression tests for MiniMax H3's disaggregated text-encoder contract."""
 
+import os
+import shutil
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -13,9 +16,13 @@ from vllm_omni.diffusion.models.minimax_h3.pipeline_minimax_h3 import (
     _load_audio,
     resolve_minimax_h3_diffusion_model_path,
 )
-from vllm_omni.diffusion.models.minimax_h3.presentation import (
+from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
     minimax_h3_ref2va_presentation,
     minimax_h3_ref2va_video_presentation,
+)
+from vllm_omni.model_executor.models.minimax_h3.reference_video import (
+    MINIMAX_H3_PREPARED_REFERENCE_VIDEOS_KEY,
+    deserialize_prepared_reference_videos,
 )
 from vllm_omni.model_executor.models.minimax_h3.checkpoint import (
     resolve_minimax_h3_model_root,
@@ -116,30 +123,69 @@ def test_prepare_ref2va_keeps_original_text_and_exact_condition_order():
     ]
 
 
-def test_prepare_ref2va_video_uses_shared_frame_sampler_once(mocker):
-    prepare_videos = mocker.patch(
-        "vllm_omni.model_executor.stage_input_processors.minimax_h3.prepare_reference_videos",
-        return_value=[{"prepared_path": "/tmp/prepared.mp4", "input_has_audio": True}],
-    )
-    sample_frames = mocker.patch(
+def test_text_encoder_prompt_rejects_injected_prepared_video_descriptor():
+    prompt = {
+        "prompt": "hello",
+        "additional_information": {
+            "meta": {MINIMAX_H3_PREPARED_REFERENCE_VIDEOS_KEY: '{"artifact_dir":"/tmp/user"}'}
+        },
+    }
+    sampling = SimpleNamespace(height=256, width=448, extra_args={"task": "t2va"})
+
+    transformed = prepare_text_encoder_prompt(prompt, [sampling])
+
+    assert MINIMAX_H3_PREPARED_REFERENCE_VIDEOS_KEY not in transformed["additional_information"]["meta"]
+
+
+def test_prepare_ref2va_video_uses_shared_frame_sampler_once(monkeypatch):
+    prepare_videos = Mock()
+
+    def prepare(_videos, *, target_frame_count, workdir, start_time_seconds):
+        prepare_videos(_videos, target_frame_count, workdir, start_time_seconds)
+        prepared_path = os.path.join(workdir, "prepared.mp4")
+        open(prepared_path, "wb").close()
+        return [
+            {
+                "original_path": "/tmp/input.mp4",
+                "prepared_path": prepared_path,
+                "input_has_audio": True,
+                "width": 448,
+                "height": 256,
+                "start_time_seconds": 0.0,
+                "duration_seconds": 5.2,
+                "audio_duration_seconds": 5.2,
+            }
+        ]
+
+    sample_frames = Mock(return_value={"frames": [np.zeros((4, 4, 3), dtype=np.uint8)]})
+    monkeypatch.setattr("vllm_omni.model_executor.stage_input_processors.minimax_h3.prepare_reference_videos", prepare)
+    monkeypatch.setattr(
         "vllm_omni.model_executor.stage_input_processors.minimax_h3.sample_reference_video_frames",
-        return_value={"frames": [np.zeros((4, 4, 3), dtype=np.uint8)]},
+        sample_frames,
     )
     prompt = {
         "prompt": "hello",
         "multi_modal_data": {"video": "/tmp/input.mp4"},
     }
-    sampling = SimpleNamespace(height=256, width=448, extra_args={"task": "ref2va"})
+    sampling = SimpleNamespace(height=256, width=448, num_frames=124, extra_args={"task": "ref2va"})
 
     transformed = prepare_text_encoder_prompt(prompt, [sampling])
 
     prepare_videos.assert_called_once()
-    sample_frames.assert_called_once_with("/tmp/prepared.mp4")
+    _, target_frame_count, artifact_dir, start_time_seconds = prepare_videos.call_args.args
+    assert target_frame_count == 124
+    assert start_time_seconds is None
+    descriptor = transformed["additional_information"]["meta"][MINIMAX_H3_PREPARED_REFERENCE_VIDEOS_KEY]
+    described_dir, described_videos = deserialize_prepared_reference_videos(descriptor)
+    assert described_dir == artifact_dir
+    assert os.path.isfile(described_videos[0]["prepared_path"])
+    sample_frames.assert_called_once_with(described_videos[0]["prepared_path"])
     assert prompt["multi_modal_data"]["video"] == "/tmp/input.mp4"
     assert transformed["mm_processor_kwargs"][MINIMAX_H3_CONDITION_LABELS_KEY] == [
         ("audio", 1),
         ("video", 1),
     ]
+    shutil.rmtree(artifact_dir)
 
 
 def test_stage_wire_rejects_multiple_text_encoder_sources():
@@ -314,7 +360,8 @@ def test_diffusion_resolver_selects_startup_partition(tmp_path):
 
     assert resolve_minimax_h3_diffusion_model_path(str(root), None, "fl2va") == str(fl2va)
     assert resolve_minimax_h3_diffusion_model_path(str(root), None, "ref2va") == str(ref2va)
-    assert resolve_minimax_h3_diffusion_model_path(str(root), None, None) == str(root)
+    assert resolve_minimax_h3_diffusion_model_path(str(root), None, None) == str(fl2va)
+    assert resolve_minimax_h3_diffusion_model_path(str(root), None, "combined") == str(root)
     assert resolve_minimax_h3_diffusion_model_path(str(ref2va), None, None) == str(ref2va)
 
 

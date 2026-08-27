@@ -15,6 +15,7 @@ import concurrent.futures
 import copy
 import json
 import queue
+import shutil
 import threading
 import time
 import uuid
@@ -37,6 +38,7 @@ from vllm_omni.config.stage_config import (
     DuplexSessionRuntimeConfig,
     load_deploy_config,
 )
+from vllm_omni.data_entry_keys import REQUEST_ARTIFACT_DIRS_KEY, TRANSFORM_OWNED_META_KEYS
 from vllm_omni.diffusion.data import (
     DiffusionParallelConfig,
     parse_attention_config,
@@ -686,8 +688,16 @@ class AsyncOmniEngine:
 
         # Keep the original prompt for downstream stages (they need the raw
         # dict, e.g. for multi_modal_data).
+        if isinstance(prompt, dict):
+            raw_info = prompt.get("additional_information")
+            if isinstance(raw_info, dict):
+                raw_meta = raw_info.get("meta")
+                if isinstance(raw_meta, dict):
+                    for key in TRANSFORM_OWNED_META_KEYS:
+                        raw_meta.pop(key, None)
         original_prompt = prompt
         preselected_stage0_replica: int | None = None
+        request_artifact_dirs: list[str] = []
 
         stage_type = self.stage_metadata[0].stage_type
         output_prompt_text: Any = None
@@ -704,10 +714,18 @@ class AsyncOmniEngine:
 
             prompt_transform_func = getattr(self, "prompt_transform_func", None)
             if prompt_transform_func is not None:
+                if isinstance(prompt, dict):
+                    prompt.pop(REQUEST_ARTIFACT_DIRS_KEY, None)
                 prompt = prompt_transform_func(
                     copy.copy(prompt),
                     effective_sampling_params_list,
                 )
+                if isinstance(prompt, dict):
+                    raw_dirs = prompt.pop(REQUEST_ARTIFACT_DIRS_KEY, None)
+                    if isinstance(raw_dirs, list) and all(isinstance(path, str) for path in raw_dirs):
+                        request_artifact_dirs = list(raw_dirs)
+                        if isinstance(original_prompt, dict):
+                            original_prompt[REQUEST_ARTIFACT_DIRS_KEY] = request_artifact_dirs
 
             if isinstance(prompt, dict):
                 inject_global_id(prompt, request_id)
@@ -740,11 +758,24 @@ class AsyncOmniEngine:
             except Exception:
                 if preselected_stage0_replica is not None and self.stage_pools:
                     self.stage_pools[0].release_binding(request_id)
+                for artifact_dir in request_artifact_dirs:
+                    shutil.rmtree(artifact_dir, ignore_errors=True)
                 raise
             _preprocess_ms = (time.perf_counter() - _t_preprocess) * 1000.0
             # TODO (Peiqi): add this for Qwen3-TTS only. Other models don't have
             # additional_information field in the prompt.
             request = upgrade_to_omni_request(request, prompt)
+
+            if isinstance(request, OmniEngineCoreRequest) and request.additional_information is not None:
+                processed_info = deserialize_additional_information(request.additional_information)
+                processed_meta = processed_info.get("meta")
+                if isinstance(processed_meta, dict):
+                    if isinstance(original_prompt, dict):
+                        original_info = dict(original_prompt.get("additional_information") or {})
+                        original_meta = dict(original_info.get("meta") or {})
+                        original_meta.update(processed_meta)
+                        original_info["meta"] = original_meta
+                        original_prompt["additional_information"] = original_info
 
             if reasoning_ended is not None:
                 request.reasoning_ended = reasoning_ended
@@ -765,6 +796,8 @@ class AsyncOmniEngine:
             if output_prompt_text is None and isinstance(original_prompt, dict):
                 output_prompt_text = original_prompt.get("prompt")
             prompt = request
+        else:
+            request_artifact_dirs = []
 
         return StageSubmissionMessage(
             type=message_type,
@@ -778,6 +811,7 @@ class AsyncOmniEngine:
             preprocess_ms=_preprocess_ms,
             request_timestamp=request_timestamp,
             enqueue_ts=time.perf_counter(),
+            request_artifact_dirs=request_artifact_dirs or None,
         )
 
     def _build_cfg_companions(
@@ -1365,22 +1399,29 @@ class AsyncOmniEngine:
         a queue + coroutine-switch round-trip.  The Orchestrator receives a
         ready-to-submit OmniEngineCoreRequest.
         """
-        msg = self._build_add_request_message(
-            request_id=request_id,
-            prompt=prompt,
-            prompt_text=prompt_text,
-            sampling_params_list=sampling_params_list,
-            final_stage_id=final_stage_id,
-            final_output_stage_ids=final_output_stage_ids,
-            arrival_time=arrival_time,
-            lora_request=lora_request,
-            tokenization_kwargs=tokenization_kwargs,
-            trace_headers=trace_headers,
-            priority=priority,
-            data_parallel_rank=data_parallel_rank,
-            reasoning_ended=reasoning_ended,
-            resumable=resumable,
-        )
+        try:
+            msg = self._build_add_request_message(
+                request_id=request_id,
+                prompt=prompt,
+                prompt_text=prompt_text,
+                sampling_params_list=sampling_params_list,
+                final_stage_id=final_stage_id,
+                final_output_stage_ids=final_output_stage_ids,
+                arrival_time=arrival_time,
+                lora_request=lora_request,
+                tokenization_kwargs=tokenization_kwargs,
+                trace_headers=trace_headers,
+                priority=priority,
+                data_parallel_rank=data_parallel_rank,
+                reasoning_ended=reasoning_ended,
+                resumable=resumable,
+            )
+        except BaseException:
+            if isinstance(prompt, dict):
+                for artifact_dir in prompt.pop(REQUEST_ARTIFACT_DIRS_KEY, None) or ():
+                    if isinstance(artifact_dir, str):
+                        shutil.rmtree(artifact_dir, ignore_errors=True)
+            raise
         # CFG companions are built before the parent is admitted, so the group
         # is all-or-nothing: a build failure raises here, nothing is enqueued,
         # and the caller sees the error. Admitting the parent first would leave
@@ -1388,13 +1429,21 @@ class AsyncOmniEngine:
         # because a model whose guidance is mandatory cannot decode a request
         # whose companion never arrived.
         companions: list[AddCompanionRequestMessage] = []
-        if self.prompt_expand_func is not None and final_stage_id > 0:
-            effective_spl = msg.sampling_params_list
-            stage0_params = effective_spl[0] if effective_spl else None
-            if stage0_params is not None:
-                companions = self._build_cfg_companions(request_id, msg.original_prompt, stage0_params, effective_spl)
+        try:
+            if self.prompt_expand_func is not None and final_stage_id > 0:
+                effective_spl = msg.sampling_params_list
+                stage0_params = effective_spl[0] if effective_spl else None
+                if stage0_params is not None:
+                    companions = self._build_cfg_companions(request_id, msg.original_prompt, stage0_params, effective_spl)
 
-        self.request_queue.sync_q.put(msg)
+            self.request_queue.sync_q.put(msg)
+        except BaseException:
+            for artifact_dir in msg.request_artifact_dirs or ():
+                shutil.rmtree(artifact_dir, ignore_errors=True)
+            raise
+        finally:
+            if isinstance(msg.original_prompt, dict):
+                msg.original_prompt.pop(REQUEST_ARTIFACT_DIRS_KEY, None)
         for companion in companions:
             self.request_queue.sync_q.put(companion)
         if companions:

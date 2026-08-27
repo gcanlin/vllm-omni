@@ -15,6 +15,7 @@ handled by :class:`MembershipController`, which is injected optionally.
 from __future__ import annotations
 
 import asyncio
+import shutil
 import time as _time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -64,6 +65,12 @@ from vllm_omni.metrics.utils import DIFFUSION_METRICS_ONLY_REQUEST_ID
 from vllm_omni.outputs import OmniRequestOutput
 
 logger = init_logger(__name__)
+
+
+def cleanup_request_artifact_dirs(artifact_dirs: set[str] | list[str]) -> None:
+    for artifact_dir in artifact_dirs:
+        shutil.rmtree(artifact_dir, ignore_errors=True)
+
 
 if TYPE_CHECKING:
     from vllm_omni.experimental.fullduplex.engine.contracts import (
@@ -202,6 +209,7 @@ class OrchestratorRequestState:
     duplex_stage_fences: dict[int, DuplexFence] = field(default_factory=dict)
     duplex_config_generation: int = -1
     running_counter_registered: bool = False
+    request_artifact_dirs: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -704,6 +712,7 @@ class Orchestrator:
             final_output_stage_ids=final_output_stage_ids,
             request_timestamp=float(msg.request_timestamp or _time.time()),
             mm_features=getattr(prompt, "mm_features", None),
+            request_artifact_dirs=set(msg.request_artifact_dirs or ()),
         )
         self.request_states[request_id] = req_state
         self._register_running_request(req_state)
@@ -1419,6 +1428,8 @@ class Orchestrator:
             for request_id in cleanup_ids:
                 self._pd_kv_params.pop(request_id, None)
                 req_state = self.request_states.pop(request_id, None)
+                if req_state is not None:
+                    cleanup_request_artifact_dirs(req_state.request_artifact_dirs)
                 if req_state is not None and req_state.running_counter_registered and self._running_counter is not None:
                     self._running_counter.decrement()
                     req_state.running_counter_registered = False
