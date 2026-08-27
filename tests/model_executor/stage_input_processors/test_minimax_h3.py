@@ -38,9 +38,11 @@ from vllm_omni.model_executor.models.minimax_h3.text_encoder import (
 )
 from vllm_omni.model_executor.stage_input_processors.minimax_h3 import (
     _audio_items,
+    _diffusion_sampling_params,
     prepare_text_encoder_prompt,
     text_encoder2diffusion,
 )
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -91,6 +93,20 @@ def test_audio_items_preserves_waveform_pairs(value, expected_count):
     assert len(_audio_items(value)) == expected_count
 
 
+def test_h3_selects_the_single_explicit_diffusion_stage_params() -> None:
+    stage_zero = SimpleNamespace(extra_args={"task": "t2va"})
+    diffusion = OmniDiffusionSamplingParams(extra_args={"task": "ref2va"})
+
+    assert _diffusion_sampling_params([stage_zero, diffusion]) is diffusion
+
+
+def test_h3_rejects_missing_or_ambiguous_diffusion_stage_params() -> None:
+    with pytest.raises(RuntimeError, match="exactly one OmniDiffusionSamplingParams"):
+        _diffusion_sampling_params([SimpleNamespace(extra_args={"task": "t2va"})])
+    with pytest.raises(RuntimeError, match="got 2"):
+        _diffusion_sampling_params([OmniDiffusionSamplingParams(), OmniDiffusionSamplingParams()])
+
+
 def test_fused_audio_loader_accepts_list_waveform_pair():
     waveform, sample_rate = _load_audio([[0.0, 0.5, -0.5], 16_000])
     assert sample_rate == 16_000
@@ -105,7 +121,7 @@ def test_prepare_ref2va_keeps_original_text_and_exact_condition_order():
             "audio": [np.zeros(16), 16_000],
         },
     }
-    sampling = SimpleNamespace(
+    sampling = OmniDiffusionSamplingParams(
         height=256,
         width=448,
         extra_args={"task": "ref2va"},
@@ -130,7 +146,7 @@ def test_text_encoder_prompt_rejects_injected_prepared_video_descriptor():
             "meta": {MINIMAX_H3_PREPARED_REFERENCE_VIDEOS_KEY: '{"artifact_dir":"/tmp/user"}'}
         },
     }
-    sampling = SimpleNamespace(height=256, width=448, extra_args={"task": "t2va"})
+    sampling = OmniDiffusionSamplingParams(height=256, width=448, extra_args={"task": "t2va"})
 
     transformed = prepare_text_encoder_prompt(prompt, [sampling])
 
@@ -167,7 +183,7 @@ def test_prepare_ref2va_video_uses_shared_frame_sampler_once(monkeypatch):
         "prompt": "hello",
         "multi_modal_data": {"video": "/tmp/input.mp4"},
     }
-    sampling = SimpleNamespace(height=256, width=448, num_frames=124, extra_args={"task": "ref2va"})
+    sampling = OmniDiffusionSamplingParams(height=256, width=448, num_frames=124, extra_args={"task": "ref2va"})
 
     transformed = prepare_text_encoder_prompt(prompt, [sampling])
 

@@ -16,6 +16,7 @@ from PIL import Image
 from vllm_omni.data_entry_keys import REQUEST_ARTIFACT_DIRS_KEY
 from vllm_omni.diffusion.models.minimax_h3.time_request import minimax_h3_align_frame_count
 from vllm_omni.errors import OmniClientError
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
     MINIMAX_H3_OUTPUT_SHORT_EDGE,
     load_minimax_h3_images,
@@ -55,15 +56,6 @@ def _audio_items(value: Any) -> list[Any]:
     return list(value) if isinstance(value, (list, tuple)) else [value]
 
 
-def _request_extra_args(sampling_params_list: Sequence[Any]) -> Mapping[str, Any]:
-    merged: dict[str, Any] = {}
-    for sampling_params in sampling_params_list:
-        extra_args = getattr(sampling_params, "extra_args", None)
-        if extra_args:
-            merged.update(extra_args)
-    return merged
-
-
 def _resolve_task(
     extra_args: Mapping[str, Any],
     multi_modal_data: Mapping[str, Any],
@@ -79,10 +71,17 @@ def _resolve_task(
 
 
 def _diffusion_sampling_params(sampling_params_list: Sequence[Any]) -> Any:
-    for sampling_params in reversed(sampling_params_list):
-        if hasattr(sampling_params, "height") and hasattr(sampling_params, "width"):
-            return sampling_params
-    raise RuntimeError("MiniMax H3 text encoding requires diffusion sampling parameters")
+    diffusion_params = [
+        sampling_params
+        for sampling_params in sampling_params_list
+        if isinstance(sampling_params, OmniDiffusionSamplingParams)
+    ]
+    if len(diffusion_params) != 1:
+        raise RuntimeError(
+            "MiniMax H3 text encoding requires exactly one OmniDiffusionSamplingParams stage parameter, "
+            f"got {len(diffusion_params)}"
+        )
+    return diffusion_params[0]
 
 
 def _ref2va_target_frame_count(sampling_params_list: Sequence[Any]) -> int:
@@ -186,7 +185,8 @@ def prepare_text_encoder_prompt(
     image_values = _items(multi_modal_data.get("image"))
     videos = _items(multi_modal_data.get("video"))
     audios = _audio_items(multi_modal_data.get("audio"))
-    extra_args = _request_extra_args(sampling_params_list)
+    diffusion_sampling = _diffusion_sampling_params(sampling_params_list)
+    extra_args = diffusion_sampling.extra_args or {}
     task = _resolve_task(extra_args, multi_modal_data)
     images = _prepare_qwen_images(task, image_values, sampling_params_list)
     qwen_video_inputs: list[tuple[np.ndarray, dict[str, Any]]] = []
