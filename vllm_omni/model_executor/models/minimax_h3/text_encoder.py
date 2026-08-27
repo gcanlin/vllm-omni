@@ -192,6 +192,8 @@ class MiniMaxH3TextEncoder(Qwen3VLForConditionalGeneration):
     """
 
     have_multimodal_outputs = True
+    omni_pooler_payload_include_hidden = False
+    requires_full_prefix_cached_hidden_states = False
     num_encoder_layers = 50
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "model"):
@@ -262,14 +264,16 @@ class MiniMaxH3TextEncoder(Qwen3VLForConditionalGeneration):
             # per-token prefix-cache entries; runner slicing removes these
             # padding rows before the stage payload is emitted.
             token_tags = torch.cat((token_tags, token_tags.new_ones(padding)))
-        # Keep token-role metadata two-dimensional so the Omni runner treats
-        # it as per-token data and reconstructs it on prefix-cache hits. The
-        # runner transports ``model_outputs`` through its standard ``hidden``
-        # payload; Stage 1 restores H3's semantic [tokens] representation.
+        # Keep the stage-wire representation two-dimensional.  The Omni
+        # runner treats tensors with shape [tokens, features] as per-token
+        # data, so they are concatenated across chunked-prefill steps and
+        # reconstructed on prefix-cache hits.  The Stage 1 adapter restores
+        # H3's semantic [tokens] representation.
         token_tags = token_tags.unsqueeze(-1)
         return OmniOutput(
             text_hidden_states=model_outputs,
             multimodal_outputs={
+                "hidden_states": {"output": model_outputs},
                 "meta": {"token_role_ids": token_tags},
             },
         )

@@ -56,6 +56,7 @@ def test_make_omni_output_uses_shared_stage_payload_fields():
     output = model.make_omni_output(hidden)
 
     assert output.multimodal_outputs is not None
+    assert torch.equal(output.multimodal_outputs["hidden_states"]["output"], hidden)
     assert torch.equal(output.multimodal_outputs["meta"]["token_role_ids"], torch.tensor([[1], [0]]))
-    assert "hidden_states" not in output.multimodal_outputs
-    assert output.text_hidden_states is hidden
+    assert "encoder_hidden_states" not in output.multimodal_outputs
+    assert "token_tags" not in output.multimodal_outputs
