@@ -59,6 +59,7 @@ def test_request_artifact_cleanup_is_idempotent(tmp_path):
 
     assert not artifact_dir.exists()
 
+
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 

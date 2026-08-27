@@ -67,6 +67,7 @@ from vllm_omni.outputs import OmniRequestOutput
 
 logger = init_logger(__name__)
 
+
 def cleanup_request_artifact_dirs(artifact_dirs: set[str] | list[str]) -> None:
     for artifact_dir in artifact_dirs:
         shutil.rmtree(artifact_dir, ignore_errors=True)
