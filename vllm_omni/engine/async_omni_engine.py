@@ -45,6 +45,7 @@ from vllm_omni.diffusion.data import (
     resolve_model_class_name,
 )
 from vllm_omni.diffusion.io_support import get_diffusion_output_type
+from vllm_omni.engine import OmniEngineCoreRequest
 from vllm_omni.engine.async_engine_utils import (
     SHUTDOWN_ENQUEUE_TIMEOUT_S,
     SHUTDOWN_JOIN_TIMEOUT_S,
