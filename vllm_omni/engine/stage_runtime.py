@@ -656,16 +656,24 @@ class StageRuntime:
                         raise RuntimeError("Omni KV connector requires source and destination stages")
                     inject_omni_kv_config(plan.stage_cfg, omni_conn_cfg, omni_from, omni_to)
                 inject_kv_stage_info(plan.stage_cfg, plan.metadata.stage_id, self._stage_configs)
+                engine_args = getattr(plan.stage_cfg, "engine_args", {})
+                inline_diffusion = (
+                    engine_args.get("inline_diffusion", False)
+                    if hasattr(engine_args, "get")
+                    else getattr(engine_args, "inline_diffusion", False)
+                )
+                custom_pipeline_args = (
+                    engine_args.get("custom_pipeline_args")
+                    if hasattr(engine_args, "get")
+                    else getattr(engine_args, "custom_pipeline_args", None)
+                )
                 client, resources = launch_diffusion_stage_replica(
                     model=self._model,
                     stage_config=plan.stage_cfg,
                     metadata=plan.metadata,
                     stage_init_timeout=stage_init_timeout,
                     batch_size=self._diffusion_batch_size,
-                    use_inline=(
-                        plan.num_replicas == 1
-                        and bool(getattr(plan.stage_cfg, "engine_args", {}).get("inline_diffusion", False))
-                    ),
+                    use_inline=plan.num_replicas == 1 and bool(inline_diffusion or custom_pipeline_args),
                     replica_id=plan.replica_id,
                     omni_master_server=self._get_omni_master_server(),
                     omni_coordinator_address=self._get_coordinator_address(),

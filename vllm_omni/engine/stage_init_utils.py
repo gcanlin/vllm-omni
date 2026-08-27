@@ -948,6 +948,7 @@ def _project_omni_stage_engine_args(
         "hf_config_name": stage_config.hf_config_name,
         "engine_output_type": stage_config.engine_output_type,
         "custom_process_next_stage_input_func": stage_config.custom_process_next_stage_input_func,
+        "model_path_resolver": topology.model_path_resolver,
         "retains_state_across_chunks": topology.retains_state_across_chunks,
     }
     engine_args.update(

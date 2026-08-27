@@ -1730,7 +1730,7 @@ class Orchestrator:
                 self._pd_kv_params.pop(request_id, None)
                 req_state = self.request_states.pop(request_id, None)
                 if req_state is not None:
-                    cleanup_request_artifact_dirs(req_state.request_artifact_dirs)
+                    cleanup_request_artifact_dirs(getattr(req_state, "request_artifact_dirs", ()))
                 if req_state is not None and req_state.running_counter_registered and self._running_counter is not None:
                     self._running_counter.decrement()
                     req_state.running_counter_registered = False
