@@ -26,6 +26,55 @@ apt-get install -y espeak-ng jq
 
 Our test scripts use the pytest framework. First, please use `git clone https://github.com/vllm-project/vllm-omni.git` to download the vllm-omni source code. Then, in the root directory of vllm-omni, you can run the following commands in your local test environment to execute the corresponding test cases.
 
+### Repeatable Local Validation
+
+Use the repository virtual environment for unit tests. A virtual environment from
+another checkout may provide `pytest` but still lack the required `vllm` package.
+
+When installing Python dependencies from this validation host, configure the
+corporate proxy first. The Docker test helper explicitly forwards all six proxy
+environment variable spellings to the container.
+
+```bash
+export HTTP_PROXY=http://proxy-ir.intel.com:912
+export HTTPS_PROXY=http://proxy-ir.intel.com:912
+export http_proxy="${HTTP_PROXY}"
+export https_proxy="${HTTPS_PROXY}"
+export NO_PROXY=.intel.com,localhost,127.0.0.1
+export no_proxy="${NO_PROXY}"
+```
+
+```bash
+uv venv --python 3.12 --seed
+uv pip install -e '.[dev]'
+
+# Any focused pytest target; the helper validates the interpreter first.
+bash tools/run_local_pytest.sh \
+    tests/entrypoints/test_async_omni_diffusion_config.py::test_stage_override_preserves_model_extras_for_default_diffusion_stage -q
+
+# Docker alternative for an image built from this checkout. It installs the
+# missing pytest plugin through the configured proxy before running the target.
+IMAGE=vllm-omni-pr5885:f57826a4f-cuda bash tools/run_docker_pytest.sh \
+    tests/entrypoints/test_async_omni_diffusion_config.py::test_stage_override_preserves_model_extras_for_default_diffusion_stage -q
+```
+
+For a local MiniMax H3 FL2VA/I2VA smoke test, use the pinned helper below. It
+starts one no-offload `TP=4` replica, requires four GPUs, waits for `/health`,
+submits a first-frame request, and saves the MP4, headers, timing, and `ffprobe`
+output under `e2e-artifacts/fl2va-tp4/`.
+
+```bash
+# Set IMAGE to the image built from the checkout being validated.
+IMAGE=vllm-omni-pr5885:f57826a4f-cuda bash tools/run_h3_fl2va_e2e.sh
+
+# Keep the service for manual requests after startup.
+IMAGE=vllm-omni-pr5885:f57826a4f-cuda bash tools/run_h3_fl2va_e2e.sh --start-only
+```
+
+The E2E helper defaults to the locally mounted H3 cache and first-frame paths
+used by the project validation host. Override `MODEL_ROOT`, `HF_CACHE`,
+`FIRST_FRAME`, `HOST_GPUS`, `PORT`, `ARTIFACT_DIR`, or `IMAGE` for another host.
+
 ### CI job runners (L2–L4): logs, timing, and timeouts
 
 [`tools/run_ready_jobs.sh`](https://github.com/vllm-project/vllm-omni/blob/main/tools/run_ready_jobs.sh), [`tools/run_merge_jobs.sh`](https://github.com/vllm-project/vllm-omni/blob/main/tools/run_merge_jobs.sh), and [`tools/nightly/run_nightly_jobs.sh`](https://github.com/vllm-project/vllm-omni/blob/main/tools/nightly/run_nightly_jobs.sh) share the same run-time behavior (via [`tools/run_jobs_common.sh`](https://github.com/vllm-project/vllm-omni/blob/main/tools/run_jobs_common.sh)):
