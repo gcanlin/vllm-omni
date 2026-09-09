@@ -53,7 +53,7 @@ def pair(device):
     baseline = make_codec(device)
     candidate = copy.deepcopy(baseline)
     baseline.shared_decoder_kv = False
-    candidate.shared_decoder_kv = True
+    assert candidate.shared_decoder_kv
     baseline.initialize_decoder_state_pool(4, 4)
     candidate.initialize_decoder_state_pool(4, 4)
     return baseline, candidate
@@ -69,6 +69,21 @@ def check_states(baseline, candidate):
         elif isinstance(a, TransformerState):
             torch.testing.assert_close(a.offsets[:4], b.offsets[:4], rtol=0, atol=0)
     assert candidate._decoder_slot_offsets[:, 4].count_nonzero() == 0
+
+
+@pytest.mark.cpu
+@pytest.mark.parametrize("legacy_env", [None, "0", "1"])
+def test_shared_decoder_pool_is_default(monkeypatch, legacy_env):
+    if legacy_env is None:
+        monkeypatch.delenv("VLLM_OMNI_MOSS_CODEC_SHARED_KV", raising=False)
+    else:
+        monkeypatch.setenv("VLLM_OMNI_MOSS_CODEC_SHARED_KV", legacy_env)
+    model = make_codec()
+    assert model.shared_decoder_kv
+    model.initialize_decoder_state_pool(4, 128)
+    assert model._decoder_state_capacity == 5
+    assert model._decoder_slot_offsets.shape == (2, 5)
+    model.close_decoder_state_pool()
 
 
 @pytest.mark.cpu

@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import copy
 import math
-import os
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from typing import cast
@@ -1716,8 +1715,9 @@ class MossAudioTokenizerModel(MossAudioTokenizerPreTrainedModel):
         self._streaming_exec_mask: torch.Tensor | None = None
         self._decoder_state_capacity = 0
         self._decoder_slot_offsets: torch.Tensor | None = None
-        # Opt-in while numerical and end-to-end validation is in progress.
-        self.shared_decoder_kv = os.environ.get("VLLM_OMNI_MOSS_CODEC_SHARED_KV", "0") == "1"
+        # V2 decoder pools share metadata and use one read-only padding slot.
+        # Fixed-width streaming contexts keep their independent legacy state.
+        self.shared_decoder_kv = True
         self._decoder_null_slot: int | None = None
         self.post_init()
 
