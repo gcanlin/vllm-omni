@@ -22,7 +22,7 @@ it is not a client-only concurrency sweep on the same running service.
 ## Results
 
 | Phase | Completed / failed | Wall s | Audio-s/s | Requests/s | Mean RTF | Mean TTFP ms | Mean E2EL ms |
-|---|---:|---:|---:|---:|---:|---:|---:|
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Cold warmup (excluded) | 1088 / 0 | 385.9527 | 12.0222 | 2.8190 | 5.606454 | 21272.58 | 21768.51 |
 | Round 2 | 1088 / 0 | 32.7507 | 144.1143 | 33.2207 | 0.435502 | 340.90 | 1841.31 |
 | Round 3 | 1088 / 0 | 32.3062 | 146.3224 | 33.6778 | 0.428525 | 341.61 | 1815.81 |

@@ -21,7 +21,7 @@ in `perf/moss-local-optimizations-20260909` at `ca9e0a1d`, not included here.
 ## Results
 
 | Phase | Completed / failed | Wall s | Audio-s/s | Requests/s | Mean RTF | Mean TTFP ms | Mean E2EL ms |
-|---|---:|---:|---:|---:|---:|---:|---:|
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Cold warmup (excluded) | 1088 / 0 | 405.0296 | 11.6375 | 2.6862 | 11.3684 | 43426.42 | 43926.98 |
 | Round 2 | 1088 / 0 | 25.7997 | 181.8349 | 42.1711 | 0.702422 | 786.11 | 2921.81 |
 | Round 3 | 1088 / 0 | 26.2267 | 180.0147 | 41.4844 | 0.701606 | 817.48 | 2928.87 |

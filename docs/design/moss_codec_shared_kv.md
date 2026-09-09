@@ -1,5 +1,45 @@
 # MOSS codec shared KV state experiment
 
+## Matched baseline results
+
+Single H200, both stages colocated, BF16, vLLM 0.28.0, PyTorch
+2.13.0+cu130, Triton 3.7.1. Baseline is local main `677265b6`.
+The optimization remains opt-in and does not establish audio-quality acceptance.
+
+At C128, both stages use 128 sequences and codec capture buckets
+`[1,2,4,8,16,32,64,128]`; memory fractions are 0.60/0.30. After all 16 graphs
+were captured, three idle samples five seconds apart were identical:
+
+| Memory (MiB) | Main | Shared KV |
+| --- | ---: | ---: |
+| Whole GPU used | 118859 | 107189 |
+| AR process | 83436 | 83436 |
+| Codec process | 35406 | 23736 |
+| Whole GPU free | 24298 | 35968 |
+
+Measured service memory reduction: **11670 MiB (11.40 GiB)**, entirely in the
+codec process. The theoretical KV tensor reduction is 10.49 GiB; allocator
+and graph pools also affect service memory. Main compiled fresh, shared KV
+reused AOT artifacts. These are post-capture idle values, not exact peaks or
+matched fully warmed measurements. Main's partial warmup was intentionally
+stopped; its memory increased only 2 MiB. No benchmark was run for the second
+arm of this memory-only comparison.
+
+C64 throughput uses full1088 warmup excluded, then two full1088 measured rounds
+per variant, output-len 256, Seed-TTS EN voice_clone, 48 kHz stereo:
+
+| Audio throughput (audio-s/s) | Round 2 | Round 3 | Mean |
+| --- | ---: | ---: | ---: |
+| Main | 144.1106 | 146.5795 | 145.3450 |
+| Shared KV | 144.1143 | 146.3224 | 145.2184 |
+
+Difference **-0.087%**: no measurable C64 E2E throughput gain. Every completed
+phase had 1088 successes and zero failures. The host was shared, runs were
+sequential rather than counterbalanced, and generated lengths were stochastic.
+WER/SIM/UTMOS are not evaluated. Full reports accompany this change under
+`results/moss_main_baseline_c64_20260909/README.md` and
+`results/moss_c128_memory_20260909/README.md`.
+
 ## Source and scope
 
 2026-09-09. Based on local main `677265b64b7870374705f18e81579c9d6e5ec8c7`.
@@ -98,7 +138,7 @@ isolated. These are repeated microbench timings in one process, not independent
 serving trials. Raw log: `/tmp/moss_shared_kv_20260909_owned_inputs.log`.
 
 | Execution B | Base frames T | Legacy ms | Shared KV ms | Speedup | Time reduction |
-|---:|---:|---:|---:|---:|---:|
+| ---: | ---: | ---: | ---: | ---: | ---: |
 | 1 | 1 | 19.090 | 14.839 | 1.286x | 22.27% |
 | 1 | 15 | 20.632 | 16.237 | 1.271x | 21.30% |
 | 4 | 1 | 21.175 | 16.275 | 1.301x | 23.14% |
@@ -128,7 +168,7 @@ does not validate production AOT-cache reuse or serving throughput.
 Raw log: `/tmp/moss_shared_kv_20260909_compiled.log`.
 
 | Execution B | Base frames T | Legacy ms | Shared KV ms | Speedup |
-|---:|---:|---:|---:|---:|
+| ---: | ---: | ---: | ---: | ---: |
 | 1 | 15 | 6.797 | 6.503 | 1.045x |
 
 The smaller compiled-path gain is important: do not use the plain-graph
@@ -160,7 +200,7 @@ error arrays. Input lengths match in order across all phases; each has 143,858
 input tokens. Cold warmup took 405.03 s and is excluded from the following table.
 
 | Counted phase | Wall time s | Audio-s/s | Requests/s | Mean RTF | Mean TTFP ms | Mean E2EL ms |
-|---|---:|---:|---:|---:|---:|---:|
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Round 2 | 25.7997 | 181.8349 | 42.1711 | 0.702422 | 786.11 | 2921.81 |
 | Round 3 | 26.2267 | 180.0147 | 41.4844 | 0.701606 | 817.48 | 2928.87 |
 | Arithmetic mean | — | **180.9248** | 41.8277 | 0.702014 | 801.80 | 2925.34 |
@@ -190,7 +230,7 @@ server capacity as well as client concurrency versus the C128 run above.
 Full 1088-prompt warmup excluded; two measured rounds:
 
 | Phase | Completed / failed | Audio-s/s | Mean RTF | Mean TTFP ms | Mean E2EL ms |
-|---|---:|---:|---:|---:|---:|
+| --- | ---: | ---: | ---: | ---: | ---: |
 | Round 2 | 1088 / 0 | 144.1143 | 0.435502 | 340.90 | 1841.31 |
 | Round 3 | 1088 / 0 | 146.3224 | 0.428525 | 341.61 | 1815.81 |
 | Mean | — | **145.2184** | 0.432013 | 341.26 | 1828.56 |

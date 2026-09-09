@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 import copy
-from unittest.mock import patch
 
 import pytest
 import torch
@@ -91,8 +90,9 @@ def test_pool_size_metadata_sharing_and_legacy_lifecycle():
 
 
 @pytest.mark.cpu
-def test_full_codec_wrap_padding_reorder_reset_and_oversized_chunks():
+def test_full_codec_wrap_padding_reorder_reset_and_oversized_chunks(mocker):
     baseline, candidate = pair("cpu")
+    prepare = mocker.spy(codec_module, "prepare_streaming_attention_metadata")
     for step, frames in enumerate([1, 3, 3, 7, 1, 3, 7, 3]):
         codes = torch.randint(0, 16, (2, 4, frames))
         valid = torch.tensor([True, True, False, False]) if step != 5 else torch.zeros(4, dtype=torch.bool)
@@ -102,13 +102,9 @@ def test_full_codec_wrap_padding_reorder_reset_and_oversized_chunks():
         lengths = torch.full((4,), frames) * valid
         with torch.inference_mode():
             ref = baseline.decode_streaming_tensors(codes, lengths, slots, valid)
-            with patch.object(
-                codec_module,
-                "prepare_streaming_attention_metadata",
-                wraps=codec_module.prepare_streaming_attention_metadata,
-            ) as prepare:
-                out = candidate.decode_streaming_tensors(codes, lengths, slots, valid)
-                assert prepare.call_count == 2  # Once per resolution, not six layers.
+            prepare.reset_mock()
+            out = candidate.decode_streaming_tensors(codes, lengths, slots, valid)
+            assert prepare.call_count == 2  # Once per resolution, not six layers.
         torch.testing.assert_close(out[0], ref[0], rtol=0, atol=0)
         torch.testing.assert_close(out[1], ref[1], rtol=0, atol=0)
         check_states(baseline, candidate)
