@@ -36,9 +36,8 @@ per variant, output-len 256, Seed-TTS EN voice_clone, 48 kHz stereo:
 Difference **-0.087%**: no measurable C64 E2E throughput gain. Every completed
 phase had 1088 successes and zero failures. The host was shared, runs were
 sequential rather than counterbalanced, and generated lengths were stochastic.
-WER/SIM/UTMOS are not evaluated. Full reports accompany this change under
-`results/moss_main_baseline_c64_20260909/README.md` and
-`results/moss_c128_memory_20260909/README.md`.
+WER/SIM/UTMOS are not evaluated. Full reports and raw artifacts are retained
+locally under the ignored `results/` directory and are not part of this PR.
 
 ## Source and scope
 
@@ -181,7 +180,7 @@ stage and codec graph buckets up to 128 for the requested E2E run.
 
 ## Requested E2E run (complete)
 
-Results: `results/moss_shared_kv_c128_20260909/`. Server PID 3790706,
+Local artifacts (not committed): `results/moss_shared_kv_c128_20260909/`. Server PID 3790706,
 port **8124** for both server and client (the user's client command named 8123,
 which is occupied by an older API process and is deliberately not used).
 Both stages use physical GPU 0 with capacity 128; codec buckets extend to 128.
@@ -240,6 +239,6 @@ lengths match across all phases; 143858 input tokens and zero nonempty errors
 per phase. All 14 compiled codec graphs captured without fallback. No paired
 flag-off baseline or quality evaluation: these results do not establish a gain.
 
-Raw results and full setup: `results/moss_shared_kv_c64_20260909/README.md`.
+Local results (not committed): `results/moss_shared_kv_c64_20260909/README.md`.
 Server retained on 8124: API 3932672, AR 3933193, codec 3934559; final health
 HTTP 200. Final whole GPU 0 memory 100557 MiB. Deploy config now remains C64.
