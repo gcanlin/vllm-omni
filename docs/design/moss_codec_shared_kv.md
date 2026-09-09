@@ -102,13 +102,10 @@ CUDA_VISIBLE_DEVICES=3 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
   python -m pytest tests/model_executor/models/moss_tts/test_shared_codec_kv.py \
   -o addopts= -q --run-level core_model
 
-CUDA_VISIBLE_DEVICES=3 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  python benchmarks/kernels/benchmark_moss_shared_kv.py \
-  --checkpoint /path/to/MOSS-Audio-Tokenizer-v2/snapshot \
-  --capacity 32 --batches 1 4 16 --repeats 20
 ```
 
-The benchmark loads actual decoder weights without instantiating the encoder.
+The local-only benchmark harness is not included in this PR. It loads actual
+decoder weights without instantiating the encoder.
 It runs a ten-chunk fixed-code comparison with two live and two padded rows,
 including slot reorder/reset, plus an independent legacy/legacy control.
 It then times native CUDA Graph replays with four alternating-order rounds per
