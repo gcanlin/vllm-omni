@@ -3,6 +3,12 @@
 # Codec: OpenMOSS-Team/MOSS-Audio-Tokenizer-v2 (48 kHz, stereo, channel-interleaved RVQ)
 # Uses a 1-layer GPT2-style local depth transformer (no delay warm-up), reset every
 # frame — same per-frame timing (80 ms/frame, 12.5 fps) as MOSS-TTS-Realtime.
+# Experimental codec state-pool optimization (default off; restart to change):
+# VLLM_OMNI_MOSS_CODEC_SHARED_KV=1 shares per-resolution attention metadata and
+# uses one read-only padding slot instead of max(capture_sizes) scratch slots.
+# Native SDPA and reference ring scatter remain unchanged. This is not paged
+# attention and does not yet eliminate the full KV gather. See
+# docs/design/moss_codec_shared_kv.md for validation and measurement boundaries.
 async_chunk: true
 
 connectors:
