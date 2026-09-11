@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-import copy
 import time
 from dataclasses import dataclass
 
@@ -16,8 +15,7 @@ import torch
 import torch.nn as nn
 from torch.cuda import CUDAGraph
 from vllm.compilation.decorators import support_torch_compile
-from vllm.config import CUDAGraphMode, VllmConfig
-from vllm.config.vllm import set_current_vllm_config
+from vllm.config import VllmConfig
 from vllm.logger import init_logger
 from vllm.platforms import current_platform
 
@@ -110,39 +108,9 @@ class CUDAGraphStreamingDecoderWrapper:
         self.graphs: dict[tuple[int, int], _CapturedStreamingDecodeGraph] = {}
         self._pool = None
         self._warmed_up = False
-        # vLLM owns Inductor compilation; this wrapper remains the sole owner
-        # of CUDA Graph capture/replay because it understands persistent codec
-        # state slots. Disable vLLM's CUDA Graph layer to avoid nested graphs.
-        compile_config = copy.copy(vllm_config)
-        compile_config.compilation_config = copy.copy(vllm_config.compilation_config)
-        compile_config.compilation_config.cudagraph_mode = CUDAGraphMode.NONE
-        compile_config.compilation_config.static_forward_context = {}
-        # pack_ring_kv is unconditional on CUDA: a cached AOT artifact may
-        # bypass Python forward, so register its custom-op schema before vLLM
-        # attempts to deserialize that graph.
-        from . import codec_kernels  # noqa: F401
-
-        adapter: type[nn.Module] = _MossOpaquePackedKVStreamingDecodeCompileAdapter
-        from . import codec_gemm, streaming_attention
-
-        # AOT drops Python guards. Include choices and the contents of the
-        # offline whitelist, not merely its filename, in the cache key.
-        extra = compile_config.additional_config
-        compile_config.additional_config = (
-            dict(extra) if isinstance(extra, dict) else {"base_hash": extra.compute_hash()}
-        )
-        compile_config.additional_config["moss_codec_kernels"] = {
-            "gemm": codec_gemm.CONFIG,
-            "fusion": codec_gemm.FUSE,
-            "bthd": streaming_attention.OUTPUT_BTHD,
-            "skip_empty": streaming_attention.SKIP_EMPTY,
-        }
-
-        with set_current_vllm_config(compile_config):
-            self._compiled_decode: nn.Module | None = adapter(
-                codec,
-                vllm_config=compile_config,
-            )
+        # Performance experiment: capture eager codec execution directly into
+        # CUDA Graphs, without constructing a vLLM/Inductor compile adapter.
+        self._compiled_decode: nn.Module | None = None
 
     @property
     def is_ready(self) -> bool:
