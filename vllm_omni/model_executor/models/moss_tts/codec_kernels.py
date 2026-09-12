@@ -70,7 +70,10 @@ def pack_ring_kv(
         return packed
     assert k.stride(-1) == v.stride(-1) == 1 and cache.is_contiguous()
     packed = torch.empty((2, batch, heads, capacity, dim), device=k.device, dtype=cache.dtype)
-    _pack_ring_kv[(triton.cdiv(capacity * dim, 256), batch, heads)](
+    # Larger tiles reduce CTA overhead when gathering full rings. Keep more
+    # independent tiles for small batches; element ownership is unchanged.
+    block = 512 if batch <= 2 else 1024
+    _pack_ring_kv[(triton.cdiv(capacity * dim, block), batch, heads)](
         k,
         v,
         cache,
@@ -85,7 +88,7 @@ def pack_ring_kv(
         cache.shape[1],
         *k.stride()[:3],
         *v.stride()[:3],
-        256,
+        block,
     )
     return packed
 
