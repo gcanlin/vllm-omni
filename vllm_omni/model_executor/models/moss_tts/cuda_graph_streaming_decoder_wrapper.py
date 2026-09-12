@@ -316,6 +316,13 @@ class CUDAGraphStreamingDecoderWrapper:
         if entry is None:
             return None
 
+        logger.debug(
+            "MOSS codec graph replay: actual_batch=%d bucket=%d frames=%d graph_frames=%d",
+            actual_batch_size,
+            batch_size,
+            frame_size,
+            graph_frame_size,
+        )
         entry.static_codes.zero_()
         entry.static_codes[:, :actual_batch_size, :frame_size].copy_(codes, non_blocking=True)
         entry.static_lengths.zero_()
