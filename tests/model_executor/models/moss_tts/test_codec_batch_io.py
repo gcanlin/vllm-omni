@@ -103,13 +103,15 @@ def test_dispatch_merges_only_tails_with_same_original_graph(enabled, expected_c
         assert calls[1][1] == dict(terminal_slots={1, 2}, pad_to_frames=15)
 
 
-def test_codec_compile_optout_preserves_graph_buckets():
+@pytest.mark.parametrize("explicit", [False, True])
+def test_codec_compile_optout_preserves_graph_buckets(explicit):
     from vllm_omni.model_executor.models.moss_tts.cuda_graph_streaming_decoder_wrapper import (
         CUDAGraphStreamingDecoderWrapper,
     )
 
     # No compilation configuration is needed when the adapter is disabled.
-    config = SimpleNamespace(model_config=SimpleNamespace(hf_config=SimpleNamespace(codec_compile=False)))
+    hf_config = SimpleNamespace(codec_compile=False) if explicit else SimpleNamespace()
+    config = SimpleNamespace(model_config=SimpleNamespace(hf_config=hf_config))
     wrapper = CUDAGraphStreamingDecoderWrapper(
         torch.nn.Identity(),
         state_capacity=8,

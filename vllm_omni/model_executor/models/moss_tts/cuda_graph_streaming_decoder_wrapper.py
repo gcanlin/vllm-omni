@@ -111,8 +111,10 @@ class CUDAGraphStreamingDecoderWrapper:
         self._pool = None
         self._warmed_up = False
         self._compiled_decode: nn.Module | None = None
-        if getattr(vllm_config.model_config.hf_config, "codec_compile", True) is False:
-            logger.info("MOSS-TTS codec compile disabled by hf_overrides.codec_compile; using plain CUDA Graphs")
+        # Keep the existing eager numerics by default. Compile remains an
+        # explicit experiment until streaming waveform equivalence is validated.
+        if getattr(vllm_config.model_config.hf_config, "codec_compile", False) is False:
+            logger.info("MOSS-TTS codec compile disabled; using plain CUDA Graphs (hf_overrides.codec_compile)")
             return
         # vLLM owns Inductor compilation; this wrapper remains the sole owner
         # of CUDA Graph capture/replay because it understands persistent codec
