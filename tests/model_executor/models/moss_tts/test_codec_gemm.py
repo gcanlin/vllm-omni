@@ -114,3 +114,27 @@ def test_selected_autocast_compile(monkeypatch, mode):
         actual = compiled(xx, rr)
         assert actual.dtype == expected.dtype
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@torch.inference_mode()
+def test_autocast_preserves_tuned_kernel_eligibility(monkeypatch):
+    monkeypatch.setattr(codec_gemm, "CONFIG", {"15,3072,768,1": [16, 64, 64, 1]})
+
+    def unexpected_tuned(*args, **kwargs):
+        raise AssertionError("Autocast must not newly enable tuned GEMM for FP32 inputs")
+
+    monkeypatch.setattr(codec_gemm, "ffn_gemm", unexpected_tuned)
+    x = torch.randn(15, 768, device="cuda", dtype=torch.float32)
+    w = torch.randn(3072, 768, device="cuda", dtype=torch.bfloat16) / 28
+    scale = torch.ones(3072, device="cuda", dtype=torch.bfloat16)
+    residual = torch.zeros(15, 3072, device="cuda", dtype=torch.bfloat16)
+
+    def run(x):
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            return codec_gemm.selected_linear(x, w, scale, residual, 1)
+
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        expected = F.gelu(F.linear(x, w))
+    torch.testing.assert_close(run(x), expected, rtol=0, atol=0)
+    compiled = torch.compile(run, fullgraph=True)
+    torch.testing.assert_close(compiled(x), expected, rtol=0, atol=0)

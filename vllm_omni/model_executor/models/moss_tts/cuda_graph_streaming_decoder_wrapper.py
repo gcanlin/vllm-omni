@@ -110,6 +110,10 @@ class CUDAGraphStreamingDecoderWrapper:
         self.graphs: dict[tuple[int, int], _CapturedStreamingDecodeGraph] = {}
         self._pool = None
         self._warmed_up = False
+        self._compiled_decode: nn.Module | None = None
+        if getattr(vllm_config.model_config.hf_config, "codec_compile", True) is False:
+            logger.info("MOSS-TTS codec compile disabled by hf_overrides.codec_compile; using plain CUDA Graphs")
+            return
         # vLLM owns Inductor compilation; this wrapper remains the sole owner
         # of CUDA Graph capture/replay because it understands persistent codec
         # state slots. Disable vLLM's CUDA Graph layer to avoid nested graphs.
@@ -135,13 +139,13 @@ class CUDAGraphStreamingDecoderWrapper:
             "gemm": codec_gemm.CONFIG,
             "fusion": codec_gemm.FUSE,
             "residual_norm": codec_residual_norm.ENABLED,
-            "selected_linear_autocast": 1,
+            "selected_linear_autocast": 2,
             "bthd": streaming_attention.OUTPUT_BTHD,
             "skip_empty": streaming_attention.SKIP_EMPTY,
         }
 
         with set_current_vllm_config(compile_config):
-            self._compiled_decode: nn.Module | None = adapter(
+            self._compiled_decode = adapter(
                 codec,
                 vllm_config=compile_config,
             )

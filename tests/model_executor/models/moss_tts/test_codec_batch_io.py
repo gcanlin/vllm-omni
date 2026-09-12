@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
@@ -99,3 +101,23 @@ def test_dispatch_merges_only_tails_with_same_original_graph(enabled, expected_c
     assert [outputs[i].shape[-1] for i in range(4)] == [1, 2, 7, 15]
     if enabled:
         assert calls[1][1] == dict(terminal_slots={1, 2}, pad_to_frames=15)
+
+
+def test_codec_compile_optout_preserves_graph_buckets():
+    from vllm_omni.model_executor.models.moss_tts.cuda_graph_streaming_decoder_wrapper import (
+        CUDAGraphStreamingDecoderWrapper,
+    )
+
+    # No compilation configuration is needed when the adapter is disabled.
+    config = SimpleNamespace(model_config=SimpleNamespace(hf_config=SimpleNamespace(codec_compile=False)))
+    wrapper = CUDAGraphStreamingDecoderWrapper(
+        torch.nn.Identity(),
+        state_capacity=8,
+        batch_sizes=[1, 2, 4, 8],
+        frame_sizes=[1, 15],
+        num_quantizers=12,
+        vllm_config=config,
+    )
+    assert wrapper._compiled_decode is None
+    assert wrapper._select_batch_size(3) == 4
+    assert wrapper._select_frame_size(7, allow_padding=True) == 15
