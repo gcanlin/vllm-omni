@@ -968,6 +968,7 @@ class MossAudioTokenizerTransformerLayer(StreamingModule):
         self,
         x: torch.Tensor,
         execution_context: StreamingExecutionContext | None = None,
+        normalized: torch.Tensor | None = None,
     ) -> torch.Tensor:
         state = self._streaming_state
         if execution_context is not None and self.weights_per_step:
@@ -975,7 +976,7 @@ class MossAudioTokenizerTransformerLayer(StreamingModule):
         offset = state.offset_cpu if isinstance(state, LayerState) else 0
 
         x_orig = x
-        x = self.norm2(x)
+        x = self.norm2(x) if normalized is None else normalized
 
         if self.gating is None:
             assert self.linear1 is not None
@@ -1022,8 +1023,27 @@ class MossAudioTokenizerTransformerLayer(StreamingModule):
         x: torch.Tensor,
         execution_context: StreamingExecutionContext | None = None,
     ):
-        x = self._sa_block(x, execution_context)
-        x = self._ff_block(x, execution_context)
+        from .codec_residual_norm import ENABLED, residual_norm
+
+        if (
+            ENABLED
+            and execution_context is not None
+            and x.is_cuda
+            and x.dtype == torch.bfloat16
+            and isinstance(self.layer_scale_1, MossAudioTokenizerLayerScale)
+            and isinstance(self.norm2, nn.LayerNorm)
+            and self.norm2.weight is not None
+            and self.norm2.bias is not None
+        ):
+            normalized = self.norm1(x)
+            update = self.self_attn(normalized, normalized, normalized, execution_context=execution_context)
+            x, normalized = residual_norm(
+                update, x, self.layer_scale_1.scale, self.norm2.weight, self.norm2.bias, self.norm2.eps
+            )
+            x = self._ff_block(x, execution_context, normalized=normalized)
+        else:
+            x = self._sa_block(x, execution_context)
+            x = self._ff_block(x, execution_context)
         state = self._streaming_state
         if state is not None and execution_context is None:
             assert isinstance(state, LayerState)
