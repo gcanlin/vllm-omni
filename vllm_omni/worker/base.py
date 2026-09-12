@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+
 """Base worker class for vLLM-Omni with device-level GPU memory profiling."""
 
 from __future__ import annotations
@@ -69,6 +72,10 @@ class OmniGPUWorkerBase(GPUWorker):
         vLLM's profile() only passes is_start, so we generate a descriptive
         trace filename here before delegating to the profiler.
         """
+        profiler_config = self.vllm_config.profiler_config
+        if profiler_config and profiler_config.profiler in ("cuda", "proton"):
+            # Upstream creates these profilers lazily on the first start call.
+            return super().profile(is_start, profile_prefix)
         if self.profiler is None:
             raise RuntimeError(
                 "Profiling is not enabled. For diffusion models, set --profiler-config via CLI. "

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Characterization tests for ``vllm_omni.worker.base.OmniGPUWorkerBase``.
 
 Pins the CURRENT behaviour of ``determine_available_memory`` (device-level
@@ -239,3 +239,19 @@ def test_wake_up_forwards_tags_to_allocator(monkeypatch):
 
     assert OmniGPUWorkerBase.wake_up(worker, tags=["weights"]) is True
     assert calls["tags"] == ["weights"]
+
+
+@pytest.mark.parametrize("profiler_type", ["cuda", "proton"])
+@pytest.mark.parametrize("is_start", [True, False])
+def test_lazy_profiler_delegates_to_upstream(monkeypatch, profiler_type, is_start):
+    worker = object.__new__(OmniGPUWorkerBase)
+    worker.vllm_config = SimpleNamespace(profiler_config=SimpleNamespace(profiler=profiler_type))
+    worker.profiler = None
+    calls = []
+
+    def profile(self, start, prefix):
+        calls.append((self, start, prefix))
+
+    monkeypatch.setattr(base.GPUWorker, "profile", profile)
+    worker.profile(is_start, "codec")
+    assert calls == [(worker, is_start, "codec")]
