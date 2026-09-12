@@ -8,17 +8,69 @@
 
 from __future__ import annotations
 
+import copy
 import time
 from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 from torch.cuda import CUDAGraph
-from vllm.config import VllmConfig
+from vllm.compilation.decorators import support_torch_compile
+from vllm.config import CUDAGraphMode, VllmConfig
+from vllm.config.vllm import set_current_vllm_config
 from vllm.logger import init_logger
 from vllm.platforms import current_platform
 
 logger = init_logger(__name__)
+
+
+@support_torch_compile(
+    dynamic_arg_dims={
+        "codes": {1: "batch", 2: "frames"},
+        "codes_lengths": {0: "batch"},
+        "state_slot_ids": {0: "batch"},
+        "valid_rows": {0: "batch"},
+    }
+)
+class _MossStreamingDecodeCompileAdapter(nn.Module):
+    """Expose the BF16 codec streaming hot path to vLLM compile.
+
+    The dtype is part of the class identity intentionally: vLLM's AOT cache
+    drops runtime guards, so an artifact traced with the old FP32 decoder
+    weights must never be reused after the decoder is materialized as BF16.
+    """
+
+    def __init__(self, codec: nn.Module, *, vllm_config: VllmConfig) -> None:
+        super().__init__()
+        self.codec = codec
+
+    def forward(
+        self,
+        codes: torch.Tensor,
+        codes_lengths: torch.Tensor,
+        state_slot_ids: torch.Tensor,
+        valid_rows: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.codec.decode_streaming_tensors(codes, codes_lengths, state_slot_ids, valid_rows)
+
+
+@support_torch_compile(
+    dynamic_arg_dims={
+        "codes": {1: "batch", 2: "frames"},
+        "codes_lengths": {0: "batch"},
+        "state_slot_ids": {0: "batch"},
+        "valid_rows": {0: "batch"},
+    }
+)
+class _MossOpaquePackedKVStreamingDecodeCompileAdapter(nn.Module):
+    """Native attention with bit-preserving fused KV packing; separate AOT key."""
+
+    def __init__(self, codec: nn.Module, *, vllm_config: VllmConfig) -> None:
+        super().__init__()
+        self.codec = codec
+
+    def forward(self, codes, codes_lengths, state_slot_ids, valid_rows):
+        return self.codec.decode_streaming_tensors(codes, codes_lengths, state_slot_ids, valid_rows)
 
 
 @dataclass
@@ -58,6 +110,41 @@ class CUDAGraphStreamingDecoderWrapper:
         self.graphs: dict[tuple[int, int], _CapturedStreamingDecodeGraph] = {}
         self._pool = None
         self._warmed_up = False
+        # vLLM owns Inductor compilation; this wrapper remains the sole owner
+        # of CUDA Graph capture/replay because it understands persistent codec
+        # state slots. Disable vLLM's CUDA Graph layer to avoid nested graphs.
+        compile_config = copy.copy(vllm_config)
+        compile_config.compilation_config = copy.copy(vllm_config.compilation_config)
+        compile_config.compilation_config.cudagraph_mode = CUDAGraphMode.NONE
+        compile_config.compilation_config.static_forward_context = {}
+        # pack_ring_kv is unconditional on CUDA: a cached AOT artifact may
+        # bypass Python forward, so register its custom-op schema before vLLM
+        # attempts to deserialize that graph.
+        from . import codec_kernels  # noqa: F401
+
+        adapter: type[nn.Module] = _MossOpaquePackedKVStreamingDecodeCompileAdapter
+        from . import codec_gemm, codec_residual_norm, streaming_attention
+
+        # AOT drops Python guards. Include choices and the contents of the
+        # offline whitelist, not merely its filename, in the cache key.
+        extra = compile_config.additional_config
+        compile_config.additional_config = (
+            dict(extra) if isinstance(extra, dict) else {"base_hash": extra.compute_hash()}
+        )
+        compile_config.additional_config["moss_codec_kernels"] = {
+            "gemm": codec_gemm.CONFIG,
+            "fusion": codec_gemm.FUSE,
+            "residual_norm": codec_residual_norm.ENABLED,
+            "selected_linear_autocast": 1,
+            "bthd": streaming_attention.OUTPUT_BTHD,
+            "skip_empty": streaming_attention.SKIP_EMPTY,
+        }
+
+        with set_current_vllm_config(compile_config):
+            self._compiled_decode: nn.Module | None = adapter(
+                codec,
+                vllm_config=compile_config,
+            )
 
     @property
     def is_ready(self) -> bool:
@@ -93,9 +180,10 @@ class CUDAGraphStreamingDecoderWrapper:
             for batch_size, frame_size in capture_keys:
                 key = (batch_size, frame_size)
                 try:
-                    self._capture(batch_size, frame_size, device)
+                    compiled = self._capture(batch_size, frame_size, device)
                     logger.info(
-                        "  Captured plain MOSS-TTS streaming decoder CUDA graph for (B,T)=%s",
+                        "  Captured %s MOSS-TTS streaming decoder CUDA graph for (B,T)=%s",
+                        "compiled" if compiled else "plain",
                         key,
                     )
                 except Exception:
@@ -113,14 +201,37 @@ class CUDAGraphStreamingDecoderWrapper:
         )
 
     @torch.no_grad()
-    def _capture(self, batch_size: int, frame_size: int, device: torch.device) -> None:
-        # Capture eager codec kernels directly; no torch.compile or AOT cache.
+    def _capture(self, batch_size: int, frame_size: int, device: torch.device) -> bool:
+        if self._compiled_decode is not None:
+            try:
+                self._capture_with_decode(
+                    batch_size,
+                    frame_size,
+                    device,
+                    self._compiled_decode,
+                )
+                return True
+            except Exception:
+                logger.warning(
+                    "vLLM compile/capture failed for MOSS-TTS (B,T)=(%d,%d); falling back to a plain CUDA Graph",
+                    batch_size,
+                    frame_size,
+                    exc_info=True,
+                )
+                scratch_slots = self.state_capacity + torch.arange(
+                    batch_size,
+                    dtype=torch.long,
+                    device=device,
+                )
+                self.codec.reset_decoder_state_slots(scratch_slots)
+                self._compiled_decode = None
         self._capture_with_decode(
             batch_size,
             frame_size,
             device,
             self.codec.decode_streaming_tensors,
         )
+        return False
 
     @torch.no_grad()
     def _capture_with_decode(

@@ -84,3 +84,33 @@ def test_ffn_strict_dynamic_dimensions(monkeypatch):
         ctx = StreamingExecutionContext(slots, valid)
         value = compiled(x, ctx)
         torch.testing.assert_close(value, layer._ff_block(x, ctx), atol=0.008, rtol=0.008)
+
+
+@pytest.mark.parametrize("mode", [0, 1, 2])
+@torch.inference_mode()
+def test_selected_autocast_compile(monkeypatch, mode):
+    monkeypatch.setattr(codec_gemm, "CONFIG", {"15,3072,768,1": [16, 64, 64, 1]})
+    x = torch.randn(2, 15, 128, device="cuda", dtype=torch.float32)
+    w = torch.randn(512, 128, device="cuda", dtype=torch.bfloat16) / 12
+    scale = torch.randn(512, device="cuda", dtype=torch.bfloat16) * 0.01
+    residual = torch.randn(2, 15, 512, device="cuda", dtype=torch.float32)
+
+    def run(x, residual):
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            return codec_gemm.selected_linear(x, w, scale, residual, mode)
+
+    compiled = torch.compile(run, fullgraph=True, dynamic=True)
+    for batch in [2, 4]:
+        xx = x.repeat(batch // 2, 1, 1)
+        rr = residual.repeat(batch // 2, 1, 1)
+        torch._dynamo.mark_dynamic(xx, [0, 1])
+        torch._dynamo.mark_dynamic(rr, [0, 1])
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            expected = F.linear(xx, w)
+            if mode == 1:
+                expected = F.gelu(expected)
+            elif mode == 2:
+                expected = rr + expected * scale
+        actual = compiled(xx, rr)
+        assert actual.dtype == expected.dtype
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)

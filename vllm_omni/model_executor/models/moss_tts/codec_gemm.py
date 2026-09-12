@@ -139,7 +139,7 @@ def _(x, weight, scale, residual, mode, bm, bn, bk, split):
 
 
 @torch.library.custom_op("moss_codec::selected_linear", mutates_args=())
-def selected_linear(
+def _selected_linear(
     x: torch.Tensor, weight: torch.Tensor, scale: torch.Tensor, residual: torch.Tensor, mode: int
 ) -> torch.Tensor:
     """Dispatch inside the opaque op so batch/frame dimensions remain symbolic."""
@@ -169,6 +169,24 @@ def selected_linear(
     return value
 
 
-@selected_linear.register_fake
+@_selected_linear.register_fake
 def _(x, weight, scale, residual, mode):
-    return torch.empty((*x.shape[:-1], weight.shape[0]), device=x.device, dtype=x.dtype)
+    dtype = x.dtype
+    if mode == 2:
+        dtype = torch.promote_types(torch.promote_types(dtype, scale.dtype), residual.dtype)
+    return torch.empty((*x.shape[:-1], weight.shape[0]), device=x.device, dtype=dtype)
+
+
+def selected_linear(
+    x: torch.Tensor, weight: torch.Tensor, scale: torch.Tensor, residual: torch.Tensor, mode: int
+) -> torch.Tensor:
+    # Autocast is lowered outside opaque ops by torch.compile. Materialize
+    # linear's casts before that boundary so the fake and real kernels agree.
+    # Keep the residual/scale dtypes: autocast does not cast elementwise math.
+    if torch.is_autocast_enabled(x.device.type):
+        dtype = torch.get_autocast_dtype(x.device.type)
+        if x.dtype in (torch.float16, torch.bfloat16, torch.float32):
+            x = x.to(dtype)
+        if weight.dtype in (torch.float16, torch.bfloat16, torch.float32):
+            weight = weight.to(dtype)
+    return _selected_linear(x, weight, scale, residual, mode)
