@@ -14,6 +14,8 @@ import math
 import torch
 from vllm.triton_utils import HAS_TRITON, tl, triton
 
+from . import codec_pdl
+
 libdevice = tl.extra.libdevice
 
 # =============================================================================
@@ -34,6 +36,7 @@ def _rope_unpack_qkv_kernel(
     log_period_scale: tl.constexpr,
     half_dim: tl.constexpr,
     BLOCK: tl.constexpr,
+    PDL: tl.constexpr = False,
 ):
     """One element per (b, h, t, pair): rotate Q/K pairs and copy V pairs.
 
@@ -50,6 +53,8 @@ def _rope_unpack_qkv_kernel(
     head = head_row % num_heads
     batch = head_row // num_heads
 
+    if PDL:
+        tl.extra.cuda.gdc_wait()
     position = tl.load(offset_ptr + batch, mask=mask, other=0).to(tl.float32) + time_index
     # libdevice exp/cos/sin and disabled FP fusion keep every fp32 op
     # bit-identical to the eager torch mul/exp/cos/sin chain.
@@ -69,6 +74,8 @@ def _rope_unpack_qkv_kernel(
     value_real = tl.load(projected_ptr + input_base + 2 * head_stride, mask=mask, other=0.0)
     value_imag = tl.load(projected_ptr + input_base + 2 * head_stride + 1, mask=mask, other=0.0)
 
+    if PDL:
+        tl.extra.cuda.gdc_launch_dependents()
     out_dtype = q_ptr.dtype.element_ty
     output_offset = row * head_dim + dim
     tl.store(q_ptr + output_offset, (query_real * cosine - query_imag * sine).to(out_dtype), mask=mask)
@@ -130,6 +137,7 @@ def codec_rope_unpack_qkv(
     v = torch.empty_like(q)
     pair_elements = q.numel() // 2
     block_size = 256
+    pdl = codec_pdl.enabled()
     _rope_unpack_qkv_kernel[(triton.cdiv(pair_elements, block_size),)](
         projected,
         offset,
@@ -142,6 +150,8 @@ def codec_rope_unpack_qkv(
         log_period_scale=-math.log(max_period) * 2 / head_dim,
         half_dim=head_dim // 2,
         BLOCK=block_size,
+        PDL=pdl,
+        launch_pdl=pdl,
         num_warps=4,
         enable_fp_fusion=False,
     )
@@ -174,6 +184,7 @@ def _packed_causal_mask_kernel(
     capacity,
     context: tl.constexpr,
     BLOCK: tl.constexpr,
+    PDL: tl.constexpr = False,
 ):
     """Integer-exact physical-ring causal mask from pre-advance end offsets.
 
@@ -187,6 +198,8 @@ def _packed_causal_mask_kernel(
     batch = tl.program_id(2).to(tl.int64)
     time_index = tl.program_id(1)
 
+    if PDL:
+        tl.extra.cuda.gdc_wait()
     end_offset = tl.load(end_offset_ptr + batch)
     is_valid = tl.load(valid_ptr + batch).to(tl.int32)
     next_offset = tl.where(is_valid != 0, end_offset + query_length, end_offset)
@@ -196,6 +209,8 @@ def _packed_causal_mask_kernel(
     key_position = tl.where(delta_index <= 0, last_offset + delta_index, last_offset + delta_index - capacity)
     key_position = tl.where(columns >= next_offset, -1, key_position)
     query_position = tl.load(query_offset_ptr + batch) + time_index
+    if PDL:
+        tl.extra.cuda.gdc_launch_dependents()
     delta = query_position - key_position
     allowed = (key_position >= 0) & (delta >= 0)
     if context > 0:
@@ -271,6 +286,7 @@ def codec_causal_mask(
         dtype=torch.bool,
     )
     block_size = 256
+    pdl = codec_pdl.enabled()
     _packed_causal_mask_kernel[(triton.cdiv(capacity, block_size), query_length, batch_size)](
         mask,
         offset_end,
@@ -280,6 +296,8 @@ def codec_causal_mask(
         capacity,
         context=context,
         BLOCK=block_size,
+        PDL=pdl,
+        launch_pdl=pdl,
         num_warps=4,
     )
     return mask

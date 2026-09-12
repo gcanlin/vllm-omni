@@ -12,6 +12,8 @@ import os
 import torch
 from vllm.triton_utils import tl, triton
 
+from . import codec_pdl
+
 libdevice = tl.extra.cuda.libdevice
 
 _path = os.getenv("MOSS_CODEC_GEMM_CONFIG")
@@ -37,16 +39,21 @@ def _mm(
     mode: tl.constexpr,
     scale,
     residual,
+    use_pdl: tl.constexpr = False,
 ):
     rows = tl.program_id(0) * bm + tl.arange(0, bm)
     cols = tl.program_id(1) * bn + tl.arange(0, bn)
     kk = tl.program_id(2) * bk + tl.arange(0, bk)
     acc = tl.zeros((bm, bn), tl.float32)
+    if use_pdl:
+        tl.extra.cuda.gdc_wait()
     for block in range(tl.cdiv(k, bk * split)):
         ki = kk + block * bk * split
         av = tl.load(a + rows[:, None] * k + ki[None, :], (rows[:, None] < m) & (ki[None, :] < k), 0)
         wv = tl.load(w + cols[None, :] * k + ki[:, None], (cols[None, :] < n) & (ki[:, None] < k), 0)
         acc += tl.dot(av, wv)
+    if use_pdl:
+        tl.extra.cuda.gdc_launch_dependents()
     if split == 1:
         val = acc.to(tl.bfloat16).to(tl.float32)
         if mode == 1:
@@ -77,11 +84,16 @@ def _finish(
     split: tl.constexpr,
     mode: tl.constexpr,
     block: tl.constexpr,
+    use_pdl: tl.constexpr = False,
 ):
     ix = tl.program_id(0) * block + tl.arange(0, block)
     value = tl.full((block,), 0, tl.float32)
+    if use_pdl:
+        tl.extra.cuda.gdc_wait()
     for part in range(split):
         value += tl.load(p + part * size + ix, ix < size, 0)
+    if use_pdl:
+        tl.extra.cuda.gdc_launch_dependents()
     value = value.to(tl.bfloat16).to(tl.float32)
     if mode == 1:
         value = 0.5 * value * (1.0 + libdevice.erf(value * 0.7071067811865476))
@@ -104,6 +116,7 @@ def ffn_gemm(
     bk: int,
     split: int,
 ) -> torch.Tensor:
+    pdl = codec_pdl.enabled()
     n, k = weight.shape
     m = x.numel() // k
     out = torch.empty((*x.shape[:-1], n), device=x.device, dtype=x.dtype)
@@ -122,13 +135,26 @@ def ffn_gemm(
         mode,
         scale,
         residual,
+        use_pdl=pdl,
+        launch_pdl=pdl,
         num_warps=4,
         num_stages=3,
         enable_fp_fusion=False,
     )
     if split > 1:
         _finish[(triton.cdiv(m * n, 256),)](
-            partial, out, scale, residual, m * n, n, split, mode, 256, enable_fp_fusion=False
+            partial,
+            out,
+            scale,
+            residual,
+            m * n,
+            n,
+            split,
+            mode,
+            256,
+            use_pdl=pdl,
+            launch_pdl=pdl,
+            enable_fp_fusion=False,
         )
     return out
 
@@ -166,9 +192,21 @@ def _selected_linear(
         return torch.nn.functional.gelu(value)
     if mode == 2:
         if supported:
+            pdl = codec_pdl.enabled()
             out = torch.empty_like(value)
             _finish[(triton.cdiv(value.numel(), 256),)](
-                value, out, scale, residual, value.numel(), weight.shape[0], 1, 2, 256, enable_fp_fusion=False
+                value,
+                out,
+                scale,
+                residual,
+                value.numel(),
+                weight.shape[0],
+                1,
+                2,
+                256,
+                use_pdl=pdl,
+                launch_pdl=pdl,
+                enable_fp_fusion=False,
             )
             return out
         return residual + value * scale

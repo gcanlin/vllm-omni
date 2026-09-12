@@ -7,6 +7,8 @@ import os
 import torch
 from vllm.triton_utils import tl, triton
 
+from . import codec_pdl
+
 
 @triton.jit
 def _attention(
@@ -38,11 +40,14 @@ def _attention(
     block_n: tl.constexpr,
     output_bthd: tl.constexpr = True,
     skip_empty: tl.constexpr = True,
+    use_pdl: tl.constexpr = False,
 ):
     rows = tl.program_id(0) * block_m + tl.arange(0, block_m)
     bh = tl.program_id(1)
     batch, head = bh // num_heads, bh % num_heads
     dims = tl.arange(0, head_dim)
+    if use_pdl:
+        tl.extra.cuda.gdc_wait()
     q = tl.load(
         q_ptr + batch * qs0 + head * qs1 + rows[:, None] * qs2 + dims[None, :] * qs3,
         mask=rows[:, None] < q_len,
@@ -78,6 +83,8 @@ def _attention(
             )
             acc = acc * rescale[:, None] + tl.dot(p.to(v.dtype), v)
             maximum = next_max
+    if use_pdl:
+        tl.extra.cuda.gdc_launch_dependents()
     out = acc / tl.where(denominator > 0, denominator, 1.0)[:, None]
     if output_bthd:
         offsets = ((batch * q_len + rows[:, None]) * num_heads + head) * head_dim + dims[None, :]
@@ -107,6 +114,7 @@ def masked_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: to
     # the same accumulation granularity across both paths.
     bm = 16 if t <= 32 else 64
     num_warps = 8 if k.shape[2] <= 256 else 4
+    pdl = codec_pdl.enabled()
     _attention[(triton.cdiv(t, bm), b * h)](
         q,
         k,
@@ -127,6 +135,8 @@ def masked_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: to
         64,
         output_bthd=OUTPUT_BTHD,
         skip_empty=SKIP_EMPTY,
+        use_pdl=pdl,
+        launch_pdl=pdl,
         num_warps=num_warps,
         num_stages=2,
     )

@@ -7,15 +7,30 @@ import os
 import torch
 from vllm.triton_utils import tl, triton
 
+from . import codec_pdl
+
 ENABLED = os.getenv("MOSS_CODEC_RESIDUAL_NORM", "0") == "1"
 
 
 @triton.jit
-def _residual_scale(update, residual, scale, out, size: tl.constexpr, width: tl.constexpr, block: tl.constexpr):
+def _residual_scale(
+    update,
+    residual,
+    scale,
+    out,
+    size: tl.constexpr,
+    width: tl.constexpr,
+    block: tl.constexpr,
+    use_pdl: tl.constexpr = False,
+):
     index = tl.program_id(0) * block + tl.arange(0, block)
+    if use_pdl:
+        tl.extra.cuda.gdc_wait()
     u = tl.load(update + index, index < size, 0).to(tl.float32)
     r = tl.load(residual + index, index < size, 0).to(tl.float32)
     s = tl.load(scale + index % width).to(tl.float32)
+    if use_pdl:
+        tl.extra.cuda.gdc_launch_dependents()
     x = (u * s).to(tl.bfloat16).to(tl.float32) + r
     tl.store(out + index, x, index < size)
 
@@ -33,6 +48,7 @@ def residual_norm(
         t.is_cuda and t.dtype == torch.bfloat16 and t.is_contiguous() for t in (update, residual, scale, weight, bias)
     )
     if supported:
+        pdl = codec_pdl.enabled()
         out = torch.empty_like(residual)
         _residual_scale[(triton.cdiv(residual.numel(), 256),)](
             update,
@@ -42,6 +58,8 @@ def residual_norm(
             residual.numel(),
             residual.shape[-1],
             256,
+            use_pdl=pdl,
+            launch_pdl=pdl,
             enable_fp_fusion=False,
         )
     else:

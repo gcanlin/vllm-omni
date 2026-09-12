@@ -111,6 +111,9 @@ class CUDAGraphStreamingDecoderWrapper:
         self._pool = None
         self._warmed_up = False
         self._compiled_decode: nn.Module | None = None
+        from . import codec_pdl
+
+        logger.info("MOSS codec PDL enabled: %s", codec_pdl.enabled())
         # Keep the existing eager numerics by default. Compile remains an
         # explicit experiment until streaming waveform equivalence is validated.
         if getattr(vllm_config.model_config.hf_config, "codec_compile", False) is False:
@@ -142,6 +145,7 @@ class CUDAGraphStreamingDecoderWrapper:
             "fusion": codec_gemm.FUSE,
             "residual_norm": codec_residual_norm.ENABLED,
             "selected_linear_autocast": 2,
+            "pdl": codec_pdl.enabled(),
             "bthd": streaming_attention.OUTPUT_BTHD,
             "skip_empty": streaming_attention.SKIP_EMPTY,
         }

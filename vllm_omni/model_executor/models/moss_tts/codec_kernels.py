@@ -6,6 +6,8 @@
 import torch
 from vllm.triton_utils import tl, triton
 
+from . import codec_pdl
+
 
 @triton.jit
 def _pack_ring_kv(
@@ -28,8 +30,11 @@ def _pack_ring_kv(
     VH: tl.constexpr,
     VT: tl.constexpr,
     BLOCK: tl.constexpr,
+    PDL: tl.constexpr = False,
 ):
     b, h = tl.program_id(1), tl.program_id(2)
+    if PDL:
+        tl.extra.cuda.gdc_wait()
     slot = tl.load(Slots + b)
     offset = tl.load(Offsets + slot)
     i = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
@@ -41,6 +46,8 @@ def _pack_ring_kv(
     old_v = tl.load(Cache + SLOTS * H * C * D + base, (pos < C) & ~is_new, 0)
     new_k = tl.load(K + b * KB + h * KH + current * KT + d, is_new, 0)
     new_v = tl.load(V + b * VB + h * VH + current * VT + d, is_new, 0)
+    if PDL:
+        tl.extra.cuda.gdc_launch_dependents()
     key = tl.where(is_new, new_k, old_k)
     value = tl.where(is_new, new_v, old_v)
     # Each physical element has one owner. Never read an element another CTA
@@ -73,6 +80,7 @@ def pack_ring_kv(
     # Larger tiles reduce CTA overhead when gathering full rings. Keep more
     # independent tiles for small batches; element ownership is unchanged.
     block = 512 if batch <= 2 else 1024
+    pdl = codec_pdl.enabled()
     _pack_ring_kv[(triton.cdiv(capacity * dim, block), batch, heads)](
         k,
         v,
@@ -89,6 +97,8 @@ def pack_ring_kv(
         *k.stride()[:3],
         *v.stride()[:3],
         block,
+        PDL=pdl,
+        launch_pdl=pdl,
     )
     return packed
 
