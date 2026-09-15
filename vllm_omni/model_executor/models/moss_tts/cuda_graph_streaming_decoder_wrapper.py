@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+
 # Copyright 2026 OpenMOSS and the vLLM-Omni team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License").
@@ -29,7 +32,7 @@ logger = init_logger(__name__)
         "valid_rows": {0: "batch"},
     }
 )
-class _MossStreamingDecodeCompileAdapter(nn.Module):
+class _MossPackedKVStreamingDecodeCompileAdapter(nn.Module):
     """Expose the BF16 codec streaming hot path to vLLM compile.
 
     The dtype is part of the class identity intentionally: vLLM's AOT cache
@@ -95,8 +98,13 @@ class CUDAGraphStreamingDecoderWrapper:
         compile_config.compilation_config = copy.copy(vllm_config.compilation_config)
         compile_config.compilation_config.cudagraph_mode = CUDAGraphMode.NONE
         compile_config.compilation_config.static_forward_context = {}
+        # AOT cache loads can bypass Python forward. Register the custom op
+        # before loading an artifact; the adapter has a separate identity from
+        # main's scatter implementation so the two benchmark paths cannot mix.
+        from . import codec_kernels  # noqa: F401
+
         with set_current_vllm_config(compile_config):
-            self._compiled_decode: nn.Module | None = _MossStreamingDecodeCompileAdapter(
+            self._compiled_decode: nn.Module | None = _MossPackedKVStreamingDecodeCompileAdapter(
                 codec,
                 vllm_config=compile_config,
             )

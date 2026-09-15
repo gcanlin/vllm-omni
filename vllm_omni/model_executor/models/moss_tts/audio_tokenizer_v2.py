@@ -537,17 +537,22 @@ class RingKVCache:
             slots = execution_context.state_slot_ids
             valid_rows = execution_context.valid_rows
             end_offset = self.end_offset.index_select(0, slots)
-            row_cache = self.cache.index_select(1, slots)
+            if k.is_cuda and T <= self.capacity:
+                from .codec_kernels import pack_ring_kv
 
-            indexes = torch.arange(T, device=end_offset.device, dtype=end_offset.dtype)
-            indexes = (indexes + end_offset.view(-1, 1)) % self.capacity
-            scatter_indexes = indexes.view(B, 1, T, 1).expand(-1, H, T, D)
-            row_cache[0].scatter_(2, scatter_indexes, k)
-            row_cache[1].scatter_(2, scatter_indexes, v)
-            # Live and graph-padding rows always map to distinct slots. The
-            # latter map only to scratch state, so this write cannot corrupt a
-            # request even though dense graph operators still execute it.
-            self.cache.index_copy_(1, slots, row_cache)
+                row_cache = pack_ring_kv(k, v, self.cache, self.end_offset, slots)
+            else:
+                row_cache = self.cache.index_select(1, slots)
+
+                indexes = torch.arange(T, device=end_offset.device, dtype=end_offset.dtype)
+                indexes = (indexes + end_offset.view(-1, 1)) % self.capacity
+                scatter_indexes = indexes.view(B, 1, T, 1).expand(-1, H, T, D)
+                row_cache[0].scatter_(2, scatter_indexes, k)
+                row_cache[1].scatter_(2, scatter_indexes, v)
+                # Live and graph-padding rows always map to distinct slots. The
+                # latter map only to scratch state, so this write cannot corrupt a
+                # request even though dense graph operators still execute it.
+                self.cache.index_copy_(1, slots, row_cache)
 
             cache_indexes = torch.arange(self.capacity, device=end_offset.device, dtype=torch.long)
             last_offset = end_offset.view(-1, 1) + T - 1
