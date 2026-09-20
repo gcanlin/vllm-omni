@@ -464,11 +464,15 @@ class _MossTTSAdapterBase(ARTTSAdapter):
     ) -> PreparedRequest:
         server = self.ctx.server
         tts_params = await self._build_moss_tts_params(request, has_inline_ref_audio=has_inline_ref_audio)
+        registered_voice = None
         if request.voice:
             voice_lower = request.voice.lower()
             if voice_lower in server.uploaded_speakers and not has_inline_ref_audio:
+                created_at = server._voice_created_at(voice_lower)
                 tts_params["voice_name"] = [voice_lower]
-                tts_params["voice_created_at"] = [server._voice_created_at(voice_lower)]
+                tts_params["voice_created_at"] = [created_at]
+                if created_at > 0:
+                    registered_voice = (voice_lower, created_at)
         # MOSS samples internally from additional_information. build() runs
         # before the shared path applies request.seed to SamplingParams.
         seed = request.seed
@@ -482,7 +486,7 @@ class _MossTTSAdapterBase(ARTTSAdapter):
         else:
             prompt = tokens_input(prompt_token_ids=[1])
         prompt["additional_information"] = tts_params
-        prompt["cache_salt"] = conditioning_cache_salt(request, tts_params)
+        prompt["cache_salt"] = conditioning_cache_salt(request, tts_params, registered_voice=registered_voice)
         return PreparedRequest(
             prompt=prompt,
             tts_params=tts_params,

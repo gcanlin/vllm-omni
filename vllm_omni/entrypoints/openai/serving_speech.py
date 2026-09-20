@@ -36,6 +36,7 @@ from vllm.sampling_params import RequestOutputKind, SamplingParams
 from vllm.utils import random_uuid
 from vllm.v1.engine.exceptions import EngineDeadError, EngineGenerateError
 
+from vllm_omni.config.speech_cache import SpeechCacheConfig
 from vllm_omni.config.stage_config import StagePipelineConfig
 from vllm_omni.entrypoints.openai.audio_utils_mixin import AudioMixin, StreamingAudioResampler
 from vllm_omni.entrypoints.openai.protocol.audio import (
@@ -110,8 +111,6 @@ _REF_AUDIO_MIN_DURATION = 1.0  # seconds
 _REF_AUDIO_MAX_DURATION = 30.0  # seconds
 _REF_AUDIO_METADATA_FETCH_ATTEMPTS = 3
 _REMOTE_REF_AUDIO_SCHEMES = frozenset({"http", "https", "data"})
-_REF_AUDIO_RESOLVE_CACHE_MAX_ENTRIES = 1024
-_REF_AUDIO_RESOLVE_CACHE_MAX_BYTES = 512 * 1024 * 1024
 _TTS_MAX_INSTRUCTIONS_LENGTH = 500
 _DEFAULT_VOICE_NAME = "default"
 
@@ -250,14 +249,17 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         self._ref_audio_data_url_cache: dict[str, str] = {}
         self._ref_audio_resolve_cache: OrderedDict[str, tuple[np.ndarray, int, int, str]] = OrderedDict()
         self._ref_audio_resolve_cache_bytes = 0
-        self._ref_audio_resolve_cache_max_entries = _REF_AUDIO_RESOLVE_CACHE_MAX_ENTRIES
-        self._ref_audio_resolve_cache_max_bytes = _REF_AUDIO_RESOLVE_CACHE_MAX_BYTES
+        config = getattr(self, "speech_cache_config", None) or SpeechCacheConfig()
+        self.speech_cache_config = config
+        self._ref_audio_resolve_cache_max_entries = config.resolve_max_entries
+        self._ref_audio_resolve_cache_max_bytes = config.resolve_max_bytes
+        logger.info("Speech cache configuration: %s", config)
         # Readiness is keyed by (artifact_key, x_vector_only). An x-vector-only
         # request caches a speaker embedding but no ref_code, so its artifact
         # must not satisfy a later ICL request that needs ref_code (#5049).
         self._ref_audio_model_artifact_ready: set[tuple[str, bool]] = set()
         self._request_ref_audio_artifact_keys: dict[str, tuple[str, bool]] = {}
-        self._speaker_cache = get_speaker_cache()
+        self._speaker_cache = get_speaker_cache(max_bytes=config.speaker_max_bytes)
         self._last_upload_ts = 0
         self._upload_lock = asyncio.Lock()
         self._restore_uploaded_speakers()
@@ -348,6 +350,7 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         stage_configs: "list[Any] | None" = None,
         allowed_local_media_path: str = "",
         allowed_media_domains: list[str] | None = None,
+        speech_cache_config: SpeechCacheConfig | None = None,
     ) -> "OmniOpenAIServingSpeech":
         """Create a speech serving instance for pure diffusion TTS models.
 
@@ -355,6 +358,7 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         engine client that pure diffusion engines don't provide.
         """
         instance = cls.__new__(cls)
+        instance.speech_cache_config = speech_cache_config or SpeechCacheConfig()
         instance._diffusion_mode = True
         instance._diffusion_engine = diffusion_engine
         instance._diffusion_model_name = model_name
@@ -377,6 +381,7 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         self._media_connector = None
         self._allowed_local_media_path = ""
         self.model_name = kwargs.pop("model_name", None)
+        self.speech_cache_config = kwargs.pop("speech_cache_config", None) or SpeechCacheConfig()
         # True when the server was launched with --forced-aligner (a pooling
         # aligner stage is appended to the pipeline). Gates word_timestamps.
         self.forced_aligner_enabled: bool = bool(kwargs.pop("forced_aligner_enabled", False))

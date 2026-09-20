@@ -672,3 +672,66 @@ def test_higgs_audio_v2_validate_accepts_plain_text_and_paired_clone() -> None:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+@pytest.mark.parametrize(
+    "registered, inline, created_at, compact",
+    [(True, False, 123, True), (True, True, 123, False), (False, False, 123, False), (True, False, 0, False)],
+)
+def test_moss_registered_voice_salt_requires_verified_identity(mocker, registered, inline, created_at, compact):
+    server = mocker.Mock(uploaded_speakers={"speaker": {}} if registered else {})
+    server._voice_created_at.return_value = created_at
+    adapter = MossTTSAdapter(SpeechServingContext(server=server))
+    mocker.patch.object(adapter, "_build_moss_tts_params", new=mocker.AsyncMock(side_effect=lambda *a, **kw: {}))
+    request = OpenAICreateSpeechRequest(input="Target.", voice="Speaker", ref_audio="data:audio/wav;base64,AAAA")
+    first = asyncio.run(adapter.build(request, [], has_inline_ref_audio=inline))
+    changed = request.model_copy(update={"ref_audio": "data:audio/wav;base64,BBBB"})
+    second = asyncio.run(adapter.build(changed, [], has_inline_ref_audio=inline))
+    assert (first.prompt["cache_salt"] == second.prompt["cache_salt"]) is compact
+    assert request.ref_audio == "data:audio/wav;base64,AAAA"
+    if compact:
+        server._voice_created_at.return_value = created_at + 1
+        reuploaded = asyncio.run(adapter.build(request, [], has_inline_ref_audio=False))
+        assert reuploaded.prompt["cache_salt"] != first.prompt["cache_salt"]
+        server.uploaded_speakers.clear()
+        unregistered = asyncio.run(adapter.build(request, [], has_inline_ref_audio=False))
+        assert unregistered.prompt["cache_salt"] != first.prompt["cache_salt"]
+
+
+def test_registered_voice_salt_does_not_materialize_audio():
+    from vllm_omni.entrypoints.openai.tts_adapters.base import conditioning_cache_salt
+
+    class NoRepr(str):
+        def __repr__(self):
+            raise AssertionError("Uploaded audio must not be serialized on the hot path")
+
+    request = OpenAICreateSpeechRequest(input="Target.", voice="speaker").model_copy(
+        update={"ref_audio": NoRepr("data:audio/wav;base64,AAAA")}
+    )
+    salt = conditioning_cache_salt(request, registered_voice=("speaker", 123))
+    assert salt
+    with pytest.raises(AssertionError, match="must not be serialized"):
+        conditioning_cache_salt(request)
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [("input", "Different target."), ("ref_text", "Different reference."), ("language", "Chinese")],
+)
+def test_registered_voice_salt_preserves_request_conditioning(field, value):
+    from vllm_omni.entrypoints.openai.tts_adapters.base import conditioning_cache_salt
+
+    request = OpenAICreateSpeechRequest(input="Target.", voice="speaker")
+    salt = conditioning_cache_salt(request, registered_voice=("speaker", 123))
+    changed = request.model_copy(update={field: value})
+    assert conditioning_cache_salt(changed, registered_voice=("speaker", 123)) != salt
+
+
+@pytest.mark.parametrize("key", ["ref_audio_2_cache_key", "task_type", "ref_text"])
+def test_registered_voice_salt_preserves_resolved_conditioning(key):
+    from vllm_omni.entrypoints.openai.tts_adapters.base import conditioning_cache_salt
+
+    request = OpenAICreateSpeechRequest(input="Target.", voice="speaker")
+    first = conditioning_cache_salt(request, {key: "a"}, registered_voice=("speaker", 123))
+    second = conditioning_cache_salt(request, {key: "b"}, registered_voice=("speaker", 123))
+    assert first != second
