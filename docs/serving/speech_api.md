@@ -1073,10 +1073,3 @@ weights and working memory. The shared cache itself does not move tensors
 between devices; other adapters determine the device of their cached artifacts.
 Separate model-worker caches are not controlled by this section. The process-wide singleton rejects a
 conflicting explicit budget instead of silently ignoring it.
-
-For MOSS-TTS Local, Delay, and Realtime, registered voices with resident reference
-codes bypass audio-file reads, data URI conversion and validation, and waveform
-resolution, even with waveform storage disabled. A cache miss loads the captured
-upload generation and encodes it without retaining a base64 string or decoded
-waveform. With speaker caching disabled, every request must load and encode its
-audio again. The legacy MOSS-TTS-Nano waveform path is unchanged.
