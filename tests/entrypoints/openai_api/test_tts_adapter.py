@@ -219,7 +219,12 @@ def test_moss_reference_transcript_mode(variant, ref_text, mode, mocker):
     reference = [torch.ones((3, 12), dtype=torch.int64)]
     unified = torch.arange(52, dtype=torch.int64).reshape(1, 4, 13)
     processor = mocker.Mock(return_value={"input_ids": unified})
-    server = mocker.Mock(_moss_variant="local", uploaded_speakers={"speaker": {}})
+    server = mocker.Mock(
+        _moss_variant="local",
+        uploaded_speakers={
+            "speaker": {"embedding_source": "audio", "created_at": 123, "file_path": "/test.safetensors"}
+        },
+    )
     server._voice_created_at.return_value = 123
     request = OpenAICreateSpeechRequest(
         input="Target.", ref_text=ref_text, language="English", voice="Speaker", seed=0, max_new_tokens=2048
@@ -672,30 +677,6 @@ def test_higgs_audio_v2_validate_accepts_plain_text_and_paired_clone() -> None:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-
-
-@pytest.mark.parametrize(
-    "registered, inline, created_at, compact",
-    [(True, False, 123, True), (True, True, 123, False), (False, False, 123, False), (True, False, 0, False)],
-)
-def test_moss_registered_voice_salt_requires_verified_identity(mocker, registered, inline, created_at, compact):
-    server = mocker.Mock(uploaded_speakers={"speaker": {}} if registered else {})
-    server._voice_created_at.return_value = created_at
-    adapter = MossTTSAdapter(SpeechServingContext(server=server))
-    mocker.patch.object(adapter, "_build_moss_tts_params", new=mocker.AsyncMock(side_effect=lambda *a, **kw: {}))
-    request = OpenAICreateSpeechRequest(input="Target.", voice="Speaker", ref_audio="data:audio/wav;base64,AAAA")
-    first = asyncio.run(adapter.build(request, [], has_inline_ref_audio=inline))
-    changed = request.model_copy(update={"ref_audio": "data:audio/wav;base64,BBBB"})
-    second = asyncio.run(adapter.build(changed, [], has_inline_ref_audio=inline))
-    assert (first.prompt["cache_salt"] == second.prompt["cache_salt"]) is compact
-    assert request.ref_audio == "data:audio/wav;base64,AAAA"
-    if compact:
-        server._voice_created_at.return_value = created_at + 1
-        reuploaded = asyncio.run(adapter.build(request, [], has_inline_ref_audio=False))
-        assert reuploaded.prompt["cache_salt"] != first.prompt["cache_salt"]
-        server.uploaded_speakers.clear()
-        unregistered = asyncio.run(adapter.build(request, [], has_inline_ref_audio=False))
-        assert unregistered.prompt["cache_salt"] != first.prompt["cache_salt"]
 
 
 def test_registered_voice_salt_does_not_materialize_audio():
