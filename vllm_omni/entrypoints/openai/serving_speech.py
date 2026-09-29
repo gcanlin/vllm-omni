@@ -257,8 +257,7 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         self._ref_audio_data_url_cache: dict[str, str] = {}
         self._ref_audio_resolve_cache: OrderedDict[str, tuple[np.ndarray, int, int, str]] = OrderedDict()
         self._ref_audio_resolve_cache_bytes = 0
-        config = getattr(self, "speech_cache_config", None) or SpeechCacheConfig()
-        self.speech_cache_config = config
+        config = self.speech_cache_config
         self._ref_audio_resolve_cache_max_entries = config.resolve_max_entries
         self._ref_audio_resolve_cache_max_bytes = config.resolve_max_bytes
         logger.info("Speech cache configuration: %s", config)

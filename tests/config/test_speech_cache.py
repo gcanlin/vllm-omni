@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
+from dataclasses import FrozenInstanceError
+
 import pytest
+from pydantic import ValidationError
 
 from vllm_omni.config.omni_config import _get_deploy_config
 from vllm_omni.config.speech_cache import SpeechCacheConfig
@@ -11,21 +14,33 @@ pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 
 @pytest.mark.parametrize("field", ["resolve_max_bytes", "resolve_max_entries", "speaker_max_bytes"])
-@pytest.mark.parametrize("value", [-1, True, 1.5, "1024", None])
+@pytest.mark.parametrize("value", [-1, True, 1.0, 1.5, "1024", None])
 def test_invalid_limits(field, value):
     with pytest.raises(ValueError, match=field):
         SpeechCacheConfig(**{field: value})
 
 
+def test_unknown_limit_rejected():
+    with pytest.raises(ValidationError, match="resolve_max_byte"):
+        SpeechCacheConfig(resolve_max_byte=1024)
+
+
+def test_limits_are_immutable():
+    config = SpeechCacheConfig()
+    with pytest.raises(FrozenInstanceError):
+        config.resolve_max_entries = 0
+
+
 def test_yaml_inheritance(tmp_path):
     (tmp_path / "base.yaml").write_text(
-        "speech_cache:\n  resolve_max_bytes: 1234\n  resolve_max_entries: 8\n  speaker_max_bytes: 16\n"
+        "cuda_mps: true\nspeech_cache:\n  resolve_max_bytes: 1234\n  resolve_max_entries: 8\n  speaker_max_bytes: 16\n"
     )
     overlay = tmp_path / "overlay.yaml"
     overlay.write_text("base_config: base.yaml\nspeech_cache:\n  resolve_max_entries: 0\n")
     deploy = load_deploy_config(overlay)
     expected = SpeechCacheConfig(resolve_max_bytes=1234, resolve_max_entries=0, speaker_max_bytes=16)
     assert deploy.speech_cache == expected
+    assert deploy.cuda_mps is True
 
 
 @pytest.mark.parametrize("value", ["null", "[]", "false", "12", "{resolve_max_bytes: -1}", "{unknown: 10}"])

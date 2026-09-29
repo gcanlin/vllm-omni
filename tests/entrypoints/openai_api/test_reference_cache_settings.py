@@ -16,7 +16,9 @@ def server(monkeypatch, tmp_path):
 
     monkeypatch.setenv("SPEAKER_SAMPLES_DIR", str(tmp_path))
     monkeypatch.setattr(module, "_SINGLETON", None)
-    return OmniOpenAIServingSpeech.__new__(OmniOpenAIServingSpeech)
+    instance = OmniOpenAIServingSpeech.__new__(OmniOpenAIServingSpeech)
+    instance.speech_cache_config = SpeechCacheConfig()
+    return instance
 
 
 def test_defaults(server):
