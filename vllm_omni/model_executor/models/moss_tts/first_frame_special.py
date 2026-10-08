@@ -141,7 +141,7 @@ class StatelessFirstGraphs:
             return
         self.compiled = torch.compile(
             decode,
-            dynamic=True,
+            dynamic=False,
             fullgraph=True,
             options={"triton.cudagraphs": False, "epilogue_fusion": False, "emulate_precision_casts": True},
         )
@@ -151,7 +151,12 @@ class StatelessFirstGraphs:
         # Share a first-frame-only pool, separate from Talker/MTP allocations.
         pool = torch.cuda.graph_pool_handle()
         stream.wait_stream(torch.cuda.current_stream(device))
-        with torch.cuda.stream(stream):
+        # Each configured bucket needs a compiled specialization. Scope the
+        # cache bound to capture instead of changing the process-wide default.
+        with (
+            torch._dynamo.config.patch(recompile_limit=max(torch._dynamo.config.recompile_limit, len(batch_sizes))),
+            torch.cuda.stream(stream),
+        ):
             for batch in reversed(self.batch_sizes):
                 codes = torch.zeros(num_quantizers, batch, 1, dtype=torch.long, device=device)
                 lengths = torch.ones(batch, dtype=torch.long, device=device)
