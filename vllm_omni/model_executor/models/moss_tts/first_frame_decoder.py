@@ -14,7 +14,7 @@ import torch
 from torch import nn
 from vllm.config import VllmConfig
 
-from .codec_loader import load_codec
+from .modeling_moss_tts_codec import _MossCodecStreamSession, load_codec
 
 _FIRST_FRAME_BATCH_SIZES = (1, 2, 4, 8)
 
@@ -79,8 +79,6 @@ class MossFirstFrameDecoder(nn.Module):
             specialize(self._codec)
             self._special_graphs = StatelessFirstGraphs(self._codec, self._num_quantizers, _FIRST_FRAME_BATCH_SIZES)
         else:
-            from .modeling_moss_tts_codec import _MossCodecStreamSession
-
             self._session = _MossCodecStreamSession(
                 self._codec,
                 state_capacity=max(_FIRST_FRAME_BATCH_SIZES),
