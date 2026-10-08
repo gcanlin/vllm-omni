@@ -55,6 +55,24 @@ def _float32_to_pcm16_bytes(audio: np.ndarray) -> bytes:
     return np.clip(scaled, -32768, 32767).astype("<i2").tobytes()
 
 
+def _float32_to_pcm16(audio: np.ndarray) -> bytes:
+    """Convert channels-last float32 audio to interleaved little-endian PCM.
+
+    Match libsndfile's clipped float32 -> int32 -> PCM16 conversion, including
+    rounding at the int32 boundary before dropping its low 16 bits. Directly
+    rounding or truncating audio * 32768 produces different output samples.
+    Build a C-contiguous temporary so planar stereo input is interleaved once.
+    """
+    scaled = np.fmax(audio, np.float32(-1), order="C")
+    # Largest float32 below 1 keeps the int32 conversion in range.
+    np.minimum(scaled, np.float32(1 - 2**-24), out=scaled)
+    scaled *= 2147483648.0
+    np.rint(scaled, out=scaled)
+    pcm32 = scaled.astype(np.int32)
+    pcm32 >>= 16
+    return pcm32.astype("<i2").tobytes()
+
+
 class AudioMixin:
     """Mixin class to add audio-related utilities."""
 
@@ -106,7 +124,7 @@ class AudioMixin:
         if response_format == "pcm" and isinstance(audio_tensor, np.ndarray) and audio_tensor.dtype == np.float32:
             # Through BytesIO, soundfile makes a Python callback per block;
             # streamed chunks made that the API workers' largest cost.
-            audio_data = _float32_to_pcm16_bytes(audio_tensor)
+            audio_data = _float32_to_pcm16(audio_tensor)
         else:
             with BytesIO() as buffer:
                 soundfile.write(buffer, audio_tensor, sample_rate, format=soundfile_format, **kwargs)

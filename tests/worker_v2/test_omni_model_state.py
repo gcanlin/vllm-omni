@@ -283,7 +283,13 @@ def test_moss_local_decode_runs_depth_predictor_and_routes_eos(mocker):
     assert frame.call_args.kwargs["top_p"] == 0.8
     torch.testing.assert_close(inputs["inputs_embeds"], torch.tensor([[1.0] * 4, [0.0] * 4]))
     _, payload = state.postprocess_model_output(torch.zeros(2, 4), batch, request_state)
-    assert [codes.tolist() for codes in payload["codes"]["audio"]] == [[[1, 2]], [[8, 8]]]
+    assert payload["codes"]["audio"].tensor.tolist() == [[1, 2], [8, 8]]
+    from vllm_omni.worker_v2.omni_ar_model_runner import OmniARModelRunner
+
+    inter, _ = OmniARModelRunner._build_async_chunk_outputs_from_mm(
+        payload, np.array([0, 1, 2]), np.array([1, 1]), 2, 2
+    )
+    assert [item["codes.audio"].tolist() for item in inter] == [[[1, 2]], [[8, 8]]]
     assert model.compute_logits(torch.zeros(2, 4)).argmax(-1).tolist() == [2, 3]
     # An explicit local seed must reach the request-owned MRV2 generator.
     params = SamplingParams(extra_args={"tts_local_seed": 17}, seed=99)

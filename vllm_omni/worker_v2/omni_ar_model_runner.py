@@ -32,9 +32,10 @@ from vllm_omni.data_entry_keys import OmniPayload, flatten_payload
 from vllm_omni.distributed.omni_connectors.kv_transfer_manager import (
     OmniKVTransferManager,
 )
-from vllm_omni.model_executor.models.output_templates import OmniOutput
+from vllm_omni.model_executor.models.output_templates import OmniOutput, RequestBatchTensor
 from vllm_omni.outputs import OmniModelRunnerOutput
 from vllm_omni.utils.mm_outputs import partition_flat_payload
+from vllm_omni.worker_v2.forced_token_sampling import try_sample_forced_tokens
 from vllm_omni.worker_v2.omni_model_runner import OmniGPUModelRunner
 from vllm_omni.worker_v2.omni_sampler import sample_with_output
 from vllm_omni.worker_v2.output_snapshot import PackedOutputSnapshot, RequestOutputSnapshot, pack_output_snapshot
@@ -49,6 +50,8 @@ def _copy_mm_to_snapshot_slot(value: Any, slot: dict[tuple[Any, ...], torch.Tens
         packed = pack_output_snapshot(value, slot, max_buckets=_ASYNC_MM_SNAPSHOT_MAX_BUCKETS_PER_SLOT)
         if packed is not None:
             return packed
+    if isinstance(value, RequestBatchTensor):
+        return RequestBatchTensor(_copy_mm_to_snapshot_slot(value.tensor, slot, path), value.keepdim)
     if isinstance(value, torch.Tensor):
         bucket_key = path + (tuple(value.shape), value.dtype, value.device)
         cached = slot.get(bucket_key)
@@ -141,6 +144,9 @@ class OmniARModelRunner(OmniGPUModelRunner):
     # ------------------------------------------------------------------
 
     def sample(self, hidden_states, input_batch, grammar_output):
+        forced = try_sample_forced_tokens(self, input_batch, grammar_output)
+        if forced is not None:
+            return forced
         # An explicitly declared model-state hook may return already determined
         # tokens. Unsupported sampling features retain the upstream path.
         sample_determined = getattr(type(self.model_state), "sample_determined_tokens", None)
@@ -218,6 +224,16 @@ class OmniARModelRunner(OmniGPUModelRunner):
         num_sampled, num_rejected = sampling_output.num_sampled, sampling_output.num_rejected
         if sampling_output.multimodal_outputs is not None:
             multimodal_outputs = sampling_output.multimodal_outputs
+        early = getattr(self.model_state, "_early_first_audio", None)
+        if early is not None:
+            multimodal_outputs = early.after_sample(
+                input_batch,
+                text_hidden,
+                sampler_output.sampled_token_ids,
+                num_sampled,
+                multimodal_outputs,
+                self._dispatch_mtp_batch_descriptor,
+            )
         run_eager_mtp = getattr(self.model_state, "run_eager_mtp", None)
         if multimodal_outputs and run_eager_mtp is not None:
             run_eager_mtp(
@@ -547,6 +563,10 @@ def _async_copy_mm_value(
     copy_stream: torch.cuda.Stream | None = None,
     pin_memory: bool | None = None,
 ) -> Any:
+    if isinstance(value, RequestBatchTensor):
+        return RequestBatchTensor(
+            _async_copy_tensor(value.tensor, copy_stream=copy_stream, pin_memory=pin_memory), value.keepdim
+        )
     if isinstance(value, torch.Tensor):
         return _async_copy_tensor(
             value,
@@ -637,6 +657,9 @@ def _slice_pooler_value(
     padded_total_tokens: int | None = None,
     request_scoped: bool = False,
 ) -> Any:
+    if isinstance(value, RequestBatchTensor):
+        tensor = value.tensor
+        return tensor[req_index : req_index + 1].contiguous() if value.keepdim else tensor[req_index].contiguous()
     if isinstance(value, torch.Tensor):
         token_axis_sizes = {total_tokens}
         if padded_total_tokens is not None:
