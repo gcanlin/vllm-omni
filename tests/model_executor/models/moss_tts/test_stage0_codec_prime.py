@@ -35,18 +35,20 @@ class CausalCodec(nn.Module):
         return SimpleNamespace(audio=audio[:, None].repeat(1, 2, 1), audio_lengths=lengths)
 
 
-def decoder():
-    d = MossTTSCodecDecoder.__new__(MossTTSCodecDecoder)
-    nn.Module.__init__(d)
+def decoder(extra=None):
+    config = SimpleNamespace(
+        model_config=SimpleNamespace(
+            hf_config=SimpleNamespace(n_vq=2),
+            async_chunk=True,
+            stage_connector_config={"extra": extra or {}},
+        ),
+        scheduler_config=SimpleNamespace(max_num_seqs=8),
+    )
+    d = MossTTSCodecDecoder(vllm_config=config)
     d._codec = CausalCodec()
     d._sr_tensor = torch.tensor(48000)
     d._n_channels, d._n_vq = 2, 2
-    d._async_chunk = d._accept_first_audio = True
-    d._gpu_stream_output = False
-    d._codec_stream = None
-    d._stream_first_audio_requests = set()
-    d._stream_req_slots = {}
-    d._stream_state_capacity, d._stream_max_step_frames = 8, 15
+    d._stream_max_step_frames = 15
     d._stream_session = _MossCodecStreamSession(d._codec, state_capacity=8, n_vq=2, vllm_config=None)
     return d
 
@@ -69,8 +71,9 @@ def call(d, request_id, codes, first=False, finished=False):
 
 
 @pytest.mark.parametrize("first", [False, True])
-def test_trim_only_delivered_frame_without_losing_causal_history(first):
-    d = decoder()
+@pytest.mark.parametrize("extra", [{}, {"moss_talker_first_audio": True}])
+def test_trim_only_delivered_frame_without_losing_causal_history(first, extra):
+    d = decoder(extra)
     first_output = call(d, "a", [1, 2], first=first)
     expected = torch.tensor([[3.0], [3.0]])[:, 1:] if first else torch.tensor([[3.0], [3.0]])
     torch.testing.assert_close(first_output["model_outputs"][0], expected)
@@ -81,6 +84,13 @@ def test_trim_only_delivered_frame_without_losing_causal_history(first):
     assert not d._stream_req_slots and not d._stream_first_audio_requests
     reused = call(d, "new", [1, 2], finished=True)
     torch.testing.assert_close(reused["model_outputs"][0], torch.tensor([[3.0], [3.0]]))
+
+
+def test_explicit_opt_out_keeps_full_pcm():
+    d = decoder({"moss_talker_first_audio": False})
+    output = call(d, "a", [1, 2], first=True, finished=True)
+    torch.testing.assert_close(output["model_outputs"][0], torch.tensor([[3.0], [3.0]]))
+    assert FIRST_AUDIO_REQUIRED_KEY not in output
 
 
 def test_empty_terminal_keeps_ordering_promise_until_cleanup():

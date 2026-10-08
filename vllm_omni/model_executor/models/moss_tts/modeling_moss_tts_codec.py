@@ -466,7 +466,7 @@ class MossTTSCodecDecoder(nn.Module):
         # streaming reproduces whole-sequence decoding (costs ring memory).
         self._stream_ring_headroom: bool = bool(self._connector_int("codec_ring_headroom", default=0))
         self._stream_req_slots: dict[str, int] = {}
-        self._accept_first_audio = bool(self._connector_int("moss_talker_first_audio", default=0))
+        self._accept_first_audio = bool(self._connector_int("moss_talker_first_audio", default=1))
         self._stream_first_audio_requests: set[str] = set()
         # Opt-in: decode each stream's first chunk from the receive thread.
         self._first_chunk_fast = bool(self._connector_int("codec_first_chunk_fast_path", default=0))

@@ -17,9 +17,11 @@ from torch import nn
 
 
 def first_audio_enabled(config) -> bool:
+    """Default to first audio on supported runners; allow explicit opt-out."""
     connector = getattr(config.model_config, "stage_connector_config", {}) or {}
     extra = connector.get("extra", connector) if isinstance(connector, dict) else getattr(connector, "extra", {})
-    enabled = (extra or {}).get("moss_talker_first_audio", False)
+    extra = extra or {}
+    enabled = extra.get("moss_talker_first_audio", True)
     if not isinstance(enabled, bool):
         raise ValueError("moss_talker_first_audio must be a boolean")
     if not enabled:
@@ -38,12 +40,14 @@ def first_audio_enabled(config) -> bool:
         and not bool(getattr(model.hf_config, "mrv2_eager_mtp", False))
         and getattr(config, "speculative_config", None) is None
     )
-    if not supported:
+    # Unsupported deployments retain regular codec delivery by default.
+    # An explicit opt-in still reports a misconfigured first-audio path.
+    if not supported and "moss_talker_first_audio" in extra:
         raise ValueError(
             "MOSS first audio requires CUDA MRV2 GPU slots, regular MTP, "
             "async chunks, in-process TP/PP=1, no speculation"
         )
-    return True
+    return supported
 
 
 class MossFirstFrameDecoder(nn.Module):

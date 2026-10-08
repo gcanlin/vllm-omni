@@ -2,7 +2,7 @@
 # Selected automatically with at least 140 GiB GPU memory and MPS available.
 # Requires H200-class memory and nvidia-cuda-mps-control on PATH.
 # Adds prefix caching, Triton backbone attention and Stage0 first-frame audio.
-# The throughput baseline remains moss_tts_local_mrv2_high_concurrency.yaml.
+# Extends the shared C128 profile with the system-level settings below.
 base_config: moss_tts_local_mrv2_high_concurrency.yaml
 model_runner: v1
 dtype: bfloat16
@@ -11,8 +11,6 @@ connectors:
   shm:
     extra:
       codec_first_chunk_fast_path: 1
-      moss_talker_first_audio: true
-      moss_defer_codec_prime: true
       # Keep the regular first-chunk fallback available at every batch size.
       codec_first_chunk_max_active_streams: 0
       generation_min_batch_size: 16

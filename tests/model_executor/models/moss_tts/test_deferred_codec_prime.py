@@ -9,11 +9,9 @@ import torch
 from vllm_omni.model_executor.stage_input_processors.moss_tts import talker2codec_raw_async_chunk
 
 
-def manager():
+def manager(**overrides):
     return SimpleNamespace(
-        connector=SimpleNamespace(
-            config=dict(initial_codec_chunk_frames=1, codec_chunk_frames=15, moss_defer_codec_prime=True)
-        )
+        connector=SimpleNamespace(config=dict(initial_codec_chunk_frames=1, codec_chunk_frames=15, **overrides))
     )
 
 
@@ -24,8 +22,9 @@ def output(i, first=None):
     return result
 
 
-def test_defer_includes_first_code_and_emits_at_fifteen():
-    m = manager()
+@pytest.mark.parametrize("extra", [{}, {"moss_defer_codec_prime": True}])
+def test_defer_includes_first_code_and_emits_at_fifteen(extra):
+    m = manager(**extra)
     r = SimpleNamespace(request_id="a")
     assert talker2codec_raw_async_chunk(m, output(0, True), r) is None
     for i in range(1, 14):
@@ -55,6 +54,28 @@ def test_unaccepted_direct_path_keeps_one_frame_latency():
     r = SimpleNamespace(request_id="a")
     p = talker2codec_raw_async_chunk(m, output(0, False), r)
     assert p.meta.codec_chunk_frames == 1 and p.meta.first_audio is None
+
+
+def test_explicit_opt_out_primes_at_initial_chunk():
+    m = manager(moss_defer_codec_prime=False)
+    p = talker2codec_raw_async_chunk(m, output(0, True), SimpleNamespace(request_id="a"))
+    assert p.meta.codec_chunk_frames == 1 and bool(p.meta.first_audio)
+
+
+@pytest.mark.parametrize("extra", [{}, {"moss_defer_codec_prime": False}])
+def test_explicit_ramp_takes_precedence_over_default_deferral(extra):
+    m = manager(codec_chunk_ramp=[2, 4, 15], **extra)
+    r = SimpleNamespace(request_id="a")
+    assert talker2codec_raw_async_chunk(m, output(0, True), r) is None
+    p = talker2codec_raw_async_chunk(m, output(1), r)
+    assert p.meta.codec_chunk_frames == 2 and bool(p.meta.first_audio)
+    assert p.codes.audio.reshape(2, 2)[0].tolist() == [0, 1]
+
+
+def test_explicit_deferral_with_ramp_is_rejected():
+    m = manager(codec_chunk_ramp=[2, 4, 15], moss_defer_codec_prime=True)
+    with pytest.raises(ValueError, match="cannot be combined with a chunk ramp"):
+        talker2codec_raw_async_chunk(m, output(0, True), SimpleNamespace(request_id="a"))
 
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]

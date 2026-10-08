@@ -3129,8 +3129,8 @@ class TestPlatformOverrides:
             assert args["hf_overrides"]["moss_first_frame_empty_history"] is True
             extra = deploy.connectors["shm"]["extra"]
             assert extra["codec_first_chunk_max_active_streams"] == 0
-            assert extra["moss_talker_first_audio"] is True
-            assert extra["moss_defer_codec_prime"] is True
+            assert "moss_talker_first_audio" not in extra
+            assert "moss_defer_codec_prime" not in extra
             assert extra["generation_min_batch_size"] == 16
             assert extra["generation_max_wait_ms"] == 6
             assert not stages[0].yaml_runtime.get("env")
@@ -3156,8 +3156,8 @@ class TestPlatformOverrides:
             "moss_first_frame_empty_history": True,
         }
         extra = deploy.connectors["shm"]["extra"]
-        assert extra["moss_talker_first_audio"] is True
-        assert extra["moss_defer_codec_prime"] is True
+        assert "moss_talker_first_audio" not in extra
+        assert "moss_defer_codec_prime" not in extra
         assert extra["initial_codec_chunk_frames"] == 1
         assert extra["codec_chunk_frames"] == 15
         assert extra["generation_min_batch_size"] == 16
