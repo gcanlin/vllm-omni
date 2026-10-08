@@ -4,7 +4,7 @@
 # throughput-first serving.
 #
 # Optional launch-level settings (see the full command in recipes/OpenMOSS/MOSS-TTS.md):
-#   - CUDA MPS for the GPU (stage 0 below lowers its own MPS client priority);
+#   - CUDA MPS for the GPU;
 #   - VLLM_OMNI_EVENT_DRIVEN_ORCH=1;
 #   - --api-server-count 4 with VLLM_WORKER_MULTIPROC_METHOD=spawn and
 #     VLLM_OMNI_MOSS_REF_CODES_SHARED_DIR=/dev/shm/<dir> so frontends share reference codes;
@@ -36,9 +36,6 @@ platforms:
           max_cudagraph_capture_size: 2048
           cudagraph_num_of_warmups: 1
         kv_cache_memory_bytes: 34359738368  # 32 GiB
-        env:
-          # Under MPS, let codec kernels schedule ahead of the talker's.
-          CUDA_MPS_CLIENT_PRIORITY: "1"
       - stage_id: 1
         max_num_seqs: 128
         # Keep synchronous scheduling; benchmark async scheduling separately.
