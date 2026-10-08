@@ -447,6 +447,9 @@ class MossLocalModelState(OmniModelState):
                 generators=generators,
             )
         codes = codes[:bsz]
+        early = getattr(self, "_early_first_audio", None)
+        if early is not None:
+            early.after_mtp(req_ids, codes)
         self._eager_emb_pool.index_copy_(0, slots, contribution[:bsz])
         self._codes_pool.index_copy_(0, slots, codes)
         self._keep_pool.index_copy_(0, slots, codes.ne(self.model.audio_pad_token_id).any(dim=-1))

@@ -224,7 +224,6 @@ class _MossCodecStreamSession:
         gpu_output: bool = False,
         chunk_frames: int = 0,
         ring_headroom: bool = False,
-        private_graph_pool: bool = False,
     ) -> None:
         self._codec = codec
         self._state_capacity = int(state_capacity)
@@ -292,7 +291,6 @@ class _MossCodecStreamSession:
                     frame_sizes=frame_sizes,
                     num_quantizers=self._n_vq,
                     vllm_config=vllm_config,
-                    private_pool=private_graph_pool,
                 )
             self._cudagraph_wrapper.warmup(self._device)
             self.reset_slots(list(range(self._state_capacity + scratch_capacity)))
@@ -578,7 +576,6 @@ class MossTTSCodecDecoder(nn.Module):
         # streaming reproduces whole-sequence decoding (costs ring memory).
         self._stream_ring_headroom: bool = bool(self._connector_int("codec_ring_headroom", default=0))
         self._stream_req_slots: dict[str, int] = {}
-        self._accept_first_audio = bool(self._connector_int("moss_talker_first_audio", default=1))
         self._stream_first_audio_requests: set[str] = set()
         self._async_chunk = bool(getattr(self.vllm_config.model_config, "async_chunk", False))
         self._gpu_stream_output = (
@@ -865,8 +862,6 @@ class MossTTSCodecDecoder(nn.Module):
         return OmniOutput(text_hidden_states=None, multimodal_outputs=payload)
 
     def _first_audio_flags(self, infos):
-        if not getattr(self, "_accept_first_audio", False):
-            return [False] * len(infos)
         flags = []
         for i, info in enumerate(infos):
             meta = (info.get("meta", {}) if isinstance(info, dict) else {}) or {}

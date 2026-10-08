@@ -3044,7 +3044,6 @@ class TestPlatformOverrides:
         assert overrides.get("mrv2_batch_prefill", False) is high_capacity
         assert overrides.get("mrv2_direct_tokens", False) is high_capacity
         assert overrides.get("local_compile_audio_sampler", False) is high_capacity
-        assert overrides.get("moss_first_frame_empty_history", False) is high_capacity
 
         # The serving engine still consumes the legacy representation.
         stages, _ = StageConfigFactory._create_legacy_from_registry(pipeline, {})
@@ -3125,10 +3124,7 @@ class TestPlatformOverrides:
             assert args["hf_overrides"]["mrv2_batch_prefill"] is True
             assert args["hf_overrides"]["mrv2_direct_tokens"] is True
             assert args["hf_overrides"]["local_compile_audio_sampler"] is True
-            assert args["hf_overrides"]["moss_first_frame_empty_history"] is True
             extra = deploy.connectors["shm"]["extra"]
-            assert "moss_talker_first_audio" not in extra
-            assert "moss_defer_codec_prime" not in extra
             assert extra["generation_min_batch_size"] == 16
             assert extra["generation_max_wait_ms"] == 6
             assert not stages[0].yaml_runtime.get("env")
@@ -3151,11 +3147,8 @@ class TestPlatformOverrides:
             "mrv2_batch_prefill": True,
             "mrv2_direct_tokens": True,
             "local_compile_audio_sampler": True,
-            "moss_first_frame_empty_history": True,
         }
         extra = deploy.connectors["shm"]["extra"]
-        assert "moss_talker_first_audio" not in extra
-        assert "moss_defer_codec_prime" not in extra
         assert extra["initial_codec_chunk_frames"] == 1
         assert extra["codec_chunk_frames"] == 15
         assert extra["generation_min_batch_size"] == 16

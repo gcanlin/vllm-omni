@@ -35,12 +35,12 @@ class CausalCodec(nn.Module):
         return SimpleNamespace(audio=audio[:, None].repeat(1, 2, 1), audio_lengths=lengths)
 
 
-def decoder(extra=None):
+def decoder():
     config = SimpleNamespace(
         model_config=SimpleNamespace(
             hf_config=SimpleNamespace(n_vq=2),
             async_chunk=True,
-            stage_connector_config={"extra": extra or {}},
+            stage_connector_config={},
         ),
         scheduler_config=SimpleNamespace(max_num_seqs=8),
     )
@@ -71,9 +71,8 @@ def call(d, request_id, codes, first=False, finished=False):
 
 
 @pytest.mark.parametrize("first", [False, True])
-@pytest.mark.parametrize("extra", [{}, {"moss_talker_first_audio": True}])
-def test_trim_only_delivered_frame_without_losing_causal_history(first, extra):
-    d = decoder(extra)
+def test_trim_only_delivered_frame_without_losing_causal_history(first):
+    d = decoder()
     first_output = call(d, "a", [1, 2], first=first)
     expected = torch.tensor([[3.0], [3.0]])[:, 1:] if first else torch.tensor([[3.0], [3.0]])
     torch.testing.assert_close(first_output["model_outputs"][0], expected)
@@ -84,13 +83,6 @@ def test_trim_only_delivered_frame_without_losing_causal_history(first, extra):
     assert not d._stream_req_slots and not d._stream_first_audio_requests
     reused = call(d, "new", [1, 2], finished=True)
     torch.testing.assert_close(reused["model_outputs"][0], torch.tensor([[3.0], [3.0]]))
-
-
-def test_explicit_opt_out_keeps_full_pcm():
-    d = decoder({"moss_talker_first_audio": False})
-    output = call(d, "a", [1, 2], first=True, finished=True)
-    torch.testing.assert_close(output["model_outputs"][0], torch.tensor([[3.0], [3.0]]))
-    assert FIRST_AUDIO_REQUIRED_KEY not in output
 
 
 def test_empty_terminal_keeps_ordering_promise_until_cleanup():

@@ -25,7 +25,6 @@ platforms:
           mrv2_direct_tokens: true
           # Compile the native Torch sampler; explicit generators keep its fallback.
           local_compile_audio_sampler: true
-          moss_first_frame_empty_history: true
         enable_prefix_caching: true
         attention_config:
           backend: TRITON_ATTN

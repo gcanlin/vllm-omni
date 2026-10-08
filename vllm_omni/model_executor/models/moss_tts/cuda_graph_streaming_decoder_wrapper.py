@@ -81,16 +81,9 @@ class CUDAGraphStreamingDecoderWrapper:
         frame_sizes: list[int],
         num_quantizers: int,
         vllm_config: VllmConfig,
-        private_pool: bool = False,
     ) -> None:
         self.codec = codec
         self.state_capacity = int(state_capacity)
-        self._private_pool = bool(private_pool)
-        # Graphs bake in the cuBLAS workspace of the stream they were captured
-        # on, and torch.cuda.graph shares one default capture stream. Split-K
-        # GEMMs synchronize through that workspace, so two graphs replaying
-        # concurrently from one capture stream can spin on each other forever.
-        self._capture_stream: torch.cuda.Stream | None = None
         self.batch_sizes = sorted({int(size) for size in batch_sizes if 0 < int(size) <= state_capacity})
         self.frame_sizes = sorted({int(size) for size in frame_sizes if int(size) > 0})
         self.num_quantizers = int(num_quantizers)
@@ -216,10 +209,7 @@ class CUDAGraphStreamingDecoderWrapper:
         scratch_slots = self.state_capacity + torch.arange(batch_size, dtype=torch.long, device=device)
         valid_rows = torch.zeros(batch_size, dtype=torch.bool, device=device)
 
-        if self._private_pool and self._capture_stream is None:
-            self._capture_stream = torch.cuda.Stream(device=device)
-        # Warm up on the capture stream so its workspace exists before capture.
-        stream = self._capture_stream or torch.cuda.Stream()
+        stream = torch.cuda.Stream()
         stream.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(stream):
             for _ in range(3):
@@ -229,11 +219,9 @@ class CUDAGraphStreamingDecoderWrapper:
         self.codec.reset_decoder_state_slots(scratch_slots)
 
         if self._pool is None:
-            self._pool = (
-                torch.cuda.graph_pool_handle() if self._private_pool else current_platform.get_global_graph_pool()
-            )
+            self._pool = current_platform.get_global_graph_pool()
         graph = CUDAGraph()
-        with torch.cuda.graph(graph, pool=self._pool, stream=self._capture_stream, capture_error_mode="thread_local"):
+        with torch.cuda.graph(graph, pool=self._pool, capture_error_mode="thread_local"):
             audio, audio_lengths = decode(codes, lengths, scratch_slots, valid_rows)
 
         self.graphs[(batch_size, frame_size)] = _CapturedStreamingDecodeGraph(

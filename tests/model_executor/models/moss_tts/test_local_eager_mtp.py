@@ -9,6 +9,7 @@ import pytest
 import torch
 
 from tests.model_executor.models.moss_tts.test_local_model_state import _admit, _batch, _state, _step
+from vllm_omni.model_executor.models.moss_tts.first_audio_state import MossEarlyFirstAudioState
 from vllm_omni.model_executor.models.moss_tts.local_model_state import MossLocalModelState
 
 pytestmark = pytest.mark.core_model
@@ -29,7 +30,9 @@ def _run(state, device, schedule, stop_step):
     frames: dict[int, list[torch.Tensor]] = {3: [], 0: []}
     for index, (slots, counts) in enumerate(schedule):
         state.model.force_stop = index == stop_step
-        embed, payload, _ = _step(state, _batch(device, slots, counts), req_states)
+        batch = _batch(device, slots, counts)
+        batch.req_ids = [state.intermediate_buffer.buffers[slot]["req_id"] for slot in slots]
+        embed, payload, _ = _step(state, batch, req_states)
         embeds.append(embed)
         rows = payload.get("codes", {}).get("audio", [])
         for slot, row in zip(slots, rows):
@@ -40,13 +43,18 @@ def _run(state, device, schedule, stop_step):
     return embeds, frames
 
 
-def test_eager_frames_match_canonical_one_step_earlier(device):
+def test_eager_frames_match_canonical_one_step_earlier(device, mocker):
     schedule = [([3, 0], [2, 2]), ([3, 0], [2, 1]), ([3, 0], [1, 1]), ([0, 3], [1, 1]), ([3, 0], [1, 1])]
     canonical, eager = (_state(MossLocalModelState, device) for _ in range(2))
     eager._local_eager_mtp = True
+    eager._early_first_audio = MossEarlyFirstAudioState(eager, None)
+    eager._first_audio_sender = object()
+    publish = mocker.patch.object(eager._early_first_audio, "_publish", side_effect=lambda ids, *_: ids)
     for state in (canonical, eager):
         _admit(state, 3, "long", 17)
         _admit(state, 0, "short", 17)
+        for slot in (3, 0):
+            state.intermediate_buffer.buffers[slot]["sampling_params"].max_tokens = 10
     # Stop both streams at the canonical step that would draw the 4th step's frames.
     c_embeds, c_frames = _run(canonical, device, schedule, stop_step=4)
     e_embeds, e_frames = _run(eager, device, schedule, stop_step=3)
@@ -58,6 +66,10 @@ def test_eager_frames_match_canonical_one_step_earlier(device):
         for (ci, cf), (ei, ef) in zip(c_frames[slot], e_frames[slot]):
             assert ei == ci - 1
             torch.testing.assert_close(cf, ef, rtol=0, atol=0)
+    assert [call.args[0] for call in publish.call_args_list] == [["short"], ["long"]]
+    for call, slot in zip(publish.call_args_list, (0, 3), strict=True):
+        torch.testing.assert_close(call.args[1], e_frames[slot][0][1], rtol=0, atol=0)
+        assert call.args[2].tolist() == [True]
 
 
 def test_stopped_stream_does_not_emit_again(device):

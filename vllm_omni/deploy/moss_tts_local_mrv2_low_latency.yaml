@@ -28,8 +28,6 @@ platforms:
           mrv2_gpu_slot_state: true
           mrv2_batch_prefill: true
           mrv2_direct_tokens: true
-          # Decode the first frame in Stage0; Stage1 handles subsequent chunks.
-          moss_first_frame_empty_history: true
         compilation_config:
           mode: 3
           cudagraph_mode: FULL

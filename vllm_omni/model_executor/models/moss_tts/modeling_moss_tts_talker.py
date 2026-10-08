@@ -1859,9 +1859,16 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
         not_loaded = [n for n in params_dict if n not in loaded]
         if not_loaded:
             logger.warning("[MossTTSLocal] %d params NOT loaded (first 5: %s)", len(not_loaded), not_loaded[:5])
-        from .first_frame_decoder import MossFirstFrameDecoder, first_audio_enabled
+        # First audio is part of the MRV2 streaming slot-state path. Load it
+        # here so its weights and graphs count toward model memory profiling.
+        model_config = self.vllm_config.model_config
+        if (
+            model_config.use_v2_model_runner
+            and model_config.async_chunk
+            and getattr(self.config, "mrv2_gpu_slot_state", False)
+        ):
+            from .first_frame_decoder import MossFirstFrameDecoder
 
-        if first_audio_enabled(self.vllm_config):
             self.first_frame_decoder = MossFirstFrameDecoder(
                 getattr(
                     self.config,
@@ -1869,7 +1876,6 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
                     getattr(self.config, "audio_tokenizer_name_or_path", "OpenMOSS-Team/MOSS-Audio-Tokenizer"),
                 ),
                 self.n_vq,
-                empty_history=bool(getattr(self.config, "moss_first_frame_empty_history", False)),
             )
             first_loaded = self.first_frame_decoder.load(self.vllm_config)
             loaded.update("first_frame_decoder." + name for name in first_loaded)

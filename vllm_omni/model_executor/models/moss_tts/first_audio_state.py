@@ -45,7 +45,7 @@ class MossEarlyFirstAudioState:
             pcm = self.decoder.decode(frame_codes)
             return self.owner._first_audio_sender.submit(ids, pcm, self.decoder.sample_rate, valid=valid)
 
-    def after_mtp(self, request_ids, codes, input_ids):
+    def after_mtp(self, request_ids, codes, input_ids=None):
         selected = [(i, rid) for i, rid in enumerate(request_ids) if rid in self.waiting]
         if not selected:
             return
@@ -55,7 +55,10 @@ class MossEarlyFirstAudioState:
         )
         first_codes = codes.index_select(0, rows)
         valid = first_codes.ne(self.owner.model.audio_pad_token_id).any(dim=1)
-        valid &= input_ids.reshape(-1).index_select(0, rows).eq(self.owner.model.audio_assistant_slot_token_id)
+        # Preprocess MTP also checks the current token. Eager MTP runs after
+        # the forward and has already masked non-emitting rows in its codes.
+        if input_ids is not None:
+            valid &= input_ids.reshape(-1).index_select(0, rows).eq(self.owner.model.audio_assistant_slot_token_id)
         accepted = set(self._publish(ids, first_codes, valid))
         for rid, row_valid in zip(ids, valid.unbind(), strict=True):
             self.waiting.discard(rid)

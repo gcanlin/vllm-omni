@@ -317,11 +317,9 @@ def talker2codec_raw_async_chunk(
         # restarts at each segment boundary; put_req_chunk is request-global.
         ramp_index = int(transfer_manager.ramp_chunk_count.get(req_id, 0))
         threshold = ramp_chunk_size(ramp_index, ramp, chunk_frames)
-    # Once Stage0 delivered PCM, prime with the regular chunk by default.
-    # An explicit chunk ramp retains precedence over this default.
-    if direct_first and not emitted_any and cfg.get("moss_defer_codec_prime", ramp is None):
-        if ramp is not None:
-            raise ValueError("MOSS deferred codec prime cannot be combined with a chunk ramp")
+    # Once Stage0 delivered PCM, prime with the regular chunk unless an
+    # explicit chunk ramp specifies the frame counts.
+    if direct_first and not emitted_any and ramp is None:
         threshold = chunk_frames
     if pending <= 0:
         if is_finished:
