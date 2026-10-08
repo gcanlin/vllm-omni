@@ -128,9 +128,10 @@ class StatelessFirstGraphs:
     """Fixed shapes and private graph memory; every returned PCM owns storage."""
 
     @torch.inference_mode()
-    def __init__(self, codec):
+    def __init__(self, codec, num_quantizers: int, batch_sizes: tuple[int, ...]):
         self.codec = codec
         self.entries = {}
+        self.batch_sizes = batch_sizes
 
         def decode(codes, lengths):
             return codec._decode_frame_tensors(codes, lengths)[0].float()
@@ -145,8 +146,8 @@ class StatelessFirstGraphs:
         stream = torch.cuda.Stream(device=device)
         stream.wait_stream(torch.cuda.current_stream(device))
         with torch.cuda.stream(stream):
-            for batch in (8, 4, 2, 1):
-                codes = torch.zeros(12, batch, 1, dtype=torch.long, device=device)
+            for batch in reversed(self.batch_sizes):
+                codes = torch.zeros(num_quantizers, batch, 1, dtype=torch.long, device=device)
                 lengths = torch.ones(batch, dtype=torch.long, device=device)
                 for _ in range(3):
                     self.compiled(codes, lengths)
@@ -161,10 +162,11 @@ class StatelessFirstGraphs:
     @torch.inference_mode()
     def __call__(self, codes):
         parts = []
-        for start in range(0, len(codes), 8):
-            block = codes[start : start + 8]
+        batch_size = max(self.batch_sizes)
+        for start in range(0, len(codes), batch_size):
+            block = codes[start : start + batch_size]
             count = len(block)
-            bucket = next(b for b in (1, 2, 4, 8) if b >= count)
+            bucket = next(b for b in self.batch_sizes if b >= count)
             graph, inputs, output = self.entries[bucket]
             if count != bucket:
                 inputs.zero_()

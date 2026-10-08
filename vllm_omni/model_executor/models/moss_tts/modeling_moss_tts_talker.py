@@ -1862,9 +1862,16 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
         from .first_frame_decoder import MossFirstFrameDecoder, first_audio_enabled
 
         if first_audio_enabled(self.vllm_config):
-            self.first_frame_decoder = MossFirstFrameDecoder(self.vllm_config)
-            first_loaded = self.first_frame_decoder.load()
-            self.first_frame_decoder.warmup()
+            self.first_frame_decoder = MossFirstFrameDecoder(
+                getattr(
+                    self.config,
+                    "codec_model_name_or_path",
+                    getattr(self.config, "audio_tokenizer_name_or_path", "OpenMOSS-Team/MOSS-Audio-Tokenizer"),
+                ),
+                self.n_vq,
+                empty_history=bool(getattr(self.config, "moss_first_frame_empty_history", False)),
+            )
+            first_loaded = self.first_frame_decoder.load(self.vllm_config)
             loaded.update("first_frame_decoder." + name for name in first_loaded)
         return loaded
 

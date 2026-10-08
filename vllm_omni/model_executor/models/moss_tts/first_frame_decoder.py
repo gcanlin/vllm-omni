@@ -2,18 +2,21 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """MOSS Local first-frame decoding in the Talker process.
 
-The default path resets a private streaming state pool after each call. The
-experimental empty-history path specializes attention and owns no stream
-state. Both retain every upsampling block; the regular codec stage
-independently primes its persistent state with the same codes.
+The empty-history path specializes attention and owns no stream state. The
+streaming fallback reuses the codec stage's session with a private state pool.
+Both retain every upsampling block; the regular codec stage independently
+primes its persistent state with the same codes.
 """
 
 from __future__ import annotations
 
-import copy
-
 import torch
 from torch import nn
+from vllm.config import VllmConfig
+
+from .codec_loader import load_codec
+
+_FIRST_FRAME_BATCH_SIZES = (1, 2, 4, 8)
 
 
 def first_audio_enabled(config) -> bool:
@@ -51,64 +54,60 @@ def first_audio_enabled(config) -> bool:
 
 
 class MossFirstFrameDecoder(nn.Module):
-    def __init__(self, config):
+    def __init__(self, codec_path: str, num_quantizers: int, *, empty_history: bool = False):
         super().__init__()
-        from .modeling_moss_tts_codec import MossTTSCodecDecoder
+        self._codec_path = codec_path
+        self._num_quantizers = num_quantizers
+        self._empty_history = empty_history
 
-        cfg = copy.copy(config)
-        cfg.model_config = copy.copy(config.model_config)
-        cfg.model_config.hf_config = copy.deepcopy(config.model_config.hf_config)
-        cfg.model_config.hf_config.codec_async_output = True
-        cfg.model_config.hf_config.codec_attention_backend = "triton_slot"
-        cfg.model_config.hf_config.codec_private_graph_pool = True
-        cfg.scheduler_config = copy.copy(config.scheduler_config)
-        cfg.scheduler_config.max_num_seqs = 8
-        cfg.compilation_config = copy.copy(config.compilation_config)
-        cfg.compilation_config.cudagraph_capture_sizes = [1, 2, 4, 8]
-        cfg.compilation_config.max_cudagraph_capture_size = 8
-        self._empty_history = bool(getattr(cfg.model_config.hf_config, "moss_first_frame_empty_history", False))
-        if self._empty_history:
-            # Skip the general streaming graph setup; the private first-only
-            # graph bank below owns compilation/capture and has no KV pool.
-            cfg.model_config.enforce_eager = True
-        self.decoder = MossTTSCodecDecoder(vllm_config=cfg)
-        self.decoder._initial_stream_chunk_frames = 1
-        self.decoder._stream_chunk_frames = 1
-        self.decoder._stream_max_step_frames = 1
-        self.decoder._streaming_graph_frame_sizes = [1]
-
-    def load(self) -> set[str]:
-        self.decoder.load_weights(())
+    def load(self, config: VllmConfig) -> set[str]:
+        # Read the framework's loading/compilation context without changing it.
+        # The first decoder owns its graph sizes, not a scheduler or stage config.
+        codec_config, self._codec = load_codec(
+            self._codec_path,
+            device=config.device_config.device,
+            load_config=config.load_config,
+            num_quantizers=self._num_quantizers,
+            attention_backend="sdpa" if self._empty_history else "triton_slot",
+        )
         # Reference encoding belongs to the API processor, never this decoder.
-        self.decoder._codec.encoder = None
+        self._codec.encoder = None
+        self._sr_tensor = torch.tensor(int(codec_config.sampling_rate), dtype=torch.int32)
         if self._empty_history:
             from .first_frame_special import StatelessFirstGraphs, specialize
 
-            specialize(self.decoder._codec)
-            self._special_graphs = StatelessFirstGraphs(self.decoder._codec)
+            specialize(self._codec)
+            self._special_graphs = StatelessFirstGraphs(self._codec, self._num_quantizers, _FIRST_FRAME_BATCH_SIZES)
+        else:
+            from .modeling_moss_tts_codec import _MossCodecStreamSession
+
+            self._session = _MossCodecStreamSession(
+                self._codec,
+                state_capacity=max(_FIRST_FRAME_BATCH_SIZES),
+                n_vq=self._num_quantizers,
+                vllm_config=config,
+                graph_batch_sizes=list(_FIRST_FRAME_BATCH_SIZES) if not config.model_config.enforce_eager else [],
+                graph_frame_sizes=[1],
+                gpu_output=True,
+                chunk_frames=1,
+                private_graph_pool=True,
+            )
         return set(dict(self.named_parameters()))
 
     @property
     def sample_rate(self) -> torch.Tensor:
-        return self.decoder._sr_tensor
-
-    def warmup(self) -> None:
-        """Compatibility with the post-backbone graph hook; load captured us."""
-        if self._empty_history:
-            if not getattr(self, "_special_graphs", None):
-                raise RuntimeError("First decoder must load before graph warmup")
-        else:
-            self.decoder._ensure_stream_session()
+        return self._sr_tensor
 
     @torch.inference_mode()
     def decode(self, codes: torch.Tensor) -> torch.Tensor:
         """[B, NQ] codes -> owned float32 [B, channels, samples] PCM."""
         if self._empty_history:
             return self._special_graphs(codes)
-        session = self.decoder._ensure_stream_session()
+        session = self._session
         parts = []
-        for start in range(0, codes.shape[0], 8):
-            chunk = codes[start : start + 8]
+        batch_size = max(_FIRST_FRAME_BATCH_SIZES)
+        for start in range(0, codes.shape[0], batch_size):
+            chunk = codes[start : start + batch_size]
             slots = [session.acquire() for _ in range(len(chunk))]
             if any(slot is None for slot in slots):
                 raise RuntimeError("First-frame decoder exhausted its private state pool")

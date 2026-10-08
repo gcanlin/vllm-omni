@@ -11,28 +11,18 @@ from __future__ import annotations
 import threading
 from collections.abc import Iterable
 from contextlib import nullcontext
-from functools import partial
 from typing import Any
 
 import torch
 import torch.nn as nn
 from vllm.config import VllmConfig
 from vllm.logger import init_logger
-from vllm.model_executor.model_loader import DefaultModelLoader
-from vllm.model_executor.model_loader.weight_utils import default_weight_loader
-from vllm.utils.torch_utils import set_default_torch_dtype
 
 from vllm_omni.data_entry_keys import FIRST_AUDIO_REQUIRED_KEY
 from vllm_omni.model_executor.models.moss_tts.audio_tokenizer import (
-    MossAudioTokenizerConfig,
     MossAudioTokenizerModel,
 )
-from vllm_omni.model_executor.models.moss_tts.audio_tokenizer_v2 import (
-    MossAudioTokenizerModel as MossAudioTokenizerV2Model,
-)
-from vllm_omni.model_executor.models.moss_tts.configuration_moss_audio_tokenizer_v2 import (
-    MossAudioTokenizerConfig as MossAudioTokenizerV2Config,
-)
+from vllm_omni.model_executor.models.moss_tts.codec_loader import load_codec
 from vllm_omni.model_executor.models.moss_tts.cuda_graph_streaming_decoder_wrapper import (
     CUDAGraphStreamingDecoderWrapper,
 )
@@ -828,9 +818,6 @@ class MossTTSCodecDecoder(nn.Module):
             ring_headroom=self._stream_ring_headroom,
             fast_batch_sizes=[1, 2, 4, 8] if self._first_chunk_fast else None,
             fast_frames=self._initial_stream_chunk_frames if self._first_chunk_fast else 0,
-            private_graph_pool=bool(
-                getattr(self.vllm_config.model_config.hf_config, "codec_private_graph_pool", False)
-            ),
         )
         if self._stream_session._fast_wrapper is not None:
             self._first_chunk_fast_path = MossFirstChunkFastPath(
@@ -1109,152 +1096,21 @@ class MossTTSCodecDecoder(nn.Module):
     # ------------------------------------------------------------------
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
-        """Drain the Stage-0 weights iterator, then load the codec from its own checkpoint.
-
-        The codec lives in a separate HuggingFace repo
-        (``OpenMOSS-Team/MOSS-Audio-Tokenizer``) and is loaded independently
-        of the talker weights.
-        """
-        # Drain the incoming weights iterator — all Stage-0 weights are
-        # irrelevant to this stage.
+        # The codec checkpoint is separate from the Stage0 weights iterator.
         for _ in weights:
             pass
-
-        codec_path = self._codec_path
         device = self.vllm_config.device_config.device
-        logger.info("Loading MOSS Audio Tokenizer from %s directly on %s", codec_path, device)
-
-        # This codec comes from a secondary checkpoint, so it cannot be built
-        # by the outer stage's normal initialize_model() call. Re-enter the
-        # same target-device/default-dtype contexts used by vLLM's
-        # BaseModelLoader.load_model() instead of constructing an 8 GiB FP32
-        # model on CPU and copying the whole module to the GPU afterwards.
-        with set_default_torch_dtype(torch.float32):
-            with device:
-                codec_cfg, codec = self._build_codec(codec_path)
-
-        model_loader = DefaultModelLoader(self.vllm_config.load_config)
-        source = DefaultModelLoader.Source(
-            model_or_path=codec_path,
-            revision=None,
-            subfolder=None,
+        codec_cfg, codec = load_codec(
+            self._codec_path,
+            device=device,
+            load_config=self.vllm_config.load_config,
+            num_quantizers=self._n_vq,
+            attention_backend=getattr(self.vllm_config.model_config.hf_config, "codec_attention_backend", "sdpa"),
+            skip_empty_tiles=bool(self._connector_int("codec_skip_empty_attention_tiles", default=0)),
+            fused_slots=bool(self._connector_int("codec_fused_slot_attention", default=0)),
         )
-        codec_weights = model_loader._get_weights_iterator(source)
-        params_dict = dict(codec.named_parameters())
-
-        # Upstream MossAudioTokenizer uses different submodule names than the
-        # vendored re-implementation in ``audio_tokenizer.py``. Without this
-        # remap only ~half the codec parameters load (codebooks + WN convs)
-        # and the rest stay at their random init, which produces noise that
-        # sounds correct in duration but is structurally garbage.
-        _SUFFIX_REMAP: list[tuple[str, str]] = [
-            # v1 (MOSS-Audio-Tokenizer) naming.
-            (".self_attn.in_projs.0.", ".attn.in_proj."),
-            (".self_attn.out_projs.0.", ".attn.out_proj."),
-            (".linear1.", ".ff1."),
-            (".linear2.", ".ff2."),
-            # v2 checkpoint names use singular in_proj/out_proj and ffn.{0,2};
-            # the vendored module keeps the original MOSS layer names.
-            (".self_attn.in_proj.", ".self_attn.in_projs.0."),
-            (".self_attn.out_proj.", ".self_attn.out_projs.0."),
-            (".ffn.0.", ".linear1."),
-            (".ffn.2.", ".linear2."),
-            (".layer_scale_1.", ".ls1."),
-            (".layer_scale_2.", ".ls2."),
-            (".input_proj.", ".in_proj."),
-            (".output_proj.", ".out_proj."),
-        ]
-
-        def _remap(name: str) -> str:
-            for src, dst in _SUFFIX_REMAP:
-                if src in name:
-                    return name.replace(src, dst)
-            return name
-
-        loaded_names: set[str] = set()
-        skipped: list[str] = []
-        shape_mismatches: list[tuple[str, str, tuple[int, ...], tuple[int, ...]]] = []
-        for name, tensor in codec_weights:
-            # Try direct name first (e.g. ``quantizer.input_proj.*`` exists
-            # under the same name in both layouts), then the remap (transformer
-            # submodules need ``.linear1.``→``.ff1.`` etc.).
-            tgt = name if name in params_dict else _remap(name)
-            if tgt in params_dict:
-                expected_shape = tuple(params_dict[tgt].shape)
-                actual_shape = tuple(tensor.shape)
-                if expected_shape != actual_shape:
-                    shape_mismatches.append((name, tgt, actual_shape, expected_shape))
-                    continue
-                default_weight_loader(params_dict[tgt], tensor)
-                loaded_names.add(tgt)
-            else:
-                skipped.append(name)
-
-        missing = sorted(set(params_dict) - loaded_names)
-        if missing or skipped or shape_mismatches:
-            raise RuntimeError(
-                "MOSS Audio Tokenizer weights were not fully loaded: "
-                f"loaded={len(loaded_names)}/{len(params_dict)} "
-                f"missing={len(missing)} skipped={len(skipped)} "
-                f"shape_mismatches={len(shape_mismatches)}; "
-                f"first_missing={missing[:5]} "
-                f"first_skipped={skipped[:5]} "
-                f"first_shape_mismatches={shape_mismatches[:3]}"
-            )
-        logger.info(
-            "MOSS Audio Tokenizer weights: loaded=%d/%d skipped=%d (first skipped: %s)",
-            len(loaded_names),
-            len(params_dict),
-            len(skipped),
-            skipped[:3] if skipped else "none",
-        )
-
-        codec.eval()
-        # The v1 quantizer emits FP32 tensors, so its decoder must remain FP32.
-        if device.type != "cpu" and isinstance(codec, MossAudioTokenizerV2Model):
-            codec.decoder.to(dtype=torch.bfloat16)
-        attention_backend = getattr(self.vllm_config.model_config.hf_config, "codec_attention_backend", "sdpa")
-        if attention_backend != "sdpa":
-            if attention_backend not in {"triton", "triton_slot"} or device.type != "cuda":
-                raise ValueError(f"Unsupported codec attention backend/device: {attention_backend}/{device.type}")
-            from vllm_omni.model_executor.models.moss_tts.audio_tokenizer_v2 import MossAudioTokenizerMultiheadAttention
-            from vllm_omni.model_executor.models.moss_tts.streaming_attention import masked_attention
-
-            if attention_backend == "triton_slot":
-                from vllm_omni.model_executor.models.moss_tts.slot_attention import (
-                    slot_ring_attention,
-                    slot_ring_attention_rows,
-                )
-
-                skip_empty_tiles = bool(self._connector_int("codec_skip_empty_attention_tiles", default=0))
-                fused_slots = bool(self._connector_int("codec_fused_slot_attention", default=0))
-                if skip_empty_tiles and fused_slots:
-                    raise ValueError("codec_skip_empty_attention_tiles requires unfused slot attention")
-                if skip_empty_tiles:
-                    slot_ring_attention = partial(slot_ring_attention, skip_empty_tiles=True)
-                    logger.info("MOSS codec slot attention: skipping empty tiles for T <= 32")
-
-            for module in codec.decoder.modules():
-                if isinstance(module, MossAudioTokenizerMultiheadAttention):
-                    module._streaming_attention = masked_attention
-                    if attention_backend == "triton_slot":
-                        module._slot_attention = slot_ring_attention
-                        if self._connector_int("codec_fused_slot_attention", default=0):
-                            module._slot_attention_rows = slot_ring_attention_rows
-            logger.info("Enabled codec attention backend=%s", attention_backend)
-        build_decode_lut = getattr(codec.quantizer, "build_decode_lut", None)
-        if callable(build_decode_lut):
-            lut_dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
-            build_decode_lut(self._n_vq, dtype=lut_dtype)
-            lut = codec.quantizer._decode_lut
-            logger.info(
-                "MOSS Audio Tokenizer LFQ decoded LUT: shape=%s dtype=%s size=%.1f MiB",
-                tuple(lut.shape),
-                lut.dtype,
-                lut.numel() * lut.element_size() / (1024**2),
-            )
         self._codec = codec
-        inferred_channels = 2 if "v2" in codec_path.lower() else 1
+        inferred_channels = 2 if "v2" in self._codec_path.lower() else 1
         self._n_channels = int(
             getattr(
                 codec_cfg,
@@ -1281,26 +1137,6 @@ class MossTTSCodecDecoder(nn.Module):
         # those parameters are registered with the ``_codec.`` prefix, so
         # mirror that here.
         return {f"_codec.{name}" for name, _ in codec.named_parameters()}
-
-    def _build_codec(self, codec_path: str) -> tuple[Any, nn.Module]:
-        config_dict, _ = MossAudioTokenizerV2Config.get_config_dict(codec_path)
-        is_v2 = config_dict.get("number_channels", 1) >= 2
-
-        if is_v2:
-            try:
-                codec_cfg = MossAudioTokenizerV2Config.from_pretrained(codec_path)
-                codec = MossAudioTokenizerV2Model(codec_cfg)
-                logger.info("Using vendored MOSS Audio Tokenizer v2 classes from %s", codec_path)
-                return codec_cfg, codec
-            except Exception:
-                logger.exception(
-                    "Failed to instantiate vendored MOSS Audio Tokenizer v2; falling back to legacy vendored codec."
-                )
-
-        codec_cfg = MossAudioTokenizerConfig.from_pretrained(codec_path)
-        codec = MossAudioTokenizerModel(codec_cfg)
-        logger.info("Using vendored MOSS Audio Tokenizer v1 classes from %s", codec_path)
-        return codec_cfg, codec
 
     def _configure_decoder_cudagraph(self, device: torch.device) -> None:
         """Select the codec CUDA Graph path.
