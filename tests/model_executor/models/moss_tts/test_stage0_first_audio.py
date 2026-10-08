@@ -8,9 +8,18 @@ import torch
 
 from tests.model_executor.models.moss_tts.test_local_model_state import _batch, _state
 from vllm_omni.model_executor.models.moss_tts.first_audio_state import MossEarlyFirstAudioState
+from vllm_omni.model_executor.models.moss_tts.first_frame_decoder import first_audio_enabled
 from vllm_omni.model_executor.models.moss_tts.local_model_state import MossLocalModelState, _CodeRowsSnapshot
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_system_profile_first_audio_keeps_v1_fallback(enabled, mocker):
+    config = mocker.Mock()
+    config.model_config.stage_connector_config = {"extra": {"moss_talker_first_audio": enabled}}
+    config.model_config.use_v2_model_runner = False
+    assert not first_audio_enabled(config)
 
 
 def early_state():

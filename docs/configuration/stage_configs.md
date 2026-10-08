@@ -647,28 +647,3 @@ Event-driven orchestration remains independently selectable with
 when comparing these modes. Model-runner selection does not change the
 orchestration default. MPS, codec dispatch and graph settings belong to the
 deployment profile; the automatic CUDA default selects MPS when available.
-
-### Local 1.5 first audio on H200
-
-The opt-in `moss_tts_local_mrv2_first_audio.yaml` profile keeps Stage0 prefix
-caching enabled and uses the optimized profile's 128 request slots, 512-token
-prefill budget and CUDA MPS. It requires BF16, CUDA MRV2, TP/PP=1, the
-in-process executor and asynchronous chunking, without speculative decoding.
-
-```bash
-vllm serve OpenMOSS-Team/MOSS-TTS-Local-Transformer-v1.5 --omni \
-  --trust-remote-code \
-  --deploy-config vllm_omni/deploy/moss_tts_local_mrv2_first_audio.yaml
-```
-
-After the normal batched Local predictor produces the first audio codes,
-a private decoder in Stage0 decodes one frame using empty-history attention
-and CUDA graphs. The existing first-audio sender delivers that frame while
-Stage1 waits for its regular 15-frame batch. Stage1 consumes the same codes
-to establish its streaming history and omits the already-delivered frame
-from its output. Short requests flush their available codes at completion.
-
-The private decoder adds weights and graph memory to Stage0. Select this
-profile explicitly on an H200 with sufficient memory. The general streaming
-codec retains its stateful attention and batch processing. This profile does
-not enable the Stage0 first-frame path for other MOSS model families.

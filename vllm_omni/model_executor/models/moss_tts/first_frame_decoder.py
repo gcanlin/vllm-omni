@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
-"""Opt-in MOSS Local first-frame decoding in the Talker process.
+"""MOSS Local first-frame decoding in the Talker process.
 
 The default path resets a private streaming state pool after each call. The
 experimental empty-history path specializes attention and owns no stream
@@ -24,10 +24,13 @@ def first_audio_enabled(config) -> bool:
         raise ValueError("moss_talker_first_audio must be a boolean")
     if not enabled:
         return False
+    # The system profile also serves V1 platform fallbacks. They retain
+    # regular codec delivery rather than constructing a CUDA-only decoder.
+    if not bool(getattr(config.model_config, "use_v2_model_runner", False)):
+        return False
     model, parallel = config.model_config, config.parallel_config
     supported = (
         torch.device(config.device_config.device).type == "cuda"
-        and bool(getattr(model, "use_v2_model_runner", False))
         and bool(getattr(model, "async_chunk", False))
         and parallel.tensor_parallel_size == parallel.pipeline_parallel_size == 1
         and parallel.distributed_executor_backend in (None, "uni")
