@@ -43,8 +43,11 @@ class _CodeRowsSnapshot(PackedOutputSnapshot):
     copy is a single D2H and the per-request views come from one ``split``.
     """
 
-    def __init__(self, codes: torch.Tensor, decode_rows: list[int], num_reqs: int) -> None:
+    def __init__(self, codes: torch.Tensor, decode_rows: list[int], num_reqs: int, first_audio=None) -> None:
         dict.__init__(self, {"codes": {"audio": self._rows(codes, decode_rows, num_reqs)}})
+        self._first_audio = first_audio
+        if first_audio is not None:
+            self["meta"] = {"first_audio": list(first_audio.unbind())}
         self._codes = codes
         self._decode_rows = decode_rows
         self._num_reqs = num_reqs
@@ -59,7 +62,10 @@ class _CodeRowsSnapshot(PackedOutputSnapshot):
 
     def copy_to_cpu(self, copy_tensor):
         cpu = copy_tensor(self._codes)
-        return {"codes": {"audio": self._rows(cpu, self._decode_rows, self._num_reqs)}}
+        payload = {"codes": {"audio": self._rows(cpu, self._decode_rows, self._num_reqs)}}
+        if self._first_audio is not None:
+            payload["meta"] = {"first_audio": list(copy_tensor(self._first_audio).unbind())}
+        return payload
 
 
 class MossLocalModelState(OmniModelState):
@@ -76,6 +82,19 @@ class MossLocalModelState(OmniModelState):
             self._local_eager_mtp,
         )
         logger.info("MOSS Local MRV2 GPU slot state enabled: capacity=%d", self.scheduler_config.max_num_seqs)
+        self._early_first_audio = None
+        decoder = getattr(model, "first_frame_decoder", None)
+        if decoder is not None:
+            from .first_audio_state import MossEarlyFirstAudioState
+
+            self._early_first_audio = MossEarlyFirstAudioState(self, decoder)
+            logger.info("MOSS Local first PCM uses the Stage0 decoder after normal batched MTP")
+
+    def set_first_audio_sink(self, sink):
+        if self._early_first_audio is not None:
+            self._early_first_audio.set_sink(sink)
+        else:
+            super().set_first_audio_sink(sink)
 
     def _init_slot_buffers(self, capacity, hidden_size, device, dtype):
         self._hidden_pool = torch.zeros((capacity, hidden_size), dtype=dtype, device=device)
@@ -204,6 +223,13 @@ class MossLocalModelState(OmniModelState):
     def remove_request(self, req_index_or_id):
         # Freeing is CPU bookkeeping. Reinitialization happens on admission,
         # in stream order, so pending output snapshots remain independent.
+        early = getattr(self, "_early_first_audio", None)
+        if early is not None:
+            if isinstance(req_index_or_id, str):
+                request_id = req_index_or_id
+            else:
+                request_id = str((self.intermediate_buffer.buffers[req_index_or_id] or {}).get("req_id", ""))
+            early.remove(request_id)
         super().remove_request(req_index_or_id)
 
     def _select_rows(self, tensor, rows):
@@ -249,6 +275,9 @@ class MossLocalModelState(OmniModelState):
             prefill = computed < prompt_len if computed is not None and prompt_len is not None else count > 1
             if prefill and computed is not None and prompt_len is not None and computed + count >= prompt_len:
                 completing_rows.append(row)
+                early = getattr(self, "_early_first_audio", None)
+                if early is not None:
+                    early.record_prefill(str(buf["req_id"]), buf.get("sampling_params"))
             if count == 1 and not prefill and isinstance(buf.get("audio_state"), dict):
                 active = not bool(buf["audio_state"].get("is_stopping"))
                 if active != self._active_host[slot]:
@@ -364,6 +393,9 @@ class MossLocalModelState(OmniModelState):
                 req_ids=req_ids,
                 generators=generators,
             )
+        early = getattr(self, "_early_first_audio", None)
+        if early is not None:
+            early.after_mtp(req_ids, codes[:bsz], ids)
         embeds.index_copy_(0, offsets, new_emb[:bsz])
         self._codes_pool.index_copy_(0, slots, codes[:bsz])
 
@@ -461,4 +493,6 @@ class MossLocalModelState(OmniModelState):
                 codes.device,
             )
             model._batch_should_continue.index_copy_(0, rows, keep)
-        return model_output, _CodeRowsSnapshot(codes, list(self._decode_rows), input_batch.num_reqs)
+        early = getattr(self, "_early_first_audio", None)
+        first_audio = early.take_flags(input_batch.req_ids, codes.device) if early is not None else None
+        return model_output, _CodeRowsSnapshot(codes, list(self._decode_rows), input_batch.num_reqs, first_audio)

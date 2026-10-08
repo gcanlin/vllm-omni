@@ -1307,6 +1307,7 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
         super().__init__()
         self.vllm_config = vllm_config
         self.config: MossTTSLocalConfig = vllm_config.model_config.hf_config
+        self.first_frame_decoder = None
 
         qwen3_cfg = self.config.qwen3_config
         hidden_size = int(qwen3_cfg.hidden_size)
@@ -1487,6 +1488,14 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
         (outside the valid embedding range). Returns the ``(T, H)`` additive
         audio embedding, masking out pad positions per codebook.
         """
+        if (
+            self._stacked_audio_emb_w is not None
+            and self._stacked_audio_emb_w.dtype in (torch.bfloat16, torch.float16)
+            and codes.device.type == "cuda"
+        ):
+            from vllm_omni.model_executor.models.moss_tts.audio_embed_kernel import audio_embed
+
+            return audio_embed(codes, self._stacked_audio_emb_w, self.audio_pad_token_id)
         device = codes.device
         valid_mask = codes.ne(self.audio_pad_token_id)  # (T, n_vq)
         safe_codes = codes.masked_fill(~valid_mask, 0).clamp(0, self.audio_vocab_size - 1)
@@ -1850,6 +1859,13 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
         not_loaded = [n for n in params_dict if n not in loaded]
         if not_loaded:
             logger.warning("[MossTTSLocal] %d params NOT loaded (first 5: %s)", len(not_loaded), not_loaded[:5])
+        from .first_frame_decoder import MossFirstFrameDecoder, first_audio_enabled
+
+        if first_audio_enabled(self.vllm_config):
+            self.first_frame_decoder = MossFirstFrameDecoder(self.vllm_config)
+            first_loaded = self.first_frame_decoder.load()
+            self.first_frame_decoder.warmup()
+            loaded.update("first_frame_decoder." + name for name in first_loaded)
         return loaded
 
 

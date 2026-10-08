@@ -22,6 +22,7 @@ from vllm.model_executor.model_loader import DefaultModelLoader
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 from vllm.utils.torch_utils import set_default_torch_dtype
 
+from vllm_omni.data_entry_keys import FIRST_AUDIO_REQUIRED_KEY
 from vllm_omni.model_executor.models.moss_tts.audio_tokenizer import (
     MossAudioTokenizerConfig,
     MossAudioTokenizerModel,
@@ -66,6 +67,7 @@ class _MossCodecStreamSession:
         ring_headroom: bool = False,
         fast_batch_sizes: list[int] | None = None,
         fast_frames: int = 0,
+        private_graph_pool: bool = False,
     ) -> None:
         self._codec = codec
         self._state_capacity = int(state_capacity)
@@ -142,6 +144,7 @@ class _MossCodecStreamSession:
                     frame_sizes=frame_sizes,
                     num_quantizers=self._n_vq,
                     vllm_config=vllm_config,
+                    private_pool=private_graph_pool,
                 )
             self._cudagraph_wrapper.warmup(self._device)
             if fast_batch_sizes and self._cudagraph_wrapper.is_ready:
@@ -463,6 +466,8 @@ class MossTTSCodecDecoder(nn.Module):
         # streaming reproduces whole-sequence decoding (costs ring memory).
         self._stream_ring_headroom: bool = bool(self._connector_int("codec_ring_headroom", default=0))
         self._stream_req_slots: dict[str, int] = {}
+        self._accept_first_audio = bool(self._connector_int("moss_talker_first_audio", default=0))
+        self._stream_first_audio_requests: set[str] = set()
         # Opt-in: decode each stream's first chunk from the receive thread.
         self._first_chunk_fast = bool(self._connector_int("codec_first_chunk_fast_path", default=0))
         self._first_chunk_fast_path: MossFirstChunkFastPath | None = None
@@ -571,6 +576,7 @@ class MossTTSCodecDecoder(nn.Module):
         sr_tensor = self._sr_tensor
         empty = self._empty_audio()
         info_list: list[dict[str, Any]] = list(runtime_additional_information or [{}])
+        first_audio_flags = self._first_audio_flags(info_list)
         num_req = max(len(info_list), 1)
 
         if self._codec is None:
@@ -600,7 +606,11 @@ class MossTTSCodecDecoder(nn.Module):
         if input_ids is None or input_ids.numel() == 0:
             return OmniOutput(
                 text_hidden_states=None,
-                multimodal_outputs={"model_outputs": audios, "sr": srs},
+                multimodal_outputs={
+                    "model_outputs": audios,
+                    "sr": srs,
+                    **self._first_audio_metadata(first_audio_flags),
+                },
             )
 
         # ``input_ids`` is concatenated across all requests. vLLM-Omni runners
@@ -636,6 +646,8 @@ class MossTTSCodecDecoder(nn.Module):
             srs = srs[:num_req]
 
         offsets = [0]
+        first_audio_flags = self._first_audio_flags(info_list)
+        trim_first: set[int] = set()
         for n in token_counts:
             offsets.append(offsets[-1] + int(n))
 
@@ -674,6 +686,8 @@ class MossTTSCodecDecoder(nn.Module):
             req_key = self._runtime_request_key(info, meta, i)
 
             if streaming_enabled:
+                if first_audio_flags[i] and req_key not in self._stream_req_slots:
+                    trim_first.add(i)
                 streaming_work.append((i, req_key, codes_nq_t, finished))
                 continue
 
@@ -727,9 +741,11 @@ class MossTTSCodecDecoder(nn.Module):
                 streaming_work,
                 output_buffers=stream_output_buffers or None,
             ).items():
+                if i in trim_first:
+                    wav = wav[..., int(self._codec.downsample_rate) :]
                 audios[i] = wav.reshape(-1) if wav.ndim == 1 or int(wav.shape[0]) == 1 else wav
 
-        payload = {"model_outputs": audios, "sr": srs}
+        payload = {"model_outputs": audios, "sr": srs, **self._first_audio_metadata(first_audio_flags)}
         if self._gpu_stream_output and device.type == "cuda":
             # One transfer per dtype/device preserves ragged request lengths
             # without issuing one D2H per waveform. A fresh slot owns each
@@ -738,6 +754,29 @@ class MossTTSCodecDecoder(nn.Module):
             if packed is not None:
                 payload = packed
         return OmniOutput(text_hidden_states=None, multimodal_outputs=payload)
+
+    def _first_audio_flags(self, infos):
+        if not getattr(self, "_accept_first_audio", False):
+            return [False] * len(infos)
+        flags = []
+        for i, info in enumerate(infos):
+            meta = (info.get("meta", {}) if isinstance(info, dict) else {}) or {}
+            request_id = self._runtime_request_key(info, meta, i)
+            first = meta.get("first_audio", False)
+            if isinstance(first, (tuple, list)):
+                first = first[0] if first else False
+            if isinstance(first, torch.Tensor):
+                first = bool(first.numel() and first.reshape(-1)[0].item())
+            if first:
+                self._stream_first_audio_requests.add(request_id)
+            flags.append(request_id in self._stream_first_audio_requests)
+        return flags
+
+    @staticmethod
+    def _first_audio_metadata(flags):
+        if not any(flags):
+            return {}
+        return {FIRST_AUDIO_REQUIRED_KEY: [torch.tensor(flag) for flag in flags]}
 
     @staticmethod
     def _normalize_seq_token_counts(value: Any) -> list[int] | None:
@@ -789,6 +828,9 @@ class MossTTSCodecDecoder(nn.Module):
             ring_headroom=self._stream_ring_headroom,
             fast_batch_sizes=[1, 2, 4, 8] if self._first_chunk_fast else None,
             fast_frames=self._initial_stream_chunk_frames if self._first_chunk_fast else 0,
+            private_graph_pool=bool(
+                getattr(self.vllm_config.model_config.hf_config, "codec_private_graph_pool", False)
+            ),
         )
         if self._stream_session._fast_wrapper is not None:
             self._first_chunk_fast_path = MossFirstChunkFastPath(
@@ -835,6 +877,13 @@ class MossTTSCodecDecoder(nn.Module):
         if codes is None:
             return False
         meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+        direct_first = meta.get("first_audio", False)
+        if isinstance(direct_first, torch.Tensor):
+            direct_first = bool(direct_first.numel() and direct_first.reshape(-1)[0].item())
+        if direct_first:
+            # Stage0 already accepted responsibility for this PCM packet.
+            # The regular decoder must prime state and trim its first frame.
+            return False
         key = meta.get("req_id")
         if isinstance(key, (list, tuple)):
             key = key[0] if key else None
@@ -999,6 +1048,7 @@ class MossTTSCodecDecoder(nn.Module):
         if slot is not None:
             session.release(slot, state_already_reset=state_already_reset)
         self._stream_req_slots.pop(request_id, None)
+        getattr(self, "_stream_first_audio_requests", set()).discard(request_id)
 
     def on_requests_finished(self, finished_req_ids: set[str] | list[str]) -> None:
         """Release codec streaming slots when requests finish outside payload flow.
@@ -1023,6 +1073,7 @@ class MossTTSCodecDecoder(nn.Module):
                     else self._stream_req_slots.get(request_id)
                 )
                 if slot is None:
+                    getattr(self, "_stream_first_audio_requests", set()).discard(request_id)
                     continue
                 if fast is not None:
                     fast.order_after(slot)

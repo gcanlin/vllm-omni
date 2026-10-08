@@ -1,0 +1,25 @@
+# Opt-in BF16 first-audio profile for a single H200 with CUDA MPS.
+# Retains the optimized profile's Stage0 prefix cache and batch limits.
+base_config: moss_tts_local_mrv2_optimized.yaml
+dtype: bfloat16
+cuda_mps: true
+
+connectors:
+  shm:
+    extra:
+      moss_talker_first_audio: true
+      moss_defer_codec_prime: true
+      codec_first_chunk_max_active_streams: 0
+
+platforms:
+  cuda:
+    stages:
+      - stage_id: 0
+        enable_prefix_caching: true
+        # hf_overrides is replaced as a group; retain the base runner options.
+        hf_overrides:
+          mrv2_gpu_slot_state: true
+          mrv2_batch_prefill: true
+          mrv2_direct_tokens: true
+          local_compile_audio_sampler: true
+          moss_first_frame_empty_history: true

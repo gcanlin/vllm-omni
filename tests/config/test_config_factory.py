@@ -3134,6 +3134,33 @@ class TestPlatformOverrides:
             assert all(not stage.yaml_engine_args["enable_prefix_caching"] for stage in stages)
             assert all(not stage.yaml_runtime.get("env") for stage in stages)
 
+    def test_moss_local_first_audio_preserves_prefix_cache_and_runner_options(self):
+        pipeline = resolve_pipeline_config("moss_tts_local")
+        path = get_deploy_config_path("moss_tts_local_mrv2_first_audio.yaml")
+        deploy = _apply_platform_overrides(load_deploy_config(path), platform="cuda")
+        talker, codec = merge_pipeline_deploy(pipeline, deploy)
+        args = talker.yaml_engine_args
+        assert args["enable_prefix_caching"] is True
+        assert args["use_v2_model_runner"] is True
+        assert args["max_num_seqs"] == 128
+        assert args["max_num_batched_tokens"] == 512
+        assert args["hf_overrides"] == {
+            "mrv2_gpu_slot_state": True,
+            "mrv2_batch_prefill": True,
+            "mrv2_direct_tokens": True,
+            "local_compile_audio_sampler": True,
+            "moss_first_frame_empty_history": True,
+        }
+        extra = deploy.connectors["shm"]["extra"]
+        assert extra["moss_talker_first_audio"] is True
+        assert extra["moss_defer_codec_prime"] is True
+        assert extra["initial_codec_chunk_frames"] == 1
+        assert extra["codec_chunk_frames"] == 15
+        assert extra["generation_min_batch_size"] == 16
+        assert extra["generation_max_wait_ms"] == 6
+        assert codec.yaml_engine_args["use_v2_model_runner"] is True
+        assert deploy.cuda_mps is True
+
     def test_platform_mps_rejects_non_boolean(self):
         deploy = load_deploy_config(get_deploy_config_path("moss_tts_local_mrv2_optimized.yaml"))
         deploy.platforms["cuda"]["cuda_mps"] = "true"
