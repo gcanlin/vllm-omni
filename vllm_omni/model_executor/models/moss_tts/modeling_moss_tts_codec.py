@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-import threading
 from collections.abc import Iterable
 from contextlib import nullcontext
 from functools import partial
@@ -37,16 +36,12 @@ from vllm_omni.model_executor.models.moss_tts.configuration_moss_audio_tokenizer
 from vllm_omni.model_executor.models.moss_tts.cuda_graph_streaming_decoder_wrapper import (
     CUDAGraphStreamingDecoderWrapper,
 )
-from vllm_omni.model_executor.models.moss_tts.first_chunk_fast_path import (
-    MossFirstChunkFastPath,
-)
 from vllm_omni.model_executor.models.moss_tts.moss_codec_cudagraph import (
     MossTTSCUDAGraphCodecWrapper,
 )
 from vllm_omni.model_executor.models.output_templates import OmniOutput
 from vllm_omni.model_executor.output_snapshot import PackedOutputSnapshot, pack_output_snapshot
 from vllm_omni.model_executor.stage_input_processors.chunk_size_utils import parse_chunk_ramp
-from vllm_omni.worker_v2.first_audio_sender import FirstAudioSink
 
 logger = init_logger(__name__)
 
@@ -229,8 +224,6 @@ class _MossCodecStreamSession:
         gpu_output: bool = False,
         chunk_frames: int = 0,
         ring_headroom: bool = False,
-        fast_batch_sizes: list[int] | None = None,
-        fast_frames: int = 0,
         private_graph_pool: bool = False,
     ) -> None:
         self._codec = codec
@@ -242,9 +235,6 @@ class _MossCodecStreamSession:
         self._gpu_output = gpu_output and self._device.type == "cuda"
         self._free_stream_slots = list(reversed(range(self._state_capacity)))
         self._leased_slots: set[int] = set()
-        # The first-chunk fast path leases slots from its decode thread.
-        self._slot_lock = threading.Lock()
-        self._slot_reset_events: dict[int, torch.cuda.Event] = {}
         self._closed = False
         self._metadata_index = 0
         self._metadata_ring = []
@@ -258,15 +248,9 @@ class _MossCodecStreamSession:
                 gpu = torch.empty_like(host, device=self._device)
                 self._metadata_ring.append((host, host.numpy(), gpu, torch.cuda.Event(), False))
         self._cudagraph_wrapper: CUDAGraphStreamingDecoderWrapper | None = None
-        self._fast_wrapper: CUDAGraphStreamingDecoderWrapper | None = None
         batch_sizes = sorted({int(size) for size in (graph_batch_sizes or []) if 0 < int(size) <= self._state_capacity})
         frame_sizes = sorted({int(size) for size in (graph_frame_sizes or []) if int(size) > 0})
         scratch_capacity = max(batch_sizes, default=0) if self._device.type in ("cuda", "npu") else 0
-        fast_batch_sizes = sorted({int(size) for size in (fast_batch_sizes or []) if 0 < int(size)})
-        if not (fast_frames > 0 and fast_batch_sizes and batch_sizes and frame_sizes and self._device.type == "cuda"):
-            fast_batch_sizes = []
-        fast_scratch_base = self._state_capacity + scratch_capacity
-        scratch_capacity += max(fast_batch_sizes, default=0)
         self._total_state_capacity = self._state_capacity + scratch_capacity
         self._state_slot_ids = torch.arange(
             self._total_state_capacity,
@@ -311,59 +295,24 @@ class _MossCodecStreamSession:
                     private_pool=private_graph_pool,
                 )
             self._cudagraph_wrapper.warmup(self._device)
-            if fast_batch_sizes and self._cudagraph_wrapper.is_ready:
-                main_compiled = self._cudagraph_wrapper._compiled_decode
-                self._fast_wrapper = CUDAGraphStreamingDecoderWrapper(
-                    codec,
-                    state_capacity=self._state_capacity,
-                    batch_sizes=fast_batch_sizes,
-                    frame_sizes=[int(fast_frames)],
-                    num_quantizers=self._n_vq,
-                    vllm_config=vllm_config,
-                    scratch_base=fast_scratch_base,
-                    private_pool=True,
-                    compiled_decode=main_compiled if main_compiled is not None else codec.decode_streaming_tensors,
-                )
-                self._fast_wrapper.warmup(self._device)
-                if not self._fast_wrapper.is_ready:
-                    self._fast_wrapper = None
             self.reset_slots(list(range(self._state_capacity + scratch_capacity)))
             if not self._cudagraph_wrapper.is_ready:
                 self._cudagraph_wrapper = None
 
-    def acquire(self, *, oldest: bool = False) -> int | None:
-        """Lease a slot; ``oldest`` takes the one whose reset was queued first."""
-        with self._slot_lock:
-            if not self._free_stream_slots:
-                return None
-            slot = self._free_stream_slots.pop(0 if oldest else -1)
-            self._leased_slots.add(slot)
-            return slot
+    def acquire(self) -> int | None:
+        if not self._free_stream_slots:
+            return None
+        slot = self._free_stream_slots.pop()
+        self._leased_slots.add(slot)
+        return slot
 
     def release(self, slot: int, *, state_already_reset: bool = False) -> None:
-        if self._closed:
-            return
-        if slot not in self._leased_slots:
+        if self._closed or slot not in self._leased_slots:
             return
         if not state_already_reset:
             self.reset_slots([slot])
-        reset_event = None
-        if self._fast_wrapper is not None:
-            # The fast path decodes on another stream; it must not read this
-            # slot before the reset queued on the current stream has run.
-            reset_event = torch.cuda.Event()
-            reset_event.record(torch.cuda.current_stream(self._device))
-        with self._slot_lock:
-            if reset_event is not None:
-                self._slot_reset_events[slot] = reset_event
-            self._leased_slots.remove(slot)
-            self._free_stream_slots.append(slot)
-
-    def order_after_reset(self, slot: int, stream: torch.cuda.Stream) -> None:
-        with self._slot_lock:
-            event = self._slot_reset_events.pop(slot, None)
-        if event is not None and not event.query():
-            stream.wait_event(event)
+        self._leased_slots.remove(slot)
+        self._free_stream_slots.append(slot)
 
     def _reset_slot_ids(self, slot_ids: torch.Tensor) -> None:
         reset_streaming_slots = getattr(self._codec, "reset_decoder_state_slots", None)
@@ -597,7 +546,6 @@ class MossTTSCodecDecoder(nn.Module):
     requires_exact_input_shape: bool = True
 
     _OUTPUT_SAMPLE_RATE: int = 24_000
-    _first_chunk_fast_path: MossFirstChunkFastPath | None = None
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
         super().__init__()
@@ -632,9 +580,6 @@ class MossTTSCodecDecoder(nn.Module):
         self._stream_req_slots: dict[str, int] = {}
         self._accept_first_audio = bool(self._connector_int("moss_talker_first_audio", default=1))
         self._stream_first_audio_requests: set[str] = set()
-        # Opt-in: decode each stream's first chunk from the receive thread.
-        self._first_chunk_fast = bool(self._connector_int("codec_first_chunk_fast_path", default=0))
-        self._first_chunk_fast_path: MossFirstChunkFastPath | None = None
         self._async_chunk = bool(getattr(self.vllm_config.model_config, "async_chunk", False))
         self._gpu_stream_output = (
             self._async_chunk
@@ -647,7 +592,7 @@ class MossTTSCodecDecoder(nn.Module):
         ramp = parse_chunk_ramp(self._connector_extra(), steady=self._stream_chunk_frames)
         if ramp:
             # The sender gives the ramp precedence over initial chunk size.
-            # The dedicated first-chunk graph must use that same first shape.
+            # Keep the resolved initial frame count consistent with the sender.
             self._initial_stream_chunk_frames = ramp[0]
         self._stream_max_step_frames = max(
             self._stream_max_step_frames, self._initial_stream_chunk_frames, *(ramp or [])
@@ -990,67 +935,13 @@ class MossTTSCodecDecoder(nn.Module):
             gpu_output=self._gpu_stream_output,
             chunk_frames=self._stream_max_step_frames,
             ring_headroom=self._stream_ring_headroom,
-            fast_batch_sizes=[1, 2, 4, 8] if self._first_chunk_fast else None,
-            fast_frames=self._initial_stream_chunk_frames if self._first_chunk_fast else 0,
         )
-        if self._stream_session._fast_wrapper is not None:
-            self._first_chunk_fast_path = MossFirstChunkFastPath(
-                self._stream_session,
-                self._stream_session._fast_wrapper,
-                n_vq=self._n_vq,
-                frames=self._initial_stream_chunk_frames,
-                codebook_size=int(self._codec.config.codebook_size),
-                samples_per_frame=int(self._codec.downsample_rate),
-                n_channels=self._n_channels,
-                sample_rate=self._sr_tensor,
-                device=next(self._codec.parameters()).device,
-                gate_main=bool(self._connector_int("codec_first_chunk_gate", default=0)),
-                max_active_streams=self._connector_int("codec_first_chunk_max_active_streams", default=0),
-            )
-            logger.info(
-                "MOSS-TTS codec first-chunk fast path ready: B=%s T=%d",
-                self._stream_session._fast_wrapper.capture_sizes,
-                self._initial_stream_chunk_frames,
-            )
-        elif self._first_chunk_fast:
-            logger.warning("MOSS-TTS codec first-chunk fast path requested but unavailable; using the main path.")
         if self._stream_ring_headroom:
             logger.info(
                 "MOSS-TTS codec attention rings sized with headroom for %d-frame chunks",
                 self._stream_max_step_frames,
             )
         return self._stream_session
-
-    def bind_first_chunk_fast_path(self, sink: FirstAudioSink) -> Any:
-        """Start the fast path with an output sink; returns the receive hook."""
-        fast = self._first_chunk_fast_path
-        if fast is None:
-            return None
-        fast.bind(sink)
-        return self._submit_first_chunk
-
-    def _submit_first_chunk(self, request_id: str, handle: Any, payload: Any) -> bool:
-        fast = self._first_chunk_fast_path
-        if fast is None or not isinstance(payload, dict):
-            return False
-        codes = payload.get("codes")
-        codes = codes.get("audio") if isinstance(codes, dict) else None
-        if codes is None:
-            return False
-        meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
-        direct_first = meta.get("first_audio", False)
-        if isinstance(direct_first, torch.Tensor):
-            direct_first = bool(direct_first.numel() and direct_first.reshape(-1)[0].item())
-        if direct_first:
-            # Stage0 already accepted responsibility for this PCM packet.
-            # The regular decoder must prime state and trim its first frame.
-            return False
-        key = meta.get("req_id")
-        if isinstance(key, (list, tuple)):
-            key = key[0] if key else None
-        if key is None:
-            key = getattr(handle, "external_req_id", None) or request_id
-        return fast.submit(request_id, str(key), codes, self._stream_req_slots)
 
     def _decode_streaming_batch(
         self,
@@ -1063,7 +954,6 @@ class MossTTSCodecDecoder(nn.Module):
             return {}
 
         outputs: dict[int, torch.Tensor] = {}
-        unsent_first_audio: dict[int, torch.Tensor] = {}
         grouped: dict[int, list[tuple[int, str, int, torch.Tensor, bool]]] = {}
         max_step_frames = max(1, int(self._stream_max_step_frames))
         graph = session._cudagraph_wrapper
@@ -1072,27 +962,8 @@ class MossTTSCodecDecoder(nn.Module):
         # instead of one eager or plain-graph decode per distinct tail length.
         coalesce_tails = graph is not None and max(graph.batch_sizes, default=0) >= self._stream_state_capacity
 
-        fast = self._first_chunk_fast_path
         for output_index, request_id, codes_nq_t, finished in items:
             slot = self._stream_req_slots.get(request_id)
-            if fast is not None and slot is not None:
-                fast.order_after(slot)
-                if fast.take_decoded(request_id):
-                    unsent = fast.take_unsent_audio(request_id)
-                    if unsent is not None:
-                        unsent_first_audio[output_index] = unsent
-                    # The fast path already emitted this chunk's audio and
-                    # advanced the slot state past it.
-                    codes_nq_t = codes_nq_t[:, fast.frames :]
-                    if codes_nq_t.shape[1] == 0:
-                        if unsent is not None:
-                            outputs[output_index] = unsent
-                        if finished:
-                            self._finish_stream_request(request_id, session, slot)
-                        continue
-                    if output_buffers is not None:
-                        # Sized for the untrimmed chunk; decode into a fresh tensor.
-                        output_buffers.pop(output_index, None)
             if slot is None:
                 slot = session.acquire()
                 if slot is None:
@@ -1111,8 +982,7 @@ class MossTTSCodecDecoder(nn.Module):
                     output_buffer=output_buffers.get(output_index) if output_buffers is not None else None,
                 )
                 if wav is not None:
-                    prefix = unsent_first_audio.pop(output_index, None)
-                    outputs[output_index] = torch.cat((prefix, wav), dim=-1) if prefix is not None else wav
+                    outputs[output_index] = wav
                 if finished:
                     self._finish_stream_request(
                         request_id,
@@ -1130,8 +1000,6 @@ class MossTTSCodecDecoder(nn.Module):
                 group_frames = graph._select_frame_size(frame_count, allow_padding=True) or frame_count
             grouped.setdefault(group_frames, []).append((output_index, request_id, slot, codes_nq_t, finished))
 
-        if fast is not None and grouped:
-            fast.gate()
         for group in grouped.values():
             plan = {slot: codes_nq_t for _, _, slot, codes_nq_t, _ in group}
             terminal_slots = {slot for _, _, slot, _, finished in group if finished}
@@ -1148,8 +1016,7 @@ class MossTTSCodecDecoder(nn.Module):
             for output_index, request_id, slot, _, finished in group:
                 wav = decoded.get(slot)
                 if wav is not None:
-                    prefix = unsent_first_audio.pop(output_index, None)
-                    outputs[output_index] = torch.cat((prefix, wav), dim=-1) if prefix is not None else wav
+                    outputs[output_index] = wav
                 if finished:
                     self._finish_stream_request(
                         request_id,
@@ -1227,18 +1094,10 @@ class MossTTSCodecDecoder(nn.Module):
             session = self._stream_session
             for req_id in finished_req_ids:
                 request_id = str(req_id)
-                fast = self._first_chunk_fast_path
-                slot = (
-                    fast.get_request_slot(request_id, self._stream_req_slots)
-                    if fast is not None
-                    else self._stream_req_slots.get(request_id)
-                )
+                slot = self._stream_req_slots.get(request_id)
                 if slot is None:
                     getattr(self, "_stream_first_audio_requests", set()).discard(request_id)
                     continue
-                if fast is not None:
-                    fast.order_after(slot)
-                    fast.forget(request_id)
                 if session is not None:
                     self._finish_stream_request(request_id, session, slot)
                 else:

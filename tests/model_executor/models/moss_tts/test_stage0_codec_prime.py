@@ -100,11 +100,3 @@ def test_empty_terminal_keeps_ordering_promise_until_cleanup():
     assert bool(end[FIRST_AUDIO_REQUIRED_KEY][0])
     d.on_requests_finished({"a"})
     assert not d._stream_first_audio_requests
-
-
-def test_stage1_fast_path_does_not_duplicate_stage0_first_audio(mocker):
-    d = decoder()
-    d._first_chunk_fast_path = SimpleNamespace(submit=mocker.Mock(return_value=True))
-    payload = {"codes": {"audio": [1, 2]}, "meta": {"first_audio": torch.tensor(True)}}
-    assert not d._submit_first_chunk("a", SimpleNamespace(), payload)
-    d._first_chunk_fast_path.submit.assert_not_called()

@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import torch
 from torch import nn
-from vllm.config import VllmConfig
+from vllm.config import CUDAGraphMode, VllmConfig
+from vllm.logger import init_logger
 
 from .modeling_moss_tts_codec import _MossCodecStreamSession, load_codec
 
-_FIRST_FRAME_BATCH_SIZES = (1, 2, 4, 8)
+logger = init_logger(__name__)
 
 
 def first_audio_enabled(config) -> bool:
@@ -61,8 +62,17 @@ class MossFirstFrameDecoder(nn.Module):
         self._empty_history = empty_history
 
     def load(self, config: VllmConfig) -> set[str]:
-        # Read the framework's loading/compilation context without changing it.
-        # The first decoder owns its graph sizes, not a scheduler or stage config.
+        # First-frame rows are requests, while Talker graph sizes count tokens.
+        # Reuse its resolved buckets up to the request capacity.
+        compilation = config.compilation_config
+        capacity = config.scheduler_config.max_num_seqs
+        batch_sizes = tuple(
+            sorted({size for size in (compilation.cudagraph_capture_sizes or []) if 0 < size <= capacity})
+        )
+        if config.model_config.enforce_eager or compilation.cudagraph_mode == CUDAGraphMode.NONE:
+            batch_sizes = ()
+        self._batch_size = max(batch_sizes, default=capacity)
+        logger.info("MOSS first-frame codec follows Talker graph buckets: B=%s T=1", batch_sizes)
         codec_config, self._codec = load_codec(
             self._codec_path,
             device=config.device_config.device,
@@ -77,14 +87,19 @@ class MossFirstFrameDecoder(nn.Module):
             from .first_frame_special import StatelessFirstGraphs, specialize
 
             specialize(self._codec)
-            self._special_graphs = StatelessFirstGraphs(self._codec, self._num_quantizers, _FIRST_FRAME_BATCH_SIZES)
+            self._special_graphs = StatelessFirstGraphs(
+                self._codec,
+                self._num_quantizers,
+                batch_sizes,
+                warmups=compilation.cudagraph_num_of_warmups,
+            )
         else:
             self._session = _MossCodecStreamSession(
                 self._codec,
-                state_capacity=max(_FIRST_FRAME_BATCH_SIZES),
+                state_capacity=self._batch_size,
                 n_vq=self._num_quantizers,
                 vllm_config=config,
-                graph_batch_sizes=list(_FIRST_FRAME_BATCH_SIZES) if not config.model_config.enforce_eager else [],
+                graph_batch_sizes=list(batch_sizes),
                 graph_frame_sizes=[1],
                 gpu_output=True,
                 chunk_frames=1,
@@ -103,7 +118,7 @@ class MossFirstFrameDecoder(nn.Module):
             return self._special_graphs(codes)
         session = self._session
         parts = []
-        batch_size = max(_FIRST_FRAME_BATCH_SIZES)
+        batch_size = self._batch_size
         for start in range(0, codes.shape[0], batch_size):
             chunk = codes[start : start + batch_size]
             slots = [session.acquire() for _ in range(len(chunk))]

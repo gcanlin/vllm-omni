@@ -3124,11 +3124,9 @@ class TestPlatformOverrides:
             assert args["hf_overrides"]["mrv2_gpu_slot_state"] is True
             assert args["hf_overrides"]["mrv2_batch_prefill"] is True
             assert args["hf_overrides"]["mrv2_direct_tokens"] is True
-            assert deploy.connectors["shm"]["extra"]["codec_first_chunk_fast_path"] == 1
             assert args["hf_overrides"]["local_compile_audio_sampler"] is True
             assert args["hf_overrides"]["moss_first_frame_empty_history"] is True
             extra = deploy.connectors["shm"]["extra"]
-            assert extra["codec_first_chunk_max_active_streams"] == 0
             assert "moss_talker_first_audio" not in extra
             assert "moss_defer_codec_prime" not in extra
             assert extra["generation_min_batch_size"] == 16

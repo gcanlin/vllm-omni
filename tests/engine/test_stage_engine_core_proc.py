@@ -61,40 +61,6 @@ def test_preprocess_add_request_preserves_omni_fields():
     assert result.additional_information == {"conditioning": "payload"}
 
 
-def test_codec_uses_generic_first_audio_binding(monkeypatch):
-    import queue
-
-    import torch
-
-    from vllm_omni.data_entry_keys import FIRST_AUDIO_KEY
-    from vllm_omni.engine import stage_engine_core_proc as module
-
-    calls: dict[str, Any] = {}
-
-    def hook(*args):
-        return False
-
-    def bind(sink):
-        calls["sink"] = sink
-        return hook
-
-    plane = SimpleNamespace(set_first_chunk_hook=lambda value: calls.update(hook=value))
-    model = SimpleNamespace(bind_first_chunk_fast_path=bind)
-    runner = SimpleNamespace(model=model, get_model=lambda: model, _omni_data_plane=plane)
-    executor = SimpleNamespace(
-        vllm_config=SimpleNamespace(parallel_config=SimpleNamespace(tensor_parallel_size=1, pipeline_parallel_size=1)),
-        driver_worker=SimpleNamespace(worker=SimpleNamespace(model_runner=runner)),
-    )
-    monkeypatch.setattr(module, "UniProcExecutor", SimpleNamespace)
-    outputs: queue.Queue = queue.Queue()
-    scheduler = SimpleNamespace(requests={"r": SimpleNamespace(client_index=2)})
-    assert module._bind_first_audio_sink(executor, outputs, scheduler)
-    assert calls["hook"] is hook
-    calls["sink"].prepare(["r"])(["r"], [torch.ones(2)], torch.tensor(24000))
-    client, batch = outputs.get_nowait()
-    assert client == 2 and FIRST_AUDIO_KEY not in batch.outputs[0].multimodal_output
-
-
 def test_first_audio_binding_preserves_talker_marker(monkeypatch):
     import queue
 

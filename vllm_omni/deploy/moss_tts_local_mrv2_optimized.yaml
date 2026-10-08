@@ -10,9 +10,6 @@ dtype: bfloat16
 connectors:
   shm:
     extra:
-      codec_first_chunk_fast_path: 1
-      # Keep the regular first-chunk fallback available at every batch size.
-      codec_first_chunk_max_active_streams: 0
       generation_min_batch_size: 16
       generation_max_wait_ms: 6
 

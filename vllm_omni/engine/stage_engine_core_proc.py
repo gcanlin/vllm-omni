@@ -100,18 +100,7 @@ def _bind_first_audio_sink(model_executor: Any, output_queue: Any, scheduler: An
         assert model_state is not None
         model_state.set_first_audio_sink(engine_output_queue_sink(output_queue, scheduler))
         return True
-    data_plane = getattr(model_runner, "_omni_data_plane", None)
-    get_model = getattr(model_runner, "get_model", None)
-    if data_plane is None or not callable(get_model):
-        return False
-    bind = getattr(get_model(), "bind_first_chunk_fast_path", None)
-    if not callable(bind):
-        return False
-    hook = bind(engine_output_queue_sink(output_queue, scheduler, upstream_first_audio=False))
-    if hook is None:
-        return False
-    data_plane.set_first_chunk_hook(hook)
-    return True
+    return False
 
 
 def _bind_native_data_plane_ready_sink(model_executor: Any, scheduler: Any) -> bool:
