@@ -123,6 +123,7 @@ class MossLocalModelState(OmniModelState):
         # an eager MTP in this state; others keep the canonical path, so a
         # reused slot never reads a previous request's frame state.
         self._eager_host = [False] * capacity
+        self._first_mtp_slots = set()
         self._mtp_dispatcher = None
 
     def sample_determined_tokens(self, batch, sampler):
@@ -217,6 +218,7 @@ class MossLocalModelState(OmniModelState):
         self._active_pool[req_index].fill_(True)
         self._active_host[req_index] = True
         self._eager_host[req_index] = False
+        self._first_mtp_slots.discard(req_index)
         self._keep_pool[req_index].fill_(False)
         self._eager_emb_pool[req_index].zero_()
 
@@ -339,9 +341,9 @@ class MossLocalModelState(OmniModelState):
 
         self._apply_reference_batch(embeds, references)
         self._decode_rows = decode_rows
+        self._completing_rows = completing_rows
+        self._mtp_dispatcher = mtp_batch_descriptor_dispatcher
         if self._local_eager_mtp:
-            self._completing_rows = completing_rows
-            self._mtp_dispatcher = mtp_batch_descriptor_dispatcher
             eager_rows = [row for row in decode_rows if self._eager_host[int(input_batch.idx_mapping_np[row])]]
             canonical_rows = [row for row in decode_rows if not self._eager_host[int(input_batch.idx_mapping_np[row])]]
             self._local_eager_rows = eager_rows
@@ -356,7 +358,18 @@ class MossLocalModelState(OmniModelState):
             if canonical_rows:
                 self._run_slot_mtp(input_batch, input_ids, embeds, canonical_rows, mtp_batch_descriptor_dispatcher)
         elif decode_rows:
-            self._run_slot_mtp(input_batch, input_ids, embeds, decode_rows, mtp_batch_descriptor_dispatcher)
+            cached = [row for row in decode_rows if int(input_batch.idx_mapping_np[row]) in self._first_mtp_slots]
+            if cached:
+                slots = self._select_rows(input_batch.idx_mapping, cached)
+                offsets = self._select_rows(input_batch.query_start_loc, cached)
+                embeds.index_copy_(
+                    0, offsets, embeds.index_select(0, offsets) + self._eager_emb_pool.index_select(0, slots)
+                )
+                for row in cached:
+                    self._first_mtp_slots.discard(int(input_batch.idx_mapping_np[row]))
+            pending = [row for row in decode_rows if row not in cached]
+            if pending:
+                self._run_slot_mtp(input_batch, input_ids, embeds, pending, mtp_batch_descriptor_dispatcher)
 
     def _run_slot_mtp(self, batch, input_ids, embeds, rows, dispatcher):
         bsz = len(rows)
@@ -471,6 +484,14 @@ class MossLocalModelState(OmniModelState):
                 self._run_local_eager_mtp(input_batch, rows, set(completing))
                 for row in completing:
                     self._eager_host[int(input_batch.idx_mapping_np[row])] = True
+        elif (early := getattr(self, "_early_first_audio", None)) is not None:
+            # Prepare only the first frame immediately after its final prefill.
+            # The next decode step consumes it on the canonical output schedule,
+            # preserving max_tokens and avoiding a second MTP for that frame.
+            rows = [row for row in self._completing_rows if input_batch.req_ids[row] in early.waiting]
+            if rows:
+                self._run_local_eager_mtp(input_batch, rows, set(rows))
+                self._first_mtp_slots.update(int(input_batch.idx_mapping_np[row]) for row in rows)
 
     def postprocess_model_output(self, model_output, input_batch, req_states):
         # Local backbone returns a tensor; keep the standard runner's output

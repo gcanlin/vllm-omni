@@ -43,10 +43,11 @@ def _run(state, device, schedule, stop_step):
     return embeds, frames
 
 
-def test_eager_frames_match_canonical_one_step_earlier(device, mocker):
+@pytest.mark.parametrize("first_only", [False, True])
+def test_eager_frames_match_canonical_one_step_earlier(device, mocker, first_only):
     schedule = [([3, 0], [2, 2]), ([3, 0], [2, 1]), ([3, 0], [1, 1]), ([0, 3], [1, 1]), ([3, 0], [1, 1])]
     canonical, eager = (_state(MossLocalModelState, device) for _ in range(2))
-    eager._local_eager_mtp = True
+    eager._local_eager_mtp = not first_only
     eager._early_first_audio = MossEarlyFirstAudioState(eager, None)
     eager._first_audio_sender = object()
     publish = mocker.patch.object(eager._early_first_audio, "_publish", side_effect=lambda ids, *_: ids)
@@ -57,14 +58,14 @@ def test_eager_frames_match_canonical_one_step_earlier(device, mocker):
             state.intermediate_buffer.buffers[slot]["sampling_params"].max_tokens = 10
     # Stop both streams at the canonical step that would draw the 4th step's frames.
     c_embeds, c_frames = _run(canonical, device, schedule, stop_step=4)
-    e_embeds, e_frames = _run(eager, device, schedule, stop_step=3)
+    e_embeds, e_frames = _run(eager, device, schedule, stop_step=4 if first_only else 3)
 
     for c, e in zip(c_embeds, e_embeds):
         torch.testing.assert_close(c, e, rtol=0, atol=0)
     for slot in (3, 0):
         assert [f for _, f in c_frames[slot]] and len(c_frames[slot]) == len(e_frames[slot])
         for (ci, cf), (ei, ef) in zip(c_frames[slot], e_frames[slot]):
-            assert ei == ci - 1
+            assert ei == ci - (0 if first_only else 1)
             torch.testing.assert_close(cf, ef, rtol=0, atol=0)
     assert [call.args[0] for call in publish.call_args_list] == [["short"], ["long"]]
     for call, slot in zip(publish.call_args_list, (0, 3), strict=True):
