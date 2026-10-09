@@ -3,7 +3,7 @@
 """Masked persistent writes for shared codec offsets and immutable padding.
 
 Each layer/request keeps its own K/V data. CUDA writes only touched ring
-entries; other devices use fixed-shape masked index copies. Padding rows
+entries; other devices use fixed-shape masked scatters. Padding rows
 preserve the null slot's values.
 """
 
@@ -93,7 +93,8 @@ def commit_cache(
         # Invalid rows all address the final pool slot. Every duplicate write
         # copies its unchanged values, without dynamic-shape boolean indexing.
         rows = torch.where(valid[None, :, None, None, None], rows, cache[:, -1:])
-        cache.index_copy_(1, slots, rows)
+        indexes = slots.view(1, -1, 1, 1, 1).expand_as(rows)
+        cache.scatter_(1, indexes, rows)
 
 
 @triton.jit
@@ -134,4 +135,4 @@ def commit_offsets(
     if pool.is_cuda:
         _commit_offsets_cuda(values, pool, slots, valid)
     else:
-        pool.index_copy_(0, slots, torch.where(valid, values, pool[-1]))
+        pool.scatter_(0, slots, torch.where(valid, values, pool[-1]))
