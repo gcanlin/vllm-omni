@@ -245,7 +245,7 @@ class _MossCodecStreamSession:
         batch_sizes = sorted({int(size) for size in (graph_batch_sizes or []) if 0 < int(size) <= self._state_capacity})
         frame_sizes = sorted({int(size) for size in (graph_frame_sizes or []) if int(size) > 0})
         scratch_capacity = max(batch_sizes, default=0) if self._device.type in ("cuda", "npu") else 0
-        if isinstance(codec, MossAudioTokenizerV2Model) and self._device.type != "npu":
+        if isinstance(codec, MossAudioTokenizerV2Model):
             scratch_capacity = 1
         self._total_state_capacity = self._state_capacity + scratch_capacity
         self._state_slot_ids = torch.arange(

@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
-"""Masked persistent writes for shared codec offsets and read-only padding.
+"""Masked persistent writes for shared codec offsets and immutable padding.
 
-Each layer/request keeps its own K/V data. The SDPA path retains its gathered
-ring and deterministic last-C-token scatter; only touched ring entries are
-written back. Invalid rows never write persistent state, including the null slot.
+Each layer/request keeps its own K/V data. CUDA writes only touched ring
+entries; other devices use fixed-shape masked index copies. Padding rows
+preserve the null slot's values.
 """
 
 import torch
@@ -90,7 +90,10 @@ def commit_cache(
     if cache.is_cuda:
         _commit_cache_cuda(rows, cache, slots, valid, offsets, frames)
     else:
-        cache.index_copy_(1, slots[valid], rows[:, valid])
+        # Invalid rows all address the final pool slot. Every duplicate write
+        # copies its unchanged values, without dynamic-shape boolean indexing.
+        rows = torch.where(valid[None, :, None, None, None], rows, cache[:, -1:])
+        cache.index_copy_(1, slots, rows)
 
 
 @triton.jit
@@ -131,4 +134,4 @@ def commit_offsets(
     if pool.is_cuda:
         _commit_offsets_cuda(values, pool, slots, valid)
     else:
-        pool.index_copy_(0, slots[valid], values[valid])
+        pool.index_copy_(0, slots, torch.where(valid, values, pool[-1]))

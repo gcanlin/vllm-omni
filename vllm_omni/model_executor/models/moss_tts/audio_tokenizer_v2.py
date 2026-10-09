@@ -2045,11 +2045,8 @@ class MossAudioTokenizerModel(MossAudioTokenizerPreTrainedModel):
             )
         if self._streaming_modules:
             raise RuntimeError("MOSS Audio Tokenizer is already streaming.")
-        # NPU graphs use the existing independent slots: the reference masked
-        # writes have dynamic shapes, while CUDA supplies graph-safe kernels.
-        if next(self.parameters()).device.type != "npu":
-            scratch_capacity = 1
-            self._decoder_null_slot = state_capacity
+        scratch_capacity = 1
+        self._decoder_null_slot = state_capacity
         for module in self.decoder:
             if not isinstance(module, MossAudioTokenizerProjectedTransformer):
                 continue
