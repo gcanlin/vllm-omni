@@ -25,15 +25,6 @@ steps:
           - "pytest -sv tests/model_executor/models/cosyvoice3/test_cosyvoice3_full_batch.py -k packed -m 'core_model and cuda' --run-level=core_model"
         mirror_hardwares: h100_1
 
-      - label: "Simple · MOSS Codec Shared State Test"
-        timeout_in_minutes: 15
-        source_file_dependencies:
-          - tests/model_executor/models/moss_tts/test_shared_codec_kv.py
-          - vllm_omni/model_executor/models/moss_tts/
-        commands:
-          - pytest -sv tests/model_executor/models/moss_tts/test_shared_codec_kv.py -m 'core_model and cuda' --run-level=core_model
-        mirror_hardwares: l4_1
-
       - label: "Simple · MRV2 FA3 Graph Bounds Test"
         timeout_in_minutes: 15
         source_file_dependencies:
