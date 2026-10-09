@@ -82,10 +82,9 @@ def _signal_exit_code(signum: int) -> int:
 
 def _bind_first_audio_sink(model_executor: Any, output_queue: Any, scheduler: Any) -> bool:
     """Bind in-process first audio to the generic engine output sink."""
-    if not isinstance(model_executor, UniProcExecutor):
-        return False
-    parallel_config = model_executor.vllm_config.parallel_config
-    if parallel_config.tensor_parallel_size != 1 or parallel_config.pipeline_parallel_size != 1:
+    from vllm_omni.worker_v2.first_audio_sender import engine_output_queue_sink, supports_in_process_first_audio
+
+    if not supports_in_process_first_audio(model_executor.vllm_config, type(model_executor)):
         return False
     worker = getattr(getattr(model_executor, "driver_worker", None), "worker", None)
     model_runner = getattr(worker, "model_runner", None)
@@ -94,8 +93,6 @@ def _bind_first_audio_sink(model_executor: Any, output_queue: Any, scheduler: An
     decodes_audio = getattr(model, "first_frame_decoder", None) is not None or (
         getattr(model, "stream_decoder", None) is not None and bool(getattr(model, "stream_first_audio", False))
     )
-    from vllm_omni.worker_v2.first_audio_sender import engine_output_queue_sink
-
     if decodes_audio and hasattr(model_state, "set_first_audio_sink"):
         assert model_state is not None
         model_state.set_first_audio_sink(engine_output_queue_sink(output_queue, scheduler))

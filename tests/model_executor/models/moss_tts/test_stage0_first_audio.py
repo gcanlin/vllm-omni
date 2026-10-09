@@ -10,6 +10,7 @@ from vllm.sampling_params import SamplingParams, StructuredOutputsParams
 from tests.model_executor.models.moss_tts.test_local_model_state import _batch, _state
 from vllm_omni.model_executor.models.moss_tts.first_audio_state import MossEarlyFirstAudioState
 from vllm_omni.model_executor.models.moss_tts.local_model_state import MossLocalModelState, _CodeRowsSnapshot
+from vllm_omni.model_executor.models.moss_tts.modeling_moss_tts_talker import MossTTSLocalTalkerForGeneration
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -169,3 +170,31 @@ def test_mixed_batch_only_publishes_unconstrained_request(mocker):
     assert publish.call_args.args[0] == ["normal"]
     assert publish.call_args.args[1].tolist() == [[3, 4]]
     assert state.take_flags(["stop", "normal"], torch.device("cpu")).tolist() == [False, True]
+
+
+@pytest.mark.parametrize(
+    "backend,tp,pp,loads_decoder",
+    [("uni", 1, 1, True), ("mp", 1, 1, False), ("uni", 2, 1, False), ("uni", 1, 2, False)],
+)
+def test_weight_loading_skips_unusable_first_decoder(mocker, backend, tp, pp, loads_decoder):
+    model = torch.nn.Module()
+    model.config = SimpleNamespace(mrv2_gpu_slot_state=True)
+    model.vllm_config = SimpleNamespace(
+        model_config=SimpleNamespace(use_v2_model_runner=True, async_chunk=True, enforce_eager=True),
+        parallel_config=SimpleNamespace(
+            distributed_executor_backend=backend, tensor_parallel_size=tp, pipeline_parallel_size=pp
+        ),
+    )
+    model.model = SimpleNamespace(load_weights=lambda weights: set())
+    model.audio_embeddings = torch.nn.ModuleList([torch.nn.Embedding(2, 2)])
+    model.local_transformer = SimpleNamespace(ln_f=torch.nn.LayerNorm(2))
+    model.n_vq = 1
+    decoder = torch.nn.Module()
+    decoder.load = mocker.Mock(return_value={"weight"})
+    constructor = mocker.patch(
+        "vllm_omni.model_executor.models.moss_tts.first_frame_decoder.MossFirstFrameDecoder", return_value=decoder
+    )
+    loaded = MossTTSLocalTalkerForGeneration.load_weights(model, [])
+    assert constructor.call_count == int(loads_decoder)
+    assert decoder.load.call_count == int(loads_decoder)
+    assert ("first_frame_decoder.weight" in loaded) == loads_decoder

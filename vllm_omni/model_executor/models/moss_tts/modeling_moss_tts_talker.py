@@ -38,6 +38,7 @@ from vllm_omni.model_executor.models.moss_tts.modeling_moss_tts_local_depth impo
 from vllm_omni.model_executor.models.output_templates import OmniOutput
 from vllm_omni.platforms import current_omni_platform
 from vllm_omni.worker.sampling_utils import get_tts_local_seed
+from vllm_omni.worker_v2.first_audio_sender import supports_in_process_first_audio
 
 logger = init_logger(__name__)
 
@@ -1866,6 +1867,7 @@ class MossTTSLocalTalkerForGeneration(nn.Module):
             model_config.use_v2_model_runner
             and model_config.async_chunk
             and getattr(self.config, "mrv2_gpu_slot_state", False)
+            and supports_in_process_first_audio(self.vllm_config)
         ):
             from .first_frame_decoder import MossFirstFrameDecoder
 

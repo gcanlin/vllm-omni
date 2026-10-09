@@ -18,11 +18,23 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 import torch
+from vllm.config import VllmConfig
 from vllm.logger import init_logger
 
 from vllm_omni.data_entry_keys import FIRST_AUDIO_KEY
 
 logger = init_logger(__name__)
+
+
+def supports_in_process_first_audio(config: VllmConfig, executor_class: type | None = None) -> bool:
+    """Use the same executor requirements before loading and binding a decoder."""
+    from vllm.v1.executor.abstract import Executor
+    from vllm.v1.executor.uniproc_executor import UniProcExecutor
+
+    parallel = config.parallel_config
+    if parallel.tensor_parallel_size != 1 or parallel.pipeline_parallel_size != 1:
+        return False
+    return issubclass(executor_class or Executor.get_class(config), UniProcExecutor)
 
 
 class FirstAudioSink(Protocol):
