@@ -250,6 +250,8 @@ class _MossCodecStreamSession:
         batch_sizes = sorted({int(size) for size in (graph_batch_sizes or []) if 0 < int(size) <= self._state_capacity})
         frame_sizes = sorted({int(size) for size in (graph_frame_sizes or []) if int(size) > 0})
         scratch_capacity = max(batch_sizes, default=0) if self._device.type in ("cuda", "npu") else 0
+        if getattr(codec, "shared_decoder_kv", False) and self._device.type in ("cpu", "cuda"):
+            scratch_capacity = 1
         self._total_state_capacity = self._state_capacity + scratch_capacity
         self._state_slot_ids = torch.arange(
             self._total_state_capacity,
@@ -269,6 +271,12 @@ class _MossCodecStreamSession:
                 initialize_state_pool(self._state_capacity, scratch_capacity, chunk_frames=self._chunk_frames)
             else:
                 initialize_state_pool(self._state_capacity, scratch_capacity)
+        logger.info(
+            "MOSS codec decoder state pool: live=%d padding=%d shared_metadata=%s",
+            self._state_capacity,
+            scratch_capacity,
+            getattr(codec, "_decoder_null_slot", None) is not None,
+        )
         if batch_sizes and frame_sizes and self._device.type in ("cuda", "npu"):
             if self._device.type == "npu":
                 from vllm_omni.platforms.npu.models.moss_tts_streaming_decode_wrapper import (
