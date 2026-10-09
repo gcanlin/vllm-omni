@@ -176,7 +176,7 @@ def load_codec(
         logger.info("Enabled codec attention backend=%s", attention_backend)
     build_decode_lut = getattr(codec.quantizer, "build_decode_lut", None)
     if callable(build_decode_lut):
-        lut_dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
+        lut_dtype = torch.bfloat16 if device.type in ("cuda", "npu") else torch.float32
         build_decode_lut(num_quantizers, dtype=lut_dtype)
         lut = codec.quantizer._decode_lut
         logger.info(
