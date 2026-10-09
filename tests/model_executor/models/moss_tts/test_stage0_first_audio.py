@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import torch
+from vllm.sampling_params import SamplingParams, StructuredOutputsParams
 
 from tests.model_executor.models.moss_tts.test_local_model_state import _batch, _state
 from vllm_omni.model_executor.models.moss_tts.first_audio_state import MossEarlyFirstAudioState
@@ -14,7 +15,10 @@ pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 
 def early_state():
-    owner = SimpleNamespace(model=SimpleNamespace(audio_pad_token_id=16, audio_assistant_slot_token_id=7))
+    owner = SimpleNamespace(
+        model=SimpleNamespace(audio_pad_token_id=16, audio_assistant_slot_token_id=7),
+        vllm_config=SimpleNamespace(model_config=SimpleNamespace(max_model_len=4096, logits_processors=None)),
+    )
     state = MossEarlyFirstAudioState(owner, None)
     owner._first_audio_sender = object()
     return state
@@ -30,7 +34,7 @@ def test_only_completed_prefill_arms_first_audio_including_prefix_hits(batch_pre
     state.intermediate_buffer.buffers[0] = {
         "req_id": "a",
         "codes": {"ref": torch.tensor([[1, 2], [3, 4], [5, 6], [2, 3]])},
-        "sampling_params": SimpleNamespace(max_tokens=10),
+        "sampling_params": SamplingParams(max_tokens=10),
     }
     batch = _batch(torch.device("cpu"), [0], [count])
     req = SimpleNamespace(prompt_len=np.full(5, 4), num_computed_tokens=np.full(5, computed))
@@ -41,7 +45,7 @@ def test_only_completed_prefill_arms_first_audio_including_prefix_hits(batch_pre
 
 def test_owned_first_codes_batch_reorder_and_one_time_promise(mocker):
     state = early_state()
-    state.record_prefill("b", SimpleNamespace(max_tokens=10))
+    state.record_prefill("b", SamplingParams(max_tokens=10), prompt_len=4)
     publish = mocker.patch.object(state, "_publish", return_value=["b"])
     codes = torch.tensor([[1, 2], [3, 4], [5, 6]])
     state.after_mtp(["a", "b", "c"], codes, torch.tensor([7, 7, 7]))
@@ -73,7 +77,7 @@ def test_owned_first_codes_batch_reorder_and_one_time_promise(mocker):
 )
 def test_stop_and_non_audio_tokens_do_not_promise_pcm(codes, token, valid, mocker):
     state = early_state()
-    state.record_prefill("a", SimpleNamespace(max_tokens=10))
+    state.record_prefill("a", SamplingParams(max_tokens=10), prompt_len=4)
     publish = mocker.patch.object(state, "_publish", return_value=["a"])
     state.after_mtp(["a"], torch.tensor([codes]), None if token is None else torch.tensor([token]))
     assert publish.call_args.args[2].tolist() == [valid]
@@ -82,11 +86,11 @@ def test_stop_and_non_audio_tokens_do_not_promise_pcm(codes, token, valid, mocke
 
 def test_rejected_route_and_cancel_keep_regular_path(mocker):
     state = early_state()
-    state.record_prefill("a", SimpleNamespace(max_tokens=10))
+    state.record_prefill("a", SamplingParams(max_tokens=10), prompt_len=4)
     publish = mocker.patch.object(state, "_publish", return_value=[])
     state.after_mtp(["a"], torch.tensor([[1, 2]]), torch.tensor([7]))
     assert state.take_flags(["a"], torch.device("cpu")) is None
-    state.record_prefill("b", SimpleNamespace(max_tokens=10))
+    state.record_prefill("b", SamplingParams(max_tokens=10), prompt_len=4)
     state.remove("b")
     state.after_mtp(["b"], torch.tensor([[1, 2]]), torch.tensor([7]))
     assert publish.call_count == 1
@@ -94,7 +98,74 @@ def test_rejected_route_and_cancel_keep_regular_path(mocker):
 
 def test_cap_one_and_unbound_route_do_not_arm_first_audio():
     state = early_state()
-    state.record_prefill("a", SimpleNamespace(max_tokens=1))
+    state.record_prefill("a", SamplingParams(max_tokens=1), prompt_len=4)
     state.owner._first_audio_sender = None
-    state.record_prefill("b", SimpleNamespace(max_tokens=10))
+    state.record_prefill("b", SamplingParams(max_tokens=10), prompt_len=4)
     assert not state.waiting
+
+
+@pytest.mark.parametrize(
+    "stop_ids,eos,ignore_eos,eligible",
+    [
+        ([], 9, False, True),
+        ([9], 9, False, True),
+        ([7], 9, False, False),
+        ([], 7, False, False),
+        ([], 7, True, True),
+        ([7], 7, True, False),
+    ],
+)
+def test_first_token_stop_matches_effective_sampling_params(stop_ids, eos, ignore_eos, eligible, mocker):
+    state = early_state()
+    params = SamplingParams(max_tokens=10, stop_token_ids=stop_ids, ignore_eos=ignore_eos)
+    params.update_from_generation_config({}, eos_token_id=eos)
+    state.record_prefill("a", params, prompt_len=4)
+    publish = mocker.patch.object(state, "_publish", side_effect=lambda ids, *_: ids)
+    state.after_mtp(["a"], torch.tensor([[1, 2]]))
+    assert publish.called == eligible
+    flags = state.take_flags(["a"], torch.device("cpu"))
+    assert (flags is not None) == eligible
+
+
+@pytest.mark.parametrize("prompt_len,eligible", [(4094, True), (4095, False)])
+def test_context_limit_leaves_first_frame_on_regular_path(prompt_len, eligible):
+    state = early_state()
+    state.record_prefill("a", SamplingParams(max_tokens=10), prompt_len=prompt_len)
+    assert ("a" in state.waiting) == eligible
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"stop": ["stop"]},
+        {"min_tokens": 2},
+        {"allowed_token_ids": [9]},
+        {"bad_words": ["word"]},
+        {"logit_bias": {7: -100}},
+        {"structured_outputs": StructuredOutputsParams(choice=["yes", "no"])},
+        {"thinking_token_budget": 0},
+        {"trace_decode_token_ids": [9]},
+    ],
+)
+def test_constrained_requests_keep_regular_delivery(overrides):
+    state = early_state()
+    state.record_prefill("a", SamplingParams(max_tokens=10, **overrides), prompt_len=4)
+    assert not state.waiting
+
+
+def test_custom_logits_processors_keep_regular_delivery():
+    state = early_state()
+    state.owner.vllm_config.model_config.logits_processors = ["custom.Processor"]
+    state.record_prefill("a", SamplingParams(max_tokens=10), prompt_len=4)
+    assert not state.waiting
+
+
+def test_mixed_batch_only_publishes_unconstrained_request(mocker):
+    state = early_state()
+    for request_id, stops in [("stop", [7]), ("normal", [9])]:
+        state.record_prefill(request_id, SamplingParams(max_tokens=10, stop_token_ids=stops), prompt_len=4)
+    publish = mocker.patch.object(state, "_publish", side_effect=lambda ids, *_: ids)
+    state.after_mtp(["stop", "normal"], torch.tensor([[1, 2], [3, 4]]))
+    assert publish.call_args.args[0] == ["normal"]
+    assert publish.call_args.args[1].tolist() == [[3, 4]]
+    assert state.take_flags(["stop", "normal"], torch.device("cpu")).tolist() == [False, True]

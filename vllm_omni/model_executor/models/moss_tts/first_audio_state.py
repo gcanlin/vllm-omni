@@ -3,6 +3,7 @@
 """First PCM from normal batched Local MTP, before the next backbone step."""
 
 import torch
+from vllm.sampling_params import SamplingParams
 
 
 class MossEarlyFirstAudioState:
@@ -27,10 +28,34 @@ class MossEarlyFirstAudioState:
         self.delivered.pop(request_id, None)
         self.updates.discard(request_id)
 
-    def record_prefill(self, request_id, sampling_params):
-        cap = getattr(sampling_params, "max_tokens", None)
-        if self.owner._first_audio_sender is not None and request_id not in self.seen and cap is not None and cap > 1:
-            self.waiting.add(request_id)
+    def record_prefill(self, request_id, sampling_params: SamplingParams | None, *, prompt_len: int):
+        if self.owner._first_audio_sender is None or request_id in self.seen or sampling_params is None:
+            return
+        config = self.owner.vllm_config.model_config
+        cap = sampling_params.max_tokens
+        if cap is None or cap <= 1 or prompt_len + 1 >= config.max_model_len:
+            return
+        # Final prefill normally produces an audio-slot token before any codes
+        # enter the regular output path. Do not publish ahead of its stop check.
+        first_token = self.owner.model.audio_assistant_slot_token_id
+        if first_token == sampling_params.eos_token_id or first_token in (sampling_params.stop_token_ids or ()):
+            return
+        # Constraints can change that token or stop at the output processor.
+        # Leave those requests entirely on the canonical delivery path.
+        if (
+            sampling_params.stop
+            or sampling_params.min_tokens
+            or sampling_params.allowed_token_ids is not None
+            or sampling_params.bad_words
+            or sampling_params.logit_bias
+            or sampling_params.structured_outputs is not None
+            or sampling_params.repetition_detection is not None
+            or sampling_params.thinking_token_budget is not None
+            or sampling_params.trace_decode_token_ids is not None
+            or config.logits_processors
+        ):
+            return
+        self.waiting.add(request_id)
 
     def _publish(self, ids, codes, valid):
         if self.stream is None:

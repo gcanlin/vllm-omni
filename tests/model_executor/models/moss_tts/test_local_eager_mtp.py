@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import torch
+from vllm.sampling_params import SamplingParams
 
 from tests.model_executor.models.moss_tts.test_local_model_state import _admit, _batch, _state, _step
 from vllm_omni.model_executor.models.moss_tts.first_audio_state import MossEarlyFirstAudioState
@@ -55,7 +56,9 @@ def test_eager_frames_match_canonical_one_step_earlier(device, mocker, first_onl
         _admit(state, 3, "long", 17)
         _admit(state, 0, "short", 17)
         for slot in (3, 0):
-            state.intermediate_buffer.buffers[slot]["sampling_params"].max_tokens = 10
+            state.intermediate_buffer.buffers[slot]["sampling_params"] = SamplingParams(
+                max_tokens=10, extra_args={"tts_local_seed": 17}
+            )
     # Stop both streams at the canonical step that would draw the 4th step's frames.
     c_embeds, c_frames = _run(canonical, device, schedule, stop_step=4)
     e_embeds, e_frames = _run(eager, device, schedule, stop_step=4 if first_only else 3)

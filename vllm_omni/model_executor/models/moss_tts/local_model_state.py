@@ -279,7 +279,7 @@ class MossLocalModelState(OmniModelState):
                 completing_rows.append(row)
                 early = getattr(self, "_early_first_audio", None)
                 if early is not None:
-                    early.record_prefill(str(buf["req_id"]), buf.get("sampling_params"))
+                    early.record_prefill(str(buf["req_id"]), buf.get("sampling_params"), prompt_len=prompt_len)
             if count == 1 and not prefill and isinstance(buf.get("audio_state"), dict):
                 active = not bool(buf["audio_state"].get("is_stopping"))
                 if active != self._active_host[slot]:
