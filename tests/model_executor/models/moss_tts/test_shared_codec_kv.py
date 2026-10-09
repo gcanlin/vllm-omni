@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+from contextlib import nullcontext
+
 import pytest
 import torch
 
@@ -62,8 +64,11 @@ def pair(device="cpu", backend="sdpa", headroom=0):
     baseline = make_codec(device, backend)
     candidate = make_codec(device, backend)
     candidate.load_state_dict(baseline.state_dict())
-    baseline.shared_decoder_kv = False
     baseline.initialize_decoder_state_pool(4, 4, chunk_frames=headroom)
+    baseline.close_decoder_state_pool()
+    # Fixed-width streaming retains independent offsets for the reference.
+    baseline._start_streaming(8, decoder_only=True)
+    baseline._decoder_state_capacity = 8
     candidate.initialize_decoder_state_pool(4, 4, chunk_frames=headroom)
     return baseline, candidate
 
@@ -143,6 +148,38 @@ def test_slot_metadata_does_not_allocate_dense_attention_mask():
     assert metadata.scatter_indexes is None and metadata.positions is None and metadata.attn_bias is None
     assert metadata.valid_lengths.tolist() == [480, 480, 0]
     assert metadata.next_offsets.tolist() == [480, 881, 0]
+
+
+@pytest.mark.cpu
+def test_v2_initialization_failure_does_not_load_legacy_codec(mocker):
+    from vllm_omni.model_executor.models.moss_tts import modeling_moss_tts_codec as module
+
+    mocker.patch.object(
+        module.MossAudioTokenizerV2Config, "get_config_dict", return_value=({"number_channels": 2}, None)
+    )
+    mocker.patch.object(
+        module.MossAudioTokenizerV2Config, "from_pretrained", side_effect=RuntimeError("invalid v2 config")
+    )
+    legacy = mocker.patch.object(module.MossAudioTokenizerConfig, "from_pretrained")
+    with pytest.raises(RuntimeError, match="invalid v2 config"):
+        module._build_codec("unused")
+    legacy.assert_not_called()
+
+
+@pytest.mark.cpu
+def test_compile_capture_failure_propagates(mocker):
+    from vllm_omni.model_executor.models.moss_tts import cuda_graph_streaming_decoder_wrapper as module
+
+    wrapper = module.CUDAGraphStreamingDecoderWrapper.__new__(module.CUDAGraphStreamingDecoderWrapper)
+    wrapper.batch_sizes, wrapper.frame_sizes, wrapper.num_quantizers = [1], [1], 2
+    wrapper._warmed_up = False
+    wrapper._compiled_decode = torch.nn.Identity()
+    mocker.patch.object(module.torch.cuda, "device", return_value=nullcontext())
+    capture = mocker.patch.object(wrapper, "_capture_with_decode", side_effect=RuntimeError("compile/capture failed"))
+    with pytest.raises(RuntimeError, match="compile/capture failed"):
+        wrapper.warmup(torch.device("cuda"))
+    capture.assert_called_once_with(1, 1, torch.device("cuda"), wrapper._compiled_decode)
+    assert not wrapper._warmed_up
 
 
 @pytest.mark.cuda

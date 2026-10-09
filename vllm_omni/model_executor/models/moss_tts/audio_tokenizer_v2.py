@@ -1281,10 +1281,11 @@ class MossAudioTokenizerTransformer(StreamingModule):
             offsets=torch.zeros(batch_size, device=device, dtype=torch.long),
         )
 
-    def forward(self, x: torch.Tensor, *args, **kwargs):
+    def forward(
+        self, x: torch.Tensor, *args, execution_context: StreamingExecutionContext | None = None, **kwargs
+    ) -> torch.Tensor:
         B, T, C = x.shape
         state = self._streaming_state
-        execution_context = kwargs.get("execution_context")
         if self._shared_kv_metadata and execution_context is None:
             raise RuntimeError("Shared decoder KV pools require explicit execution slots.")
         if execution_context is not None and not isinstance(execution_context, StreamingExecutionContext):
@@ -1317,7 +1318,6 @@ class MossAudioTokenizerTransformer(StreamingModule):
             execution_context = StreamingExecutionContext(
                 execution_context.state_slot_ids, execution_context.valid_rows, metadata
             )
-            kwargs["execution_context"] = execution_context
 
         if self.positional_embedding in {"sin", "sin_rope"}:
             positions = torch.arange(T, device=x.device).view(1, -1, 1)
@@ -1326,7 +1326,7 @@ class MossAudioTokenizerTransformer(StreamingModule):
             x = x + self.positional_scale * pos_emb
 
         for layer in self.layers:
-            x = layer(x, *args, **kwargs)
+            x = layer(x, *args, execution_context=execution_context, **kwargs)
 
         if state is not None:
             assert isinstance(state, TransformerState)
@@ -1925,7 +1925,6 @@ class MossAudioTokenizerModel(MossAudioTokenizerPreTrainedModel):
         self._streaming_exec_mask: torch.Tensor | None = None
         self._decoder_state_capacity = 0
         self._decoder_slot_offsets: torch.Tensor | None = None
-        self.shared_decoder_kv = True
         self._decoder_null_slot: int | None = None
         self.post_init()
 
@@ -1968,17 +1967,13 @@ class MossAudioTokenizerModel(MossAudioTokenizerPreTrainedModel):
                 state = cast(TransformerState, group._streaming_state)
                 state.offsets = storage[row]
                 group._shared_kv_metadata = True
+                first_state = cast(MHAState, group.layers[0].self_attn._streaming_state)
+                group._kv_capacity = cast(RingKVCache, first_state.kv_cache).capacity
                 for layer in group.layers:
                     attention = layer.self_attn
                     attention_state = cast(MHAState, attention._streaming_state)
-                    if attention.weights_per_step or attention_state.kv_cache is None:
-                        raise RuntimeError("Shared codec metadata requires ordinary ring attention.")
-                    if layer is group.layers[0]:
-                        group._kv_capacity = attention_state.kv_cache.capacity
-                    if attention_state.kv_cache.capacity != group._kv_capacity:
-                        raise RuntimeError("Codec KV metadata requires equal ring capacities within each resolution.")
                     attention_state.offset = state.offsets
-                    attention_state.kv_cache.end_offset = state.offsets
+                    cast(RingKVCache, attention_state.kv_cache).end_offset = state.offsets
             self._decoder_slot_offsets = storage
             return
         state_tensors: list[tuple[StreamingState, list[tuple[object, str]]]] = []
@@ -2050,9 +2045,9 @@ class MossAudioTokenizerModel(MossAudioTokenizerPreTrainedModel):
             )
         if self._streaming_modules:
             raise RuntimeError("MOSS Audio Tokenizer is already streaming.")
-        # CPU supports the reference masked writes; CUDA has graph-safe custom
-        # ops. Other accelerators retain their existing independent state path.
-        if self.shared_decoder_kv and next(self.parameters()).device.type in ("cpu", "cuda"):
+        # NPU graphs use the existing independent slots: the reference masked
+        # writes have dynamic shapes, while CUDA supplies graph-safe kernels.
+        if next(self.parameters()).device.type != "npu":
             scratch_capacity = 1
             self._decoder_null_slot = state_capacity
         for module in self.decoder:

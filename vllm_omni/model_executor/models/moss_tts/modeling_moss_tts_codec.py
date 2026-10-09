@@ -193,15 +193,10 @@ def _build_codec(codec_path: str) -> tuple[PretrainedConfig, nn.Module]:
     is_v2 = config_dict.get("number_channels", 1) >= 2
 
     if is_v2:
-        try:
-            codec_cfg = MossAudioTokenizerV2Config.from_pretrained(codec_path)
-            codec = MossAudioTokenizerV2Model(codec_cfg)
-            logger.info("Using vendored MOSS Audio Tokenizer v2 classes from %s", codec_path)
-            return codec_cfg, codec
-        except Exception:
-            logger.exception(
-                "Failed to instantiate vendored MOSS Audio Tokenizer v2; falling back to legacy vendored codec."
-            )
+        codec_cfg = MossAudioTokenizerV2Config.from_pretrained(codec_path)
+        codec = MossAudioTokenizerV2Model(codec_cfg)
+        logger.info("Using vendored MOSS Audio Tokenizer v2 classes from %s", codec_path)
+        return codec_cfg, codec
 
     codec_cfg = MossAudioTokenizerConfig.from_pretrained(codec_path)
     codec = MossAudioTokenizerModel(codec_cfg)
@@ -250,7 +245,7 @@ class _MossCodecStreamSession:
         batch_sizes = sorted({int(size) for size in (graph_batch_sizes or []) if 0 < int(size) <= self._state_capacity})
         frame_sizes = sorted({int(size) for size in (graph_frame_sizes or []) if int(size) > 0})
         scratch_capacity = max(batch_sizes, default=0) if self._device.type in ("cuda", "npu") else 0
-        if getattr(codec, "shared_decoder_kv", False) and self._device.type in ("cpu", "cuda"):
+        if isinstance(codec, MossAudioTokenizerV2Model) and self._device.type != "npu":
             scratch_capacity = 1
         self._total_state_capacity = self._state_capacity + scratch_capacity
         self._state_slot_ids = torch.arange(
@@ -302,8 +297,6 @@ class _MossCodecStreamSession:
                 )
             self._cudagraph_wrapper.warmup(self._device)
             self.reset_slots(list(range(self._state_capacity + scratch_capacity)))
-            if not self._cudagraph_wrapper.is_ready:
-                self._cudagraph_wrapper = None
 
     def acquire(self) -> int | None:
         if not self._free_stream_slots:
