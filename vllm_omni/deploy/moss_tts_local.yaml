@@ -23,6 +23,8 @@ connectors:
       codec_left_context_frames: 0
       generation_min_batch_size: 16
       generation_max_wait_ms: 6
+      # Decode first chunks separately from longer continuation chunks.
+      generation_first_chunk_express: true
 stages:
   - stage_id: 0
     max_num_seqs: 64
