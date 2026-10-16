@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
-"""MOSImage text-to-image pipeline for vLLM-Omni.
+"""MOSS-Image text-to-image pipeline for vLLM-Omni.
 
-Native vLLM-Omni integration of the MOSImage T2I model (Stage3 dense DiT),
+Native vLLM-Omni integration of the MOSS-Image T2I model (Stage3 dense DiT),
 ported from the training repository's finalized standalone pipeline
 ``motor/standalone/pipeline_mosimage.py``:
 
@@ -11,7 +11,7 @@ ported from the training repository's finalized standalone pipeline
     ``AutoWeightsLoader`` from the diffusers checkpoint's ``transformer/``
     subfolder (state-dict names match exactly).
   * Components: Qwen3.5 text encoder (bf16), FLUX.2-klein VAE (fp32),
-    ``MOSImageScheduler`` (V2 nearest-grid Euler, shift 3.0 /
+    ``MOSImageScheduler`` (V2 nearest-grid Euler, shift 5.0 /
     training_shift 1.0).
   * The precision contract of the reference pipeline is preserved:
     fp32 initial noise, fp32 classifier-free guidance, fp32 Euler updates,
@@ -80,14 +80,14 @@ _MAX_SEQUENCE_LENGTH = 4096
 class MOSImageScheduler(FlowMatchEulerDiscreteScheduler):
     """Euler integration using the training project's V2, nearest-grid schedule.
 
-    Ported unchanged from ``pipeline_mosimage.MOSImageScheduler``. The plain
+    Ported from ``pipeline_moss_image.MOSSImageScheduler``. The plain
     diffusers loader cannot resolve the checkpoint's custom
-    ``["pipeline_mosimage", "MOSImageScheduler"]`` reference, so the pipeline
+    ``["pipeline_moss_image", "MOSSImageScheduler"]`` reference, so the pipeline
     constructs this class directly from the checkpoint's scheduler config.
     """
 
     @register_to_config
-    def __init__(self, num_train_timesteps: int = 1000, shift: float = 3.0, training_shift: float = 1.0):
+    def __init__(self, num_train_timesteps: int = 1000, shift: float = 5.0, training_shift: float = 1.0):
         super().__init__(num_train_timesteps=num_train_timesteps, shift=1.0)
         self.register_to_config(shift=shift, training_shift=training_shift)
 
@@ -150,8 +150,8 @@ def get_mosimage_post_process_func(od_config: OmniDiffusionConfig):
     return post_process_func
 
 
-class MOSImagePipeline(nn.Module, SkipLayerGuidanceMixin, DiffusionPipelineProfilerMixin, SupportsComponentDiscovery):
-    """Native MOSImage pipeline with request batching and step execution."""
+class MOSSImagePipeline(nn.Module, SkipLayerGuidanceMixin, DiffusionPipelineProfilerMixin, SupportsComponentDiscovery):
+    """Native MOSS-Image pipeline with request batching and step execution."""
 
     # Per-forward a DiffusionRequestBatch; homogeneous requests (same sampler
     # key: resolution/CFG/steps/shift/num_outputs) are fused into one batch.
@@ -209,7 +209,7 @@ class MOSImagePipeline(nn.Module, SkipLayerGuidanceMixin, DiffusionPipelineProfi
             scheduler_config = json.load(f)
         self.scheduler = MOSImageScheduler(
             num_train_timesteps=scheduler_config.get("num_train_timesteps", 1000),
-            shift=scheduler_config.get("shift", 3.0),
+            shift=scheduler_config.get("shift", 5.0),
             training_shift=scheduler_config.get("training_shift", 1.0),
         )
 
@@ -667,3 +667,7 @@ class MOSImagePipeline(nn.Module, SkipLayerGuidanceMixin, DiffusionPipelineProfi
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         loader = AutoWeightsLoader(self)
         return loader.load_weights(weights)
+
+
+# Compatibility for callers using the pre-release pipeline name.
+MOSImagePipeline = MOSSImagePipeline

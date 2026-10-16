@@ -1,12 +1,13 @@
-# MOSImage text-to-image
+# MOSS-Image-Base text-to-image
 
 ## Summary
 
-- Model: [`OpenMOSS-Team/MOSImage`](https://huggingface.co/OpenMOSS-Team/MOSImage)
+- Model: [`OpenMOSS-Team/MOSS-Image-Base`](https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base)
+- Pipeline: `MOSSImagePipeline`, matching the checkpoint's `model_index.json`.
 - Task: Text-to-image through the offline engine and `/v1/images/generations`.
 - Hardware: NVIDIA H200.
 
-MOSImage combines a Qwen3.5-9B text encoder, a 42-block dense joint image/text DiT (hidden size 3072, 24 heads, FFN size 8192, two text-refinement blocks) and a FLUX.2 VAE. Its 128-channel packed latents have spatial stride 16. DiT/encoder weights use BF16; noise, CFG, Euler updates and VAE decoding use FP32.
+MOSS-Image-Base combines a Qwen3.5-9B text encoder, a 42-block dense joint image/text DiT (hidden size 3072, 24 heads, FFN size 8192, two text-refinement blocks) and a FLUX.2 VAE. Its 128-channel packed latents have spatial stride 16. DiT/encoder weights use BF16; noise, CFG, Euler updates and VAE decoding use FP32.
 
 ## Features
 
@@ -33,7 +34,7 @@ Linux, Python 3.12, PyTorch 2.13.0+cu130, vLLM 0.31.0, Transformers 5.14.1 and D
 ## Deploy
 
 ```bash
-vllm serve OpenMOSS-Team/MOSImage --omni --enforce-eager --port 8091
+vllm serve OpenMOSS-Team/MOSS-Image-Base --omni --enforce-eager --port 8091
 ```
 
 For DLO, add:
@@ -47,7 +48,7 @@ For DLO, add:
 ```bash
 curl -sS http://localhost:8091/v1/images/generations \
   -H 'Content-Type: application/json' \
-  -d '{"model":"OpenMOSS-Team/MOSImage","prompt":"1girl, hands up","size":"1024x1024","num_inference_steps":50,"guidance_scale":3.0,"flow_shift":5.0,"seed":0,"extra_params":{"uncond_skip_layers":[22],"slg_start":0.01,"slg_stop":1.0}}'
+  -d '{"model":"OpenMOSS-Team/MOSS-Image-Base","prompt":"1girl, hands up","size":"1024x1024","num_inference_steps":50,"guidance_scale":3.0,"flow_shift":5.0,"seed":0,"extra_params":{"uncond_skip_layers":[22],"slg_start":0.01,"slg_stop":1.0}}'
 ```
 
 For baseline generation, omit `extra_params`. For three-pass SLG, use `guidance_scale=5.0` and `extra_params={"slg_layers":[22],"slg_scale":3.0,"slg_start":0.01,"slg_stop":1.0}`.
@@ -68,9 +69,9 @@ Peak PyTorch allocation: 30.31 GiB resident, 8.96 GiB DLO. Peak allocator reserv
 
 ```bash
 python examples/offline_inference/text_to_image/text_to_image.py \
-  --model OpenMOSS-Team/MOSImage --prompt "1girl, hands up" \
+  --model OpenMOSS-Team/MOSS-Image-Base --prompt "1girl, hands up" \
   --height 1024 --width 1024 --num-inference-steps 50 --guidance-scale 3.0 \
   --seed 0 --timesteps-shift 5.0 --enforce-eager \
   --extra-body '{"uncond_skip_layers":[22],"slg_start":0.01,"slg_stop":1.0}' \
-  --output mosimage.png
+  --output moss-image-base.png
 ```

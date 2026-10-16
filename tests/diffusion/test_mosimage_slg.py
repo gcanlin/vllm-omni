@@ -205,6 +205,15 @@ def test_incompatible_slg_configs_are_rejected_even_without_preprocessing(stepwi
             model(DiffusionRequestBatch([request(p, str(i)) for i, p in enumerate(params)]))
 
 
+def test_default_schedule_matches_release_shift():
+    default = MOSImageScheduler()
+    reference = MOSImageScheduler(shift=5.0)
+    default.set_timesteps(50)
+    reference.set_timesteps(50)
+    torch.testing.assert_close(default.sigmas, reference.sigmas, rtol=0, atol=0)
+    torch.testing.assert_close(default.timesteps, reference.timesteps, rtol=0, atol=0)
+
+
 @pytest.mark.parametrize("shift", [1.0, 3.0, 5.0])
 def test_step_interval_uses_actual_schedule_length_independent_of_shift(shift):
     scheduler = MOSImageScheduler(shift=3)
