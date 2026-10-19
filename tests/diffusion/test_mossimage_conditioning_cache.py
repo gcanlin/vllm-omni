@@ -6,7 +6,7 @@ import pytest
 import torch
 from torch import nn
 
-from vllm_omni.diffusion.models.mosimage import mosimage_transformer as model
+from vllm_omni.diffusion.models.mossimage import mossimage_transformer as model
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
 
@@ -22,7 +22,7 @@ class Text(nn.Module):
 
 
 def shell():
-    transformer = model.MOSImageTransformer.__new__(model.MOSImageTransformer)
+    transformer = model.MOSSImageTransformer.__new__(model.MOSSImageTransformer)
     nn.Module.__init__(transformer)
     transformer.latent_channels = 128
     transformer.video_embedder = nn.Linear(128, 128)
@@ -44,7 +44,7 @@ def test_cache_reuses_conditioning_and_isolates_branches(monkeypatch):
     with torch.no_grad():
 
         def run(context, cache=None):
-            return model.MOSImageTransformer.forward(
+            return model.MOSSImageTransformer.forward(
                 transformer, latent, 1.0, context, return_dict=False, _conditioning_cache=cache
             )[0]
 
@@ -71,5 +71,5 @@ def test_sp_and_autograd_do_not_populate_cache(monkeypatch):
         monkeypatch.setattr(model, "get_sequence_parallel_world_size", lambda: sp)
         cache: dict = {}
         with torch.set_grad_enabled(grad):
-            model.MOSImageTransformer.forward(transformer, latent, 1.0, text, _conditioning_cache=cache)
+            model.MOSSImageTransformer.forward(transformer, latent, 1.0, text, _conditioning_cache=cache)
         assert not cache

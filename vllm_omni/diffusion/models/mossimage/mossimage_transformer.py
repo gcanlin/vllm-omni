@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
-"""MOSImage DiT transformer for vLLM-Omni (TP / USP / batched).
+"""MOSSImage DiT transformer for vLLM-Omni (TP / USP / batched).
 
 Ported from the training repository's finalized standalone modeling file
-``motor/standalone/pipeline_mosimage.py`` with vLLM-Omni parallel support:
+``pipeline_moss_image.py`` with vLLM-Omni parallel support:
 
   * **Tensor parallelism**: DiT/QKV and FFN projections use vLLM
     ``QKVParallelLinear`` / ``MergedColumnParallelLinear`` / ``RowParallelLinear``;
@@ -49,7 +49,7 @@ from vllm_omni.diffusion.distributed.sp_plan import (
     SequenceParallelOutput,
 )
 from vllm_omni.diffusion.distributed.sp_sharding import get_sequence_parallel_world_size
-from vllm_omni.diffusion.models.mosimage.ops import (
+from vllm_omni.diffusion.models.mossimage.ops import (
     gated_residual,
     try_qk_norm_rope,
     try_rms_norm,
@@ -58,7 +58,7 @@ from vllm_omni.diffusion.models.mosimage.ops import (
 )
 
 # (fused_param_stem, checkpoint_stem, shard_id) mappings for stacked loads.
-_MOSIMAGE_STACKED_PARAMS_MAPPING = (
+_MOSSIMAGE_STACKED_PARAMS_MAPPING = (
     # Text refinement blocks: checkpoint stores fused qkv as one tensor and
     # separate ffn_gate / ffn_up; the model merges ffn into [up | gate].
     (".ffn_up_gate.", ".ffn_up.", 0),
@@ -70,7 +70,7 @@ _MOSIMAGE_STACKED_PARAMS_MAPPING = (
 )
 
 
-class MOSImageRMSNorm(nn.Module):
+class MOSSImageRMSNorm(nn.Module):
     """RMSNorm computed in fp32, matching the training reference."""
 
     def __init__(self, dim: int):
@@ -98,7 +98,7 @@ def _situ(hidden: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
 
 
 def _rotate(x: torch.Tensor, rope: torch.Tensor) -> torch.Tensor:
-    """Apply the MOSImage 4D rotary embedding. ``x``: [B, S, H, D]; ``rope``: [1, S, D]."""
+    """Apply the MOSSImage 4D rotary embedding. ``x``: [B, S, H, D]; ``rope``: [1, S, D]."""
     sin, cos = rope.chunk(2, -1)
     sin = torch.cat((sin, sin), -1).unsqueeze(-2)
     cos = torch.cat((cos, cos), -1).unsqueeze(-2)
@@ -106,7 +106,7 @@ def _rotate(x: torch.Tensor, rope: torch.Tensor) -> torch.Tensor:
     return x * cos + torch.cat((-b, a), -1) * sin
 
 
-class MOSImageAttention(nn.Module):
+class MOSSImageAttention(nn.Module):
     """Per-head QK RMSNorm + 4D-RoPE + vLLM-Omni attention (parameter-free glue).
 
     ``q_norm``/``k_norm`` stay as direct attributes of the owning block so
@@ -137,8 +137,8 @@ class MOSImageAttention(nn.Module):
         k: torch.Tensor,
         v: torch.Tensor,
         rope: torch.Tensor,
-        q_norm: MOSImageRMSNorm,
-        k_norm: MOSImageRMSNorm,
+        q_norm: MOSSImageRMSNorm,
+        k_norm: MOSSImageRMSNorm,
         key_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         q = q.unflatten(-1, (self.num_heads, -1))
@@ -157,16 +157,16 @@ class MOSImageAttention(nn.Module):
         return out.flatten(2)
 
 
-class MOSImageTextBlock(nn.Module):
+class MOSSImageTextBlock(nn.Module):
     """Text-refinement block (biased qkv/proj, gated SiTU FFN). TP-sharded."""
 
     def __init__(self, dim: int, ffn_dim: int, heads: int, prefix: str = ""):
         super().__init__()
         head_dim = dim // heads
-        self.norm1 = MOSImageRMSNorm(dim)
-        self.norm2 = MOSImageRMSNorm(dim)
-        self.q_norm = MOSImageRMSNorm(head_dim)
-        self.k_norm = MOSImageRMSNorm(head_dim)
+        self.norm1 = MOSSImageRMSNorm(dim)
+        self.norm2 = MOSSImageRMSNorm(dim)
+        self.q_norm = MOSSImageRMSNorm(head_dim)
+        self.k_norm = MOSSImageRMSNorm(head_dim)
         # Checkpoint names: qkv/proj/ffn_up/ffn_down live directly on the block.
         self.qkv = QKVParallelLinear(
             hidden_size=dim,
@@ -179,7 +179,7 @@ class MOSImageTextBlock(nn.Module):
         # The text-refinement blocks run on the full (replicated) text
         # sequence: it lives outside the _sp_plan sharding boundary, so this
         # attention site must opt out of sequence-parallel redistribution.
-        self.attention = MOSImageAttention(
+        self.attention = MOSSImageAttention(
             self.heads,
             head_dim,
             prefix=f"{prefix}.attn" if prefix else "",
@@ -215,14 +215,14 @@ class MOSImageTextBlock(nn.Module):
         return x + self.ffn_down(_situ(hidden, gate))
 
 
-class MOSImageTextProjection(nn.Module):
+class MOSSImageTextProjection(nn.Module):
     """Qwen3.5 hidden-state projection with two refinement blocks."""
 
     def __init__(self, text_dim: int, dim: int, ffn_dim: int, heads: int, prefix: str = ""):
         super().__init__()
         self.proj = nn.Linear(text_dim, dim)
         self.blocks = nn.ModuleList(
-            [MOSImageTextBlock(dim, ffn_dim, heads, prefix=f"{prefix}.blocks.{i}") for i in range(2)]
+            [MOSSImageTextBlock(dim, ffn_dim, heads, prefix=f"{prefix}.blocks.{i}") for i in range(2)]
         )
 
     def forward(self, x: torch.Tensor, rope: torch.Tensor, key_mask: torch.Tensor | None = None) -> torch.Tensor:
@@ -232,16 +232,16 @@ class MOSImageTextProjection(nn.Module):
         return x
 
 
-class MOSImageBlock(nn.Module):
+class MOSSImageBlock(nn.Module):
     """Main DiT block: shared AdaLN modulation, self-attention + gated SiTU FFN. TP-sharded."""
 
     def __init__(self, dim: int, ffn_dim: int, heads: int, prefix: str = ""):
         super().__init__()
         head_dim = dim // heads
-        self.norm1 = MOSImageRMSNorm(dim)
-        self.norm2 = MOSImageRMSNorm(dim)
-        self.q_norm = MOSImageRMSNorm(head_dim)
-        self.k_norm = MOSImageRMSNorm(head_dim)
+        self.norm1 = MOSSImageRMSNorm(dim)
+        self.norm2 = MOSSImageRMSNorm(dim)
+        self.q_norm = MOSSImageRMSNorm(head_dim)
+        self.k_norm = MOSSImageRMSNorm(head_dim)
         # Checkpoint names: proj.{q,k,v,o,ffn_up_gate,ffn_down} (the qkv entry
         # is fused from three checkpoint tensors at load time).
         self.proj = nn.ModuleDict(
@@ -278,7 +278,7 @@ class MOSImageBlock(nn.Module):
             }
         )
         self.heads = self.proj["qkv"].num_heads
-        self.attention = MOSImageAttention(self.heads, head_dim, prefix=f"{prefix}.attn" if prefix else "")
+        self.attention = MOSSImageAttention(self.heads, head_dim, prefix=f"{prefix}.attn" if prefix else "")
 
     def forward(
         self,
@@ -301,7 +301,7 @@ class MOSImageBlock(nn.Module):
         return gated_residual(x, self.proj["ffn_down"](_situ(hidden, gate)), gate_f)
 
 
-class MOSImageRoPE(nn.Module):
+class MOSSImageRoPE(nn.Module):
     """4D (r, f, h, w) rotary embedding with canonical fp32 frequencies.
 
     Frequencies are derived constants; they are rebuilt in fp32 after any
@@ -349,7 +349,7 @@ class MOSImageRoPE(nn.Module):
         return torch.cat((phase.sin(), phase.cos()), -2).flatten(-2).unsqueeze(0)
 
 
-class MOSImageDenoiseBody(nn.Module):
+class MOSSImageDenoiseBody(nn.Module):
     """Sequence-sharded DiT body (all blocks). ``layers`` is a shared reference
     to the transformer's root ModuleList, so parameter names stay rooted at
     ``layers.{i}`` for checkpoint compatibility.
@@ -380,7 +380,7 @@ class MOSImageDenoiseBody(nn.Module):
         return x
 
 
-class MOSImageFinalOut(nn.Module):
+class MOSSImageFinalOut(nn.Module):
     """Per-token output head (norm + AdaLN scale/shift + projection).
 
     Holds shared references to the root transformer's ``final_norm_video`` /
@@ -388,7 +388,7 @@ class MOSImageFinalOut(nn.Module):
     SP-sharded sequence, and the ``_sp_plan`` gathers its output.
     """
 
-    def __init__(self, norm: MOSImageRMSNorm, proj: nn.Linear):
+    def __init__(self, norm: MOSSImageRMSNorm, proj: nn.Linear):
         super().__init__()
         self.final_norm_video = norm
         self.final_linear_video = proj
@@ -401,8 +401,8 @@ class MOSImageFinalOut(nn.Module):
         return self.final_linear_video(x.to(self.final_linear_video.weight.dtype))
 
 
-class MOSImageTransformer(nn.Module):
-    """MOSImage DiT: batched forward with TP and Ulysses sequence parallelism.
+class MOSSImageTransformer(nn.Module):
+    """MOSSImage DiT: batched forward with TP and Ulysses sequence parallelism.
 
     Input contract is unchanged from the reference implementation:
     ``hidden_states`` [B, latent_channels, H, W], ``encoder_hidden_states``
@@ -412,7 +412,7 @@ class MOSImageTransformer(nn.Module):
     """
 
     supports_skip_layer_guidance = True
-    _repeated_blocks = ["MOSImageBlock"]
+    _repeated_blocks = ["MOSSImageBlock"]
     _layerwise_offload_blocks_attrs = ["layers"]
     # Ulysses: shard the joint [video | text] sequence and the RoPE table at
     # the denoise body, then gather the per-token output projection. The
@@ -448,24 +448,24 @@ class MOSImageTransformer(nn.Module):
         self.freq_dim = freq_dim
         self.latent_channels = latent_channels
         self.quant_config = getattr(od_config, "quantization_config", None) if od_config else None
-        self.stacked_params_mapping = list(_MOSIMAGE_STACKED_PARAMS_MAPPING)
+        self.stacked_params_mapping = list(_MOSSIMAGE_STACKED_PARAMS_MAPPING)
 
         # Replicated (non-TP) small layers: embedders, time/modulation, head.
         self.video_embedder = nn.Linear(latent_channels, dim)
-        self.text_embedder = MOSImageTextProjection(text_dim, dim, ffn_dim, num_heads, prefix="text_embedder")
-        self.rope = MOSImageRoPE(dim // num_heads, rope_base)
+        self.text_embedder = MOSSImageTextProjection(text_dim, dim, ffn_dim, num_heads, prefix="text_embedder")
+        self.rope = MOSSImageRoPE(dim // num_heads, rope_base)
         self.time_embedding = nn.Sequential(nn.Linear(freq_dim, dim), nn.SiLU(), nn.Linear(dim, dim))
         self.shared_block_modulation = nn.Linear(dim, 6 * dim)
         self.layers = nn.ModuleList(
-            [MOSImageBlock(dim, ffn_dim, num_heads, prefix=f"layers.{i}") for i in range(num_layers)]
+            [MOSSImageBlock(dim, ffn_dim, num_heads, prefix=f"layers.{i}") for i in range(num_layers)]
         )
-        self.final_norm_video = MOSImageRMSNorm(dim)
+        self.final_norm_video = MOSSImageRMSNorm(dim)
         self.final_linear_video = nn.Linear(dim, latent_channels, bias=False)
         self.video_head_modulation = nn.Linear(dim, 2 * dim)
 
         # Plan hook boundaries (shared references; parameter names unchanged).
-        self.denoise_body = MOSImageDenoiseBody(self.layers)
-        self.final_out = MOSImageFinalOut(self.final_norm_video, self.final_linear_video)
+        self.denoise_body = MOSSImageDenoiseBody(self.layers)
+        self.final_out = MOSSImageFinalOut(self.final_norm_video, self.final_linear_video)
 
     def _time_modulation(self, timestep, batch: int, device: torch.device):
         times = torch.as_tensor(timestep, device=device, dtype=torch.float32).reshape(-1)
@@ -567,7 +567,7 @@ class MOSImageTransformer(nn.Module):
             isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(self.layers)
             for index in skip_layers
         ):
-            raise ValueError(f"MOSImage SLG layer IDs must be integers in [0, {len(self.layers) - 1}].")
+            raise ValueError(f"MOSSImage SLG layer IDs must be integers in [0, {len(self.layers) - 1}].")
 
     # ------------------------------------------------------------------
     # Weight loading: checkpoint names are unchanged (dense naming); fused
@@ -591,7 +591,7 @@ class MOSImageTransformer(nn.Module):
                 name = name.replace(ckpt_stem, fused_stem)
                 param = params.get(name)
                 if param is None:
-                    raise KeyError(f"MOSImage: mapped param {name!r} (from {orig_name!r}) not found")
+                    raise KeyError(f"MOSSImage: mapped param {name!r} (from {orig_name!r}) not found")
                 param.weight_loader(param, loaded_weight, shard_id)
                 loaded_params.add(name)
                 mapped = True
@@ -603,7 +603,7 @@ class MOSImageTransformer(nn.Module):
             if name.endswith("proj.ffn_up_gate.weight"):
                 param = params.get(name)
                 if param is None:
-                    raise KeyError(f"MOSImage: param {name!r} not found")
+                    raise KeyError(f"MOSSImage: param {name!r} not found")
                 up, gate = loaded_weight.chunk(2, dim=0)
                 param.weight_loader(param, up.contiguous(), 0)
                 param.weight_loader(param, gate.contiguous(), 1)
@@ -614,7 +614,7 @@ class MOSImageTransformer(nn.Module):
             if name.startswith("text_embedder.") and (name.endswith("qkv.weight") or name.endswith("qkv.bias")):
                 param = params.get(name)
                 if param is None:
-                    raise KeyError(f"MOSImage: param {name!r} not found")
+                    raise KeyError(f"MOSSImage: param {name!r} not found")
                 q, k, v = loaded_weight.chunk(3, dim=0)
                 param.weight_loader(param, q.contiguous(), "q")
                 param.weight_loader(param, k.contiguous(), "k")
@@ -626,7 +626,7 @@ class MOSImageTransformer(nn.Module):
             #    registered weight_loader handles TP narrowing.
             param = params.get(name)
             if param is None:
-                raise KeyError(f"MOSImage: unexpected checkpoint weight {orig_name!r}")
+                raise KeyError(f"MOSSImage: unexpected checkpoint weight {orig_name!r}")
             weight_loader = getattr(param, "weight_loader", default_weight_loader)
             weight_loader(param, loaded_weight)
             loaded_params.add(name)

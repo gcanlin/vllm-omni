@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
-"""Inference kernels preserving MOSImage's eager BF16 rounding boundaries."""
+"""Inference kernels preserving MOSSImage's eager BF16 rounding boundaries."""
 
 import torch
 from vllm.triton_utils import HAS_TRITON, tl, triton

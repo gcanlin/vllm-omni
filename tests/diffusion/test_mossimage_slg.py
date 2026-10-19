@@ -8,11 +8,11 @@ import torch
 from torch import nn
 
 from vllm_omni.diffusion.guidance import SkipLayerGuidanceConfig, prepare_skip_layer_guidance
-from vllm_omni.diffusion.models.mosimage.mosimage_transformer import MOSImageDenoiseBody, MOSImageTransformer
-from vllm_omni.diffusion.models.mosimage.pipeline_mosimage import (
-    MOSImagePipeline,
-    MOSImageScheduler,
-    get_mosimage_pre_process_func,
+from vllm_omni.diffusion.models.mossimage.mossimage_transformer import MOSSImageDenoiseBody, MOSSImageTransformer
+from vllm_omni.diffusion.models.mossimage.pipeline_mossimage import (
+    MOSSImagePipeline,
+    MOSSImageScheduler,
+    get_mossimage_pre_process_func,
 )
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.sched.request_scheduler import build_request_batch_sampling_params_key
@@ -34,7 +34,7 @@ class Transformer(nn.Module):
 
     def validate_skip_layers(self, skip_layers):
         if any(index >= 42 for index in skip_layers):
-            raise ValueError("MOSImage SLG layer IDs must be in [0, 41].")
+            raise ValueError("MOSSImage SLG layer IDs must be in [0, 41].")
 
     def forward(
         self,
@@ -55,11 +55,11 @@ class Transformer(nn.Module):
 
 
 def pipeline():
-    result = MOSImagePipeline.__new__(MOSImagePipeline)
+    result = MOSSImagePipeline.__new__(MOSSImagePipeline)
     nn.Module.__init__(result)
     result.device = torch.device("cpu")
     result.transformer = Transformer()
-    result.scheduler = MOSImageScheduler(shift=5)
+    result.scheduler = MOSSImageScheduler(shift=5)
     result._interrupt = False
 
     def encode(prompts, max_sequence_length):
@@ -167,7 +167,7 @@ def test_mixed_step_activity_matches_isolated_requests_and_selected_order(cfg, m
 
 
 def test_preprocessor_normalizes_slg_and_separates_incompatible_requests():
-    preprocess = get_mosimage_pre_process_func(None)
+    preprocess = get_mossimage_pre_process_func(None)
     params = sampling()
     first = preprocess(request(copy.deepcopy(params), "first"))
     same = copy.deepcopy(params)
@@ -206,8 +206,8 @@ def test_incompatible_slg_configs_are_rejected_even_without_preprocessing(stepwi
 
 
 def test_default_schedule_matches_release_shift():
-    default = MOSImageScheduler()
-    reference = MOSImageScheduler(shift=5.0)
+    default = MOSSImageScheduler()
+    reference = MOSSImageScheduler(shift=5.0)
     default.set_timesteps(50)
     reference.set_timesteps(50)
     torch.testing.assert_close(default.sigmas, reference.sigmas, rtol=0, atol=0)
@@ -216,7 +216,7 @@ def test_default_schedule_matches_release_shift():
 
 @pytest.mark.parametrize("shift", [1.0, 3.0, 5.0])
 def test_step_interval_uses_actual_schedule_length_independent_of_shift(shift):
-    scheduler = MOSImageScheduler(shift=3)
+    scheduler = MOSSImageScheduler(shift=3)
     scheduler.set_timesteps(50, shift=shift)
     config = SkipLayerGuidanceConfig((1,), 3, start=0.01, stop=0.15)
     state = prepare_skip_layer_guidance(config, transformer=Transformer(), sigmas=scheduler.sigmas[:-1])
@@ -225,7 +225,7 @@ def test_step_interval_uses_actual_schedule_length_independent_of_shift(shift):
 
 
 def test_step_interval_uses_snapped_schedule_after_duplicate_removal():
-    scheduler = MOSImageScheduler(num_train_timesteps=10, shift=5)
+    scheduler = MOSSImageScheduler(num_train_timesteps=10, shift=5)
     scheduler.set_timesteps(50)
     assert len(scheduler.timesteps) < 50
     config = SkipLayerGuidanceConfig((22,), 3, start=0.2, stop=0.6)
@@ -254,7 +254,7 @@ def test_skip_replaces_complete_blocks_with_identity():
             calls.append(self.index)
             return x * 2 + self.index
 
-    body = MOSImageDenoiseBody(nn.ModuleList([Block(i) for i in range(3)]))
+    body = MOSSImageDenoiseBody(nn.ModuleList([Block(i) for i in range(3)]))
     x = torch.ones(1, 2, 3)
     result = body(x, None, None, skip_layers=(1,))
     torch.testing.assert_close(result, (x * 2) * 2 + 2)
@@ -262,17 +262,17 @@ def test_skip_replaces_complete_blocks_with_identity():
     calls.clear()
     assert body(x, None, None, skip_layers=(0, 1, 2)) is x
     assert not calls
-    shell = MOSImageTransformer.__new__(MOSImageTransformer)
+    shell = MOSSImageTransformer.__new__(MOSSImageTransformer)
     nn.Module.__init__(shell)
     shell.layers = body.layers
     for layers in ((3,), (-1,), (True,), (1.5,)):
         with pytest.raises(ValueError, match="layer IDs"):
-            MOSImageTransformer.validate_skip_layers(shell, layers)
+            MOSSImageTransformer.validate_skip_layers(shell, layers)
 
 
 def test_skip_branch_reuses_conditioning_cache_without_changing_text_refinement(monkeypatch):
-    from tests.diffusion.test_mosimage_conditioning_cache import shell
-    from vllm_omni.diffusion.models.mosimage import mosimage_transformer as model
+    from tests.diffusion.test_mossimage_conditioning_cache import shell
+    from vllm_omni.diffusion.models.mossimage import mossimage_transformer as model
 
     monkeypatch.setattr(model, "get_sequence_parallel_world_size", lambda: 1)
     transformer = shell()
@@ -292,8 +292,8 @@ def test_skip_branch_reuses_conditioning_cache_without_changing_text_refinement(
             encoder_hidden_states=torch.randn(1, 3, 128),
             _conditioning_cache=cache,
         )
-        regular = MOSImageTransformer.forward(transformer, **kwargs).sample
-        skipped = MOSImageTransformer.forward(transformer, **kwargs, skip_layers=(1,)).sample
+        regular = MOSSImageTransformer.forward(transformer, **kwargs).sample
+        skipped = MOSSImageTransformer.forward(transformer, **kwargs, skip_layers=(1,)).sample
     assert skipped_calls == [(), (1,)]
     assert transformer.text_embedder.calls == 1
     assert not torch.equal(regular, skipped)

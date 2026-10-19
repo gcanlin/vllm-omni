@@ -4,14 +4,14 @@
 
 Native vLLM-Omni integration of the MOSS-Image T2I model (Stage3 dense DiT),
 ported from the training repository's finalized standalone pipeline
-``motor/standalone/pipeline_mosimage.py``:
+``pipeline_moss_image.py``:
 
-  * ``MOSImageTransformer`` lives in ``mosimage_transformer.py`` and uses the
+  * ``MOSSImageTransformer`` lives in ``mossimage_transformer.py`` and uses the
     vLLM-Omni ``Attention`` layer; weights are loaded by vLLM's
     ``AutoWeightsLoader`` from the diffusers checkpoint's ``transformer/``
     subfolder (state-dict names match exactly).
   * Components: Qwen3.5 text encoder (bf16), FLUX.2-klein VAE (fp32),
-    ``MOSImageScheduler`` (V2 nearest-grid Euler, shift 5.0 /
+    ``MOSSImageScheduler`` (V2 nearest-grid Euler, shift 5.0 /
     training_shift 1.0).
   * The precision contract of the reference pipeline is preserved:
     fp32 initial noise, fp32 classifier-free guidance, fp32 Euler updates,
@@ -62,7 +62,7 @@ from vllm_omni.diffusion.model_loader.hub_prefetch import (
     prefetch_subfolders,
 )
 from vllm_omni.diffusion.models.interface import SupportsComponentDiscovery
-from vllm_omni.diffusion.models.mosimage.mosimage_transformer import MOSImageTransformer
+from vllm_omni.diffusion.models.mossimage.mossimage_transformer import MOSSImageTransformer
 from vllm_omni.diffusion.offloader.config import TEXT_ENCODER_COMPONENT, resolve_offload
 from vllm_omni.diffusion.offloader.offload_plan import OffloadPlan
 from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import (
@@ -77,7 +77,7 @@ _DEFAULT_GUIDANCE_SCALE = 4.0
 _MAX_SEQUENCE_LENGTH = 4096
 
 
-class MOSImageScheduler(FlowMatchEulerDiscreteScheduler):
+class MOSSImageScheduler(FlowMatchEulerDiscreteScheduler):
     """Euler integration using the training project's V2, nearest-grid schedule.
 
     Ported from ``pipeline_moss_image.MOSSImageScheduler``. The plain
@@ -120,19 +120,19 @@ def _sampling_shift(extra_args: dict[str, Any]) -> float | None:
     return None
 
 
-def get_mosimage_pre_process_func(od_config: OmniDiffusionConfig):
+def get_mossimage_pre_process_func(od_config: OmniDiffusionConfig):
     """Normalize model-owned sampler settings before batch admission."""
 
     def pre_process_func(request):
         extra_args = request.sampling_params.extra_args or {}
         slg = SkipLayerGuidanceConfig.from_extra_args(extra_args)
-        request.batch_compatibility_key = ("mosimage", _sampling_shift(extra_args), slg.batch_key)
+        request.batch_compatibility_key = ("mossimage", _sampling_shift(extra_args), slg.batch_key)
         return request
 
     return pre_process_func
 
 
-def get_mosimage_post_process_func(od_config: OmniDiffusionConfig):
+def get_mossimage_post_process_func(od_config: OmniDiffusionConfig):
     """Convert the pipeline's clamped [-1, 1] image tensors to PIL images."""
     from diffusers.image_processor import VaeImageProcessor
 
@@ -203,11 +203,11 @@ class MOSSImagePipeline(nn.Module, SkipLayerGuidanceMixin, DiffusionPipelineProf
         # Load the scheduler hyperparameters directly: the checkpoint
         # references the custom class via the standalone module name, which
         # the diffusers scheduler loader cannot resolve here.
-        mosimage_subfolders = ["scheduler", "text_encoder", "tokenizer", "vae"]
-        prefetch_subfolders(model, mosimage_subfolders, local_files_only=local_files_only)
+        mossimage_subfolders = ["scheduler", "text_encoder", "tokenizer", "vae"]
+        prefetch_subfolders(model, mossimage_subfolders, local_files_only=local_files_only)
         with open(os.path.join(model, "scheduler", "scheduler_config.json")) as f:
             scheduler_config = json.load(f)
-        self.scheduler = MOSImageScheduler(
+        self.scheduler = MOSSImageScheduler(
             num_train_timesteps=scheduler_config.get("num_train_timesteps", 1000),
             shift=scheduler_config.get("shift", 5.0),
             training_shift=scheduler_config.get("training_shift", 1.0),
@@ -222,7 +222,7 @@ class MOSSImagePipeline(nn.Module, SkipLayerGuidanceMixin, DiffusionPipelineProf
             AutoModel.from_pretrained,
             model,
             subfolder="text_encoder",
-            prefetch_list=mosimage_subfolders,
+            prefetch_list=mossimage_subfolders,
             local_files_only=local_files_only,
             dtype=text_dtype,
         ).to(encoder_device)
@@ -234,14 +234,14 @@ class MOSSImagePipeline(nn.Module, SkipLayerGuidanceMixin, DiffusionPipelineProf
             AutoencoderKLFlux2.from_pretrained,
             model,
             subfolder="vae",
-            prefetch_list=mosimage_subfolders,
+            prefetch_list=mossimage_subfolders,
             local_files_only=local_files_only,
             torch_dtype=torch.float32,
         ).to(self.device)
         self.vae.eval()
 
-        transformer_kwargs = get_transformer_config_kwargs(od_config.tf_model_config, MOSImageTransformer)
-        self.transformer = MOSImageTransformer(od_config=od_config, prefix="transformer", **transformer_kwargs)
+        transformer_kwargs = get_transformer_config_kwargs(od_config.tf_model_config, MOSSImageTransformer)
+        self.transformer = MOSSImageTransformer(od_config=od_config, prefix="transformer", **transformer_kwargs)
 
         self.default_sample_size = _DEFAULT_RESOLUTION // 16
         self._interrupt = False
@@ -258,12 +258,12 @@ class MOSSImagePipeline(nn.Module, SkipLayerGuidanceMixin, DiffusionPipelineProf
         pc = od_config.parallel_config
         if getattr(pc, "ring_degree", 1) and getattr(pc, "ring_degree", 1) > 1:
             raise NotImplementedError(
-                "Ring attention is not supported by the MOSImage pipeline "
+                "Ring attention is not supported by the MOSSImage pipeline "
                 "(ring attention cannot express the joint key-padding mask); use --ulysses-degree only."
             )
         if od_config.cache_backend not in (None, "none"):
             raise NotImplementedError(
-                f"Cache backend '{od_config.cache_backend}' is not supported by the MOSImage pipeline "
+                f"Cache backend '{od_config.cache_backend}' is not supported by the MOSSImage pipeline "
                 "(TeaCache/Cache-DiT require transformer-block hooks)."
             )
 
@@ -390,7 +390,7 @@ class MOSSImagePipeline(nn.Module, SkipLayerGuidanceMixin, DiffusionPipelineProf
         slg_config = SkipLayerGuidanceConfig.from_extra_args(extra_args)
 
         device = self.device
-        req_scheduler = MOSImageScheduler.from_config(self.scheduler.config)
+        req_scheduler = MOSSImageScheduler.from_config(self.scheduler.config)
         req_scheduler.set_timesteps(num_inference_steps, device=device, shift=shift)
         state.extra["slg"] = prepare_skip_layer_guidance(
             slg_config,
@@ -463,7 +463,7 @@ class MOSSImagePipeline(nn.Module, SkipLayerGuidanceMixin, DiffusionPipelineProf
         if slg is not None:
             for state, slg_state in zip(selected_states, slg_states):
                 if slg_state is None or slg_state.config.batch_key != slg.config.batch_key:
-                    raise ValueError("MOSImage step batches require identical SLG configurations.")
+                    raise ValueError("MOSSImage step batches require identical SLG configurations.")
                 count = state.latents.shape[0]
                 active.extend([slg_state.active_steps[state.step_index]] * count)
                 sigmas.extend([slg_state.sigmas[state.step_index]] * count)
@@ -509,7 +509,7 @@ class MOSSImagePipeline(nn.Module, SkipLayerGuidanceMixin, DiffusionPipelineProf
         slg_configs = [SkipLayerGuidanceConfig.from_extra_args(sp.extra_args) for sp in sampling_list]
         slg_config = slg_configs[0]
         if any(config.batch_key != slg_config.batch_key for config in slg_configs[1:]):
-            raise ValueError("MOSImage request batches require identical SLG configurations.")
+            raise ValueError("MOSSImage request batches require identical SLG configurations.")
 
         prompts: list[str] = []
         negative_prompts: list[str] = []
@@ -525,7 +525,7 @@ class MOSSImagePipeline(nn.Module, SkipLayerGuidanceMixin, DiffusionPipelineProf
                     has_negative = True
                 negative_prompts.append(negative if negative is not None else "")
             else:
-                raise ValueError(f"Unsupported prompt type for MOSImage: {type(p)}")
+                raise ValueError(f"Unsupported prompt type for MOSSImage: {type(p)}")
         assert len(prompts) == num_reqs, f"prompt count {len(prompts)} != request count {num_reqs}"
 
         device = self.device
@@ -602,7 +602,7 @@ class MOSSImagePipeline(nn.Module, SkipLayerGuidanceMixin, DiffusionPipelineProf
                 from tqdm.auto import tqdm
 
                 timesteps_iter = tqdm(
-                    self.scheduler.timesteps, desc="MOSImage denoising", unit="step", dynamic_ncols=True
+                    self.scheduler.timesteps, desc="MOSSImage denoising", unit="step", dynamic_ncols=True
                 )
             except ImportError:
                 pass
@@ -667,7 +667,3 @@ class MOSSImagePipeline(nn.Module, SkipLayerGuidanceMixin, DiffusionPipelineProf
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         loader = AutoWeightsLoader(self)
         return loader.load_weights(weights)
-
-
-# Compatibility for callers using the pre-release pipeline name.
-MOSImagePipeline = MOSSImagePipeline

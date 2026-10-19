@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
-"""Check MOSImage kernels against the eager rounding contract."""
+"""Check MOSSImage kernels against the eager rounding contract."""
 
 import pytest
 import torch
 
 from tests.helpers.mark import hardware_marks
-from vllm_omni.diffusion.models.mosimage.ops import _MATCHED_REDUCTION, try_rms_norm, try_rotate_qk, try_situ
+from vllm_omni.diffusion.models.mossimage.ops import _MATCHED_REDUCTION, try_rms_norm, try_rotate_qk, try_situ
 
 pytestmark = [
     pytest.mark.core_model,
@@ -55,7 +55,7 @@ def test_rotary_rounding(shape):
 @pytest.mark.skipif(not _MATCHED_REDUCTION, reason="Fused Q/K reduction requires PyTorch 2.13")
 @torch.inference_mode()
 def test_qk_norm_rope_rounding(batch, sequence, heads):
-    from vllm_omni.diffusion.models.mosimage.ops import try_qk_norm_rope
+    from vllm_omni.diffusion.models.mossimage.ops import try_qk_norm_rope
 
     torch.manual_seed(57)
     packed = torch.randn(batch, sequence, 3 * heads * 128, device="cuda", dtype=torch.bfloat16) * 3
@@ -81,7 +81,7 @@ def test_qk_norm_rope_rounding(batch, sequence, heads):
 @pytest.mark.parametrize("batch,sequence", [(1, 6620), (2, 257)])
 @torch.inference_mode()
 def test_gated_residual_rounding(batch, sequence):
-    from vllm_omni.diffusion.models.mosimage.ops import gated_residual
+    from vllm_omni.diffusion.models.mossimage.ops import gated_residual
 
     torch.manual_seed(63)
     x, y = torch.randn(2, batch, sequence, 3072, device="cuda", dtype=torch.bfloat16)
@@ -182,7 +182,7 @@ def test_new_shapes_reuse_compiled_kernels(monkeypatch):
     """Prompt lengths and batch sizes vary per request and must not recompile kernels."""
     from vllm.triton_utils import triton
 
-    from vllm_omni.diffusion.models.mosimage.ops import gated_residual, try_qk_norm_rope
+    from vllm_omni.diffusion.models.mossimage.ops import gated_residual, try_qk_norm_rope
 
     if not hasattr(triton, "knobs"):
         pytest.skip("Triton compile hooks are unavailable")

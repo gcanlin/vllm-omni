@@ -173,7 +173,7 @@ def _resolve_dit_children(
             continue
         declared_attr = None if declaration is None else declaration.offload_submodules.get(name)
         # A boundary wrapper may alias the parent's streamed blocks (for
-        # example MOSImage.denoise_body). Those blocks already have an owner;
+        # example MOSSImage.denoise_body). Those blocks already have an owner;
         # another hook ring would replace their host masters with placeholders.
         if declared_attr is None and any(id(child) in block_ids for child in module.modules()):
             continue

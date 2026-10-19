@@ -962,15 +962,15 @@ def test_generic_diffusion_deploy_survives_typed_resolution(
     mocker.patch("vllm_omni.config.resolver.StageConfigFactory.create_from_model", return_value=None)
     mocker.patch(
         "vllm_omni.config.resolver._resolve_generic_diffusion_model_class",
-        return_value=(True, "MOSImagePipeline"),
+        return_value=(True, "MOSSImagePipeline"),
     )
-    deploy_path = tmp_path / "mosimage.yaml"
+    deploy_path = tmp_path / "mossimage.yaml"
     deploy_path.write_text(
         "stages:\n"
         "  - stage_id: 0\n"
         "    devices: '2,3'\n"
         "    num_replicas: 2\n"
-        "    env: {MOSIMAGE_TEST: '1'}\n"
+        "    env: {MOSSIMAGE_TEST: '1'}\n"
         "    ulysses_degree: 2\n"
         "    max_num_seqs: 4\n"
         "    step_execution: true\n"
@@ -993,7 +993,7 @@ def test_generic_diffusion_deploy_survives_typed_resolution(
     assert stage.parallel_config.world_size == ulysses * tp
     assert stage.runtime_config.devices == devices
     assert stage.runtime_config.num_replicas == 2
-    assert stage.runtime_config.env == {"MOSIMAGE_TEST": "1"}
+    assert stage.runtime_config.env == {"MOSSIMAGE_TEST": "1"}
     assert stage.scheduler_config.max_num_seqs == max_seqs
     assert stage.diffusion_config.step_execution is True
     assert stage.diffusion_config.flow_shift == 5.0

@@ -8,9 +8,9 @@ import torch
 from torch import nn
 
 from tests.diffusion.offloader.helpers import patch_offload_runtime
-from tests.diffusion.test_mosimage_slg import pipeline, request, sampling
-from vllm_omni.diffusion.models.mosimage.mosimage_transformer import MOSImageDenoiseBody
-from vllm_omni.diffusion.models.mosimage.pipeline_mosimage import MOSImagePipeline
+from tests.diffusion.test_mossimage_slg import pipeline, request, sampling
+from vllm_omni.diffusion.models.mossimage.mossimage_transformer import MOSSImageDenoiseBody
+from vllm_omni.diffusion.models.mossimage.pipeline_mossimage import MOSSImagePipeline
 from vllm_omni.diffusion.offloader import distributed_layerwise_backend, plan_resolver
 from vllm_omni.diffusion.offloader.base import OffloadConfig, OffloadStrategy
 from vllm_omni.diffusion.offloader.distributed_layerwise_backend import DistributedLayerwiseOffloadBackend
@@ -50,7 +50,7 @@ class Transformer(nn.Module):
         super().__init__()
         self.layers = nn.ModuleList([Block() for _ in range(6)])
         self.text_embedder = TextProjection()
-        self.denoise_body = MOSImageDenoiseBody(self.layers)
+        self.denoise_body = MOSSImageDenoiseBody(self.layers)
 
     def forward(self, x, skip_layers=()):
         return self.denoise_body(self.text_embedder(x), None, None, skip_layers=skip_layers)
@@ -68,7 +68,7 @@ class ResidencyController:
 
 
 def offload_pipeline():
-    model = MOSImagePipeline.__new__(MOSImagePipeline)
+    model = MOSSImagePipeline.__new__(MOSSImagePipeline)
     nn.Module.__init__(model)
     model.transformer = Transformer()
     model.text_encoder = nn.Module()

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
-"""Checkpoint routing for MOSS-Image-Base and its pre-release class name."""
+"""Checkpoint routing and processing for MOSS-Image."""
 
 import json
 
@@ -9,7 +9,7 @@ import pytest
 import torch
 
 from vllm_omni.diffusion.data import OmniDiffusionConfig, resolve_model_class_name
-from vllm_omni.diffusion.models.mosimage import MOSImagePipeline, MOSSImagePipeline
+from vllm_omni.diffusion.models.mossimage import MOSSImagePipeline
 from vllm_omni.diffusion.registry import (
     DiffusionModelRegistry,
     get_diffusion_post_process_func,
@@ -21,8 +21,8 @@ from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu, pytest.mark.diffusion]
 
 
-@pytest.mark.parametrize("class_name", ["MOSSImagePipeline", "MOSImagePipeline"])
-def test_checkpoint_selects_native_pipeline_and_processing(tmp_path, class_name):
+def test_checkpoint_selects_native_pipeline_and_processing(tmp_path):
+    class_name = "MOSSImagePipeline"
     (tmp_path / "model_index.json").write_text(json.dumps({"_class_name": class_name}), encoding="utf-8")
     assert resolve_model_class_name(str(tmp_path)) == class_name
 
@@ -30,7 +30,6 @@ def test_checkpoint_selects_native_pipeline_and_processing(tmp_path, class_name)
     config.enrich_config()
     assert config.model_class_name == class_name
     assert DiffusionModelRegistry._try_load_model_cls(config.model_class_name) is MOSSImagePipeline
-    assert MOSImagePipeline is MOSSImagePipeline
 
     request = OmniDiffusionRequest(
         prompt="A red cube",
