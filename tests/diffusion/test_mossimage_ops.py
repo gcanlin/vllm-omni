@@ -34,11 +34,13 @@ def test_rms_norm_rounding(shape, sliced):
 
 
 @pytest.mark.parametrize("shape", [(1, 16, 24, 128), (2, 257, 12, 128)])
+@pytest.mark.parametrize("per_sample_rope", [False, True])
 @torch.inference_mode()
-def test_rotary_rounding(shape):
+def test_rotary_rounding(shape, per_sample_rope):
     torch.manual_seed(17)
     q, k = [torch.randn(shape, device="cuda", dtype=torch.bfloat16) for _ in range(2)]
-    rope = torch.randn(1, shape[1] + 3, 128, device="cuda", dtype=torch.bfloat16)[:, 3:]
+    rope_batch = shape[0] if per_sample_rope else 1
+    rope = torch.randn(rope_batch, shape[1] + 3, 128, device="cuda", dtype=torch.bfloat16)[:, 3:]
     sin, cos = rope.chunk(2, -1)
     sin, cos = [torch.cat((t, t), -1).unsqueeze(-2) for t in (sin, cos)]
     expected = []
@@ -52,16 +54,18 @@ def test_rotary_rounding(shape):
 
 
 @pytest.mark.parametrize("batch,sequence,heads", [(1, 6620, 24), (2, 257, 12), (1, 17, 3)])
+@pytest.mark.parametrize("per_sample_rope", [False, True])
 @pytest.mark.skipif(not _MATCHED_REDUCTION, reason="Fused Q/K reduction requires PyTorch 2.13")
 @torch.inference_mode()
-def test_qk_norm_rope_rounding(batch, sequence, heads):
+def test_qk_norm_rope_rounding(batch, sequence, heads, per_sample_rope):
     from vllm_omni.diffusion.models.mossimage.ops import try_qk_norm_rope
 
     torch.manual_seed(57)
     packed = torch.randn(batch, sequence, 3 * heads * 128, device="cuda", dtype=torch.bfloat16) * 3
     q, k, _ = [t.unflatten(-1, (heads, 128)) for t in packed.chunk(3, -1)]
     qw, kw = torch.randn(2, 128, device="cuda", dtype=torch.bfloat16)
-    rope = torch.randn(1, sequence, 128, device="cuda", dtype=torch.bfloat16)
+    rope_batch = batch if per_sample_rope else 1
+    rope = torch.randn(rope_batch, sequence + 3, 128, device="cuda", dtype=torch.bfloat16)[:, 3:]
     expected = try_rotate_qk(try_rms_norm(q, qw), try_rms_norm(k, kw), rope)
     actual = try_qk_norm_rope(q, k, qw, kw, rope)
     assert actual is not None

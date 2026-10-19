@@ -21,6 +21,8 @@ MOSS-Image-Base combines a Qwen3.5-9B text encoder, a 42-block dense joint image
 | DLO | Stream DiT, text-refinement and text-encoder blocks using the config below |
 | SLG | Two-pass unconditional skipping or three-pass positive SLG via `extra_params` |
 
+RoPE uses each request's valid text length, so batch padding, requests joining or leaving a continuous batch, and Ulysses alignment padding preserve its positional coordinates.
+
 DLO works on one GPU and supports AllGather across DP/SP groups. SLG layer IDs are zero-based main-DiT indices; `[22]` skips the 23rd block. The active window is `slg_start <= step_index / num_steps < slg_stop`. Optional `slg_rescaling_scale` applies per-image rescaling in denoised space. Ring attention and approximate denoising caches are not supported.
 
 ## Kernel fusion

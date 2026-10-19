@@ -26,7 +26,7 @@ def shell():
     nn.Module.__init__(transformer)
     transformer.latent_channels = 128
     transformer.video_embedder = nn.Linear(128, 128)
-    transformer.rope = lambda h, w, s, device: torch.zeros(1, h * w + s, 128, device=device)
+    transformer.rope = lambda h, w, s, device, text_lengths=None: torch.zeros(1, h * w + s, 128, device=device)
     transformer.text_embedder = Text()
     transformer._time_modulation = lambda t, b, d: (None, None)
     transformer.denoise_body = lambda x, rope, mod, mask: x + x.mean(dim=1, keepdim=True)

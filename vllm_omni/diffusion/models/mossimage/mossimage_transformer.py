@@ -98,7 +98,7 @@ def _situ(hidden: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
 
 
 def _rotate(x: torch.Tensor, rope: torch.Tensor) -> torch.Tensor:
-    """Apply the MOSSImage 4D rotary embedding. ``x``: [B, S, H, D]; ``rope``: [1, S, D]."""
+    """Apply 4D RoPE: ``x`` is [B, S, H, D], ``rope`` is [1 or B, S, D]."""
     sin, cos = rope.chunk(2, -1)
     sin = torch.cat((sin, sin), -1).unsqueeze(-2)
     cos = torch.cat((cos, cos), -1).unsqueeze(-2)
@@ -335,18 +335,30 @@ class MOSSImageRoPE(nn.Module):
         # Retain the key for checkpoint compatibility; rebuild canonical fp32.
         self.bands = self._default_bands(self.bands.device)
 
-    def forward(self, height: int, width: int, text_length: int, device: torch.device) -> torch.Tensor:
+    def forward(
+        self,
+        height: int,
+        width: int,
+        text_length: int,
+        device: torch.device,
+        *,
+        text_lengths: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Build coordinates using semantic lengths, independent of padded text width."""
         if self.bands.dtype != torch.float32:
             self.bands = self._default_bands(device)
         # Coordinates: (r, f, h, w); sequence order is image followed by text.
         h, w = torch.meshgrid(torch.arange(height, device=device), torch.arange(width, device=device), indexing="ij")
-        image = torch.stack((torch.zeros_like(h), torch.full_like(h, text_length), h, w), -1).flatten(0, 1).float()
-        image[:, 2] -= (height - 1) / 2
-        image[:, 3] -= (width - 1) / 2
-        text = torch.zeros(text_length, 4, device=device, dtype=torch.float32)
-        text[:, 1] = torch.arange(text_length, device=device)
-        phase = torch.cat((image, text), 0).unsqueeze(-1) * self.bands
-        return torch.cat((phase.sin(), phase.cos()), -2).flatten(-2).unsqueeze(0)
+        batch = 1 if text_lengths is None else text_lengths.shape[0]
+        num_video = height * width
+        positions = torch.zeros(batch, num_video + text_length, 4, device=device, dtype=torch.float32)
+        positions[:, :num_video, 1] = text_length if text_lengths is None else text_lengths[:, None]
+        positions[:, :num_video, 2] = h.flatten().float() - (height - 1) / 2
+        positions[:, :num_video, 3] = w.flatten().float() - (width - 1) / 2
+        # Valid right-padded text tokens retain positions 0..L-1 for each sample.
+        positions[:, num_video:, 1] = torch.arange(text_length, device=device)
+        phase = positions.unsqueeze(-1) * self.bands
+        return torch.cat((phase.sin(), phase.cos()), -2).flatten(-2)
 
 
 class MOSSImageDenoiseBody(nn.Module):
@@ -505,12 +517,12 @@ class MOSSImageTransformer(nn.Module):
             text_mask = encoder_attention_mask.bool()
             if text_mask.shape != (batch, text_len):
                 raise ValueError("encoder_attention_mask must be a binary [B, S] mask.")
-        if bool((~text_mask.any(dim=1)).any()):
+        text_lengths = text_mask.sum(dim=1)
+        if bool((text_lengths == 0).any()):
             raise ValueError("Each sample needs at least one valid text token.")
 
-        # Align the joint sequence length with the Ulysses shard count so the
-        # SP hooks never need to zero-pad text tokens (padding is masked out
-        # anyway, but pre-alignment keeps the numerical contract intact).
+        # Align storage with the Ulysses shard count. Semantic text lengths
+        # above exclude both batch padding and the extra SP slots below.
         sp_size = max(1, get_sequence_parallel_world_size())
         num_video = height * width
         joint_len = num_video + text_len
@@ -540,7 +552,13 @@ class MOSSImageTransformer(nn.Module):
         if cache is not None and "conditioning" in cache:
             rope, text = cache["conditioning"]
         else:
-            rope = self.rope(height, width, text_len, device).to(video.dtype)
+            rope = self.rope(
+                height,
+                width,
+                text_len,
+                device,
+                text_lengths=text_lengths if attention_text_mask is not None else None,
+            ).to(video.dtype)
             text = self.text_embedder(encoder_hidden_states, rope[:, num_video:], attention_text_mask)
             if cache is not None:
                 cache["conditioning"] = (rope, text)

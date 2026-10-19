@@ -41,6 +41,7 @@ if HAS_TRITON:
         bs,
         ss: tl.constexpr,
         hs: tl.constexpr,
+        rbs,
         rs: tl.constexpr,
     ):
         if tl.program_id(1) == 0:
@@ -68,8 +69,9 @@ if HAS_TRITON:
         pw = tl.load(weight + pair).to(tl.float32)
         x = ((x * inv[:, None]).to(tl.bfloat16).to(tl.float32) * w[None, :]).to(tl.bfloat16).to(tl.float32)
         y = ((y * inv[:, None]).to(tl.bfloat16).to(tl.float32) * pw[None, :]).to(tl.bfloat16).to(tl.float32)
-        sin = tl.load(rope + s[:, None] * rs + d[None, :] % 64, row[:, None] < rows, 0).to(tl.float32)
-        cos = tl.load(rope + s[:, None] * rs + d[None, :] % 64 + 64, row[:, None] < rows, 0).to(tl.float32)
+        rope_offset = batch * rbs + s[:, None] * rs + d[None, :] % 64
+        sin = tl.load(rope + rope_offset, row[:, None] < rows, 0).to(tl.float32)
+        cos = tl.load(rope + rope_offset + 64, row[:, None] < rows, 0).to(tl.float32)
         y = tl.where(d[None, :] < 64, -y, y)
         a = (x * cos).to(tl.bfloat16).to(tl.float32)
         b = (y * sin).to(tl.bfloat16).to(tl.float32)
@@ -192,6 +194,7 @@ if HAS_TRITON:
         per_batch,
         heads: tl.constexpr,
         dim: tl.constexpr,
+        rope_batch_stride,
         rope_stride: tl.constexpr,
         block: tl.constexpr,
     ):
@@ -210,8 +213,9 @@ if HAS_TRITON:
             dst = out_k_ptr
         x = tl.load(src + i, i < n, other=0).to(tl.float32)
         y = tl.load(src + pair, i < n, other=0).to(tl.float32)
-        sin = tl.load(rope_ptr + s * rope_stride + d % (dim // 2), i < n, other=0).to(tl.float32)
-        cos = tl.load(rope_ptr + s * rope_stride + d % (dim // 2) + dim // 2, i < n, other=0).to(tl.float32)
+        rope_offset = batch * rope_batch_stride + s * rope_stride + d % (dim // 2)
+        sin = tl.load(rope_ptr + rope_offset, i < n, other=0).to(tl.float32)
+        cos = tl.load(rope_ptr + rope_offset + dim // 2, i < n, other=0).to(tl.float32)
         y = tl.where(d < dim // 2, -y, y)
         # Eager BF16 multiplication rounds both products before adding.
         first = (x * cos).to(tl.bfloat16).to(tl.float32)
@@ -273,7 +277,9 @@ def try_qk_norm_rope(q, k, q_weight, k_weight, rope):
         and q_weight.shape == k_weight.shape == (128,)
         and q_weight.is_contiguous()
         and k_weight.is_contiguous()
-        and rope.shape == (1, q.shape[1], 128)
+        and rope.ndim == 3
+        and rope.shape[0] in (1, q.shape[0])
+        and rope.shape[1:] == (q.shape[1], 128)
         and rope.stride(-1) == 1
         and all(t.dtype == torch.bfloat16 and t.device == q.device for t in (q, k, q_weight, k_weight, rope))
     ):
@@ -291,6 +297,7 @@ def try_qk_norm_rope(q, k, q_weight, k_weight, rope):
         q.shape[1],
         q.shape[2],
         *q.stride()[:3],
+        rope.stride(0) if rope.shape[0] > 1 else 0,
         rope.stride(1),
         num_warps=4,
         enable_fp_fusion=False,
@@ -314,7 +321,9 @@ def try_rotate_qk(q: torch.Tensor, k: torch.Tensor, rope: torch.Tensor) -> tuple
         and q.is_contiguous()
         and k.is_contiguous()
         and q.shape[-1] == 128
-        and rope.shape == (1, q.shape[1], q.shape[-1])
+        and rope.ndim == 3
+        and rope.shape[0] in (1, q.shape[0])
+        and rope.shape[1:] == (q.shape[1], q.shape[-1])
         and rope.stride(-1) == 1
     ):
         return None
@@ -329,6 +338,7 @@ def try_rotate_qk(q: torch.Tensor, k: torch.Tensor, rope: torch.Tensor) -> tuple
         s * h * d,
         h,
         d,
+        rope.stride(0) if rope.shape[0] > 1 else 0,
         rope.stride(1),
         1024,
         num_warps=4,
