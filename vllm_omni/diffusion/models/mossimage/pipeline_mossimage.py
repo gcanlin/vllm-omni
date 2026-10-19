@@ -28,7 +28,6 @@ cannot express the joint key-padding mask).
 
 from __future__ import annotations
 
-import json
 import math
 import os
 from collections.abc import Iterable, Iterator, Sequence
@@ -80,10 +79,9 @@ _MAX_SEQUENCE_LENGTH = 4096
 class MOSSImageScheduler(FlowMatchEulerDiscreteScheduler):
     """Euler integration using the training project's V2, nearest-grid schedule.
 
-    Ported from ``pipeline_moss_image.MOSSImageScheduler``. The plain
-    diffusers loader cannot resolve the checkpoint's custom
-    ``["pipeline_moss_image", "MOSSImageScheduler"]`` reference, so the pipeline
-    constructs this class directly from the checkpoint's scheduler config.
+    Ported from ``pipeline_moss_image.MOSSImageScheduler``. Loading explicitly
+    through this class uses the native implementation while retaining
+    diffusers' local-directory and Hub config resolution.
     """
 
     @register_to_config
@@ -190,7 +188,7 @@ class MOSSImagePipeline(nn.Module, SkipLayerGuidanceMixin, DiffusionPipelineProf
             DiffusersPipelineLoader.ComponentSource(
                 model_or_path=od_config.model,
                 subfolder="transformer",
-                revision=None,
+                revision=od_config.revision,
                 prefix="transformer.",
                 fall_back_to_pt=True,
             )
@@ -200,17 +198,18 @@ class MOSSImagePipeline(nn.Module, SkipLayerGuidanceMixin, DiffusionPipelineProf
         model = od_config.model
         local_files_only = os.path.isdir(model)
 
-        # Load the scheduler hyperparameters directly: the checkpoint
-        # references the custom class via the standalone module name, which
-        # the diffusers scheduler loader cannot resolve here.
         mossimage_subfolders = ["scheduler", "text_encoder", "tokenizer", "vae"]
-        prefetch_subfolders(model, mossimage_subfolders, local_files_only=local_files_only)
-        with open(os.path.join(model, "scheduler", "scheduler_config.json")) as f:
-            scheduler_config = json.load(f)
-        self.scheduler = MOSSImageScheduler(
-            num_train_timesteps=scheduler_config.get("num_train_timesteps", 1000),
-            shift=scheduler_config.get("shift", 5.0),
-            training_shift=scheduler_config.get("training_shift", 1.0),
+        prefetch_subfolders(
+            model,
+            mossimage_subfolders,
+            local_files_only=local_files_only,
+            revision=od_config.revision,
+        )
+        self.scheduler = MOSSImageScheduler.from_pretrained(
+            model,
+            subfolder="scheduler",
+            local_files_only=local_files_only,
+            revision=od_config.revision,
         )
 
         # Qwen3.5 base model; bf16 like the standalone release.
@@ -224,10 +223,16 @@ class MOSSImagePipeline(nn.Module, SkipLayerGuidanceMixin, DiffusionPipelineProf
             subfolder="text_encoder",
             prefetch_list=mossimage_subfolders,
             local_files_only=local_files_only,
+            revision=od_config.revision,
             dtype=text_dtype,
         ).to(encoder_device)
         self.text_encoder.eval()
-        self.tokenizer = AutoTokenizer.from_pretrained(model, subfolder="tokenizer", local_files_only=local_files_only)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model,
+            subfolder="tokenizer",
+            local_files_only=local_files_only,
+            revision=od_config.revision,
+        )
 
         # FLUX.2-klein VAE; fp32 decode is part of the release precision contract.
         self.vae = from_pretrained_with_prefetch(
@@ -236,6 +241,7 @@ class MOSSImagePipeline(nn.Module, SkipLayerGuidanceMixin, DiffusionPipelineProf
             subfolder="vae",
             prefetch_list=mossimage_subfolders,
             local_files_only=local_files_only,
+            revision=od_config.revision,
             torch_dtype=torch.float32,
         ).to(self.device)
         self.vae.eval()
