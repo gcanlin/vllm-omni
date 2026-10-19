@@ -91,6 +91,11 @@ class CFGParallelMixin(metaclass=ABCMeta):
 
     transformer: torch.nn.Module
 
+    def _set_transformer_do_true_cfg(self, do_true_cfg: bool) -> None:
+        transformer = getattr(self, "transformer", None)
+        if transformer is not None:
+            transformer.do_true_cfg = do_true_cfg
+
     def predict_noise_maybe_with_cfg(
         self,
         do_true_cfg: bool,
@@ -121,7 +126,14 @@ class CFGParallelMixin(metaclass=ABCMeta):
             For multi-output models (e.g., video + audio where predict_noise
             returns a tuple), override combine_cfg_noise() for per-element CFG
             logic and set self.scheduler to a composite scheduler.
+
+            Sets ``self.transformer.do_true_cfg`` before predicting. TeaCache
+            reads it to keep one cache state per CFG branch; without it the
+            positive and negative calls of a step share a state and reuse each
+            other's residual.
         """
+        self._set_transformer_do_true_cfg(do_true_cfg)
+
         if do_true_cfg:
             if negative_kwargs is None:
                 raise ValueError("CFG requires negative prediction arguments.")
